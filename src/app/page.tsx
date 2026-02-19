@@ -60,12 +60,23 @@ export default function Home() {
     }
 
     if (role === "admin") {
+      try {
+        window.localStorage.setItem("admin_username", username);
+      } catch {}
       setSuccess("Welcome back, administrator. Redirecting to admin console...");
       router.push("/admin");
     } else if (role === "tabulator") {
+      try {
+        window.localStorage.setItem("tabulator_username", username);
+      } catch {}
       setSuccess("Welcome tabulator. Redirecting to tabulation workspace...");
+      router.push("/tabulator");
     } else {
+      try {
+        window.localStorage.setItem("judge_username", username);
+      } catch {}
       setSuccess("Welcome judge. Redirecting to scoring dashboard...");
+      router.push("/judge");
     }
 
     setIsSubmitting(false);

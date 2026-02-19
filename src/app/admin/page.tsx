@@ -59,6 +59,54 @@ type CriteriaRow = {
   criteria_code: string | null;
 };
 
+type CategoryRow = {
+  id: number;
+  event_id: number;
+  name: string;
+  created_at: string;
+};
+
+type ParticipantRow = {
+  id: number;
+  contest_id: number;
+  group_id: number;
+  full_name: string;
+  contestant_number: string;
+  created_at: string;
+};
+
+type AdminRow = {
+  id: number;
+  username: string;
+  created_at: string;
+};
+
+type JudgeRow = {
+  id: number;
+  event_id: number;
+  full_name: string;
+  username: string;
+  created_at: string;
+};
+
+type JudgeAssignmentRow = {
+  judge_id: number;
+  contest_id: number;
+};
+
+type TabulatorRow = {
+  id: number;
+  event_id: number;
+  full_name: string;
+  username: string;
+  created_at: string;
+};
+
+type AdminPendingAction =
+  | { type: "create" }
+  | { type: "edit"; adminId: number }
+  | { type: "delete"; adminId: number };
+
 export default function AdminDashboard() {
   const [activeTab, setActiveTab] = useState<AdminTab>("home");
   const [eventTab, setEventTab] = useState<EventSubTab>("addEvent");
@@ -76,11 +124,27 @@ export default function AdminDashboard() {
   const [events, setEvents] = useState<EventRow[]>([]);
   const [contests, setContests] = useState<ContestRow[]>([]);
   const [criteriaList, setCriteriaList] = useState<CriteriaRow[]>([]);
+  const [categories, setCategories] = useState<CategoryRow[]>([]);
+  const [participants, setParticipants] = useState<ParticipantRow[]>([]);
+  const [admins, setAdmins] = useState<AdminRow[]>([]);
+  const [judges, setJudges] = useState<JudgeRow[]>([]);
+  const [tabulators, setTabulators] = useState<TabulatorRow[]>([]);
   const [editingCriteriaId, setEditingCriteriaId] = useState<number | null>(
     null,
   );
   const [editingContestId, setEditingContestId] = useState<number | null>(null);
   const [editingEventId, setEditingEventId] = useState<number | null>(null);
+  const [editingCategoryId, setEditingCategoryId] = useState<number | null>(
+    null,
+  );
+  const [editingParticipantId, setEditingParticipantId] = useState<number | null>(
+    null,
+  );
+  const [editingAdminId, setEditingAdminId] = useState<number | null>(null);
+  const [editingJudgeId, setEditingJudgeId] = useState<number | null>(null);
+  const [editingTabulatorId, setEditingTabulatorId] = useState<number | null>(
+    null,
+  );
   const [eventName, setEventName] = useState("");
   const [eventCode, setEventCode] = useState("");
   const [eventYear, setEventYear] = useState("");
@@ -106,6 +170,24 @@ export default function AdminDashboard() {
   const [isSavingJudge, setIsSavingJudge] = useState(false);
   const [judgeError, setJudgeError] = useState<string | null>(null);
   const [judgeSuccess, setJudgeSuccess] = useState<string | null>(null);
+  const [selectedContestIdsForJudge, setSelectedContestIdsForJudge] = useState<
+    number[]
+  >([]);
+  const [judgeAssignments, setJudgeAssignments] = useState<JudgeAssignmentRow[]>(
+    [],
+  );
+  const [isDeletingJudgeId, setIsDeletingJudgeId] = useState<number | null>(
+    null,
+  );
+  const [tabulatorFullName, setTabulatorFullName] = useState("");
+  const [tabulatorUsername, setTabulatorUsername] = useState("");
+  const [tabulatorPassword, setTabulatorPassword] = useState("");
+  const [isSavingTabulator, setIsSavingTabulator] = useState(false);
+  const [tabulatorError, setTabulatorError] = useState<string | null>(null);
+  const [tabulatorSuccess, setTabulatorSuccess] = useState<string | null>(null);
+  const [isDeletingTabulatorId, setIsDeletingTabulatorId] = useState<
+    number | null
+  >(null);
   const [contestName, setContestName] = useState("");
   const [isSavingContest, setIsSavingContest] = useState(false);
   const [contestError, setContestError] = useState<string | null>(null);
@@ -117,9 +199,46 @@ export default function AdminDashboard() {
   const [isSavingCriteria, setIsSavingCriteria] = useState(false);
   const [criteriaError, setCriteriaError] = useState<string | null>(null);
   const [criteriaSuccess, setCriteriaSuccess] = useState<string | null>(null);
+  const [categoryName, setCategoryName] = useState("");
+  const [isSavingCategory, setIsSavingCategory] = useState(false);
+  const [categoryError, setCategoryError] = useState<string | null>(null);
+  const [categorySuccess, setCategorySuccess] = useState<string | null>(null);
+  const [isDeletingCategoryId, setIsDeletingCategoryId] = useState<number | null>(
+    null,
+  );
+  const [selectedContestIdForParticipant, setSelectedContestIdForParticipant] =
+    useState<number | null>(null);
+  const [selectedCategoryIdForParticipant, setSelectedCategoryIdForParticipant] =
+    useState<number | null>(null);
+  const [participantFullName, setParticipantFullName] = useState("");
+  const [participantNumber, setParticipantNumber] = useState("");
+  const [isSavingParticipant, setIsSavingParticipant] = useState(false);
+  const [participantError, setParticipantError] = useState<string | null>(null);
+  const [participantSuccess, setParticipantSuccess] = useState<string | null>(
+    null,
+  );
+  const [isDeletingParticipantId, setIsDeletingParticipantId] = useState<
+    number | null
+  >(null);
+  const [adminUsername, setAdminUsername] = useState("");
+  const [adminPassword, setAdminPassword] = useState("");
+  const [isSavingAdmin, setIsSavingAdmin] = useState(false);
+  const [adminError, setAdminError] = useState<string | null>(null);
+  const [adminSuccess, setAdminSuccess] = useState<string | null>(null);
+  const [isDeletingAdminId, setIsDeletingAdminId] = useState<number | null>(
+    null,
+  );
+  const [isAdminGuardModalOpen, setIsAdminGuardModalOpen] = useState(false);
+  const [adminGuardPassword, setAdminGuardPassword] = useState("");
+  const [adminGuardError, setAdminGuardError] = useState<string | null>(null);
+  const [isVerifyingAdminGuard, setIsVerifyingAdminGuard] = useState(false);
+  const [pendingAdminAction, setPendingAdminAction] =
+    useState<AdminPendingAction | null>(null);
   const [eventSearch, setEventSearch] = useState("");
   const [eventFilterYear, setEventFilterYear] = useState("all");
   const [eventFilterMonth, setEventFilterMonth] = useState("all");
+  const [isJudgeContestModalOpen, setIsJudgeContestModalOpen] = useState(false);
+  const [judgeContestSearch, setJudgeContestSearch] = useState("");
 
   useEffect(() => {
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -166,6 +285,67 @@ export default function AdminDashboard() {
       .then(({ data }) => {
         if (data) {
           setCriteriaList(data as CriteriaRow[]);
+        }
+      });
+
+    supabase
+      .from("group_category")
+      .select("id, event_id, name, created_at")
+      .order("created_at", { ascending: false })
+      .then(({ data }) => {
+        if (data) {
+          setCategories(data as CategoryRow[]);
+        }
+      });
+
+    supabase
+      .from("participant")
+      .select(
+        "id, contest_id, group_id, full_name, contestant_number, created_at",
+      )
+      .order("created_at", { ascending: false })
+      .then(({ data }) => {
+        if (data) {
+          setParticipants(data as ParticipantRow[]);
+        }
+      });
+
+    supabase
+      .from("user_admin")
+      .select("id, username, created_at")
+      .order("created_at", { ascending: false })
+      .then(({ data }) => {
+        if (data) {
+          setAdmins(data as AdminRow[]);
+        }
+      });
+
+    supabase
+      .from("user_judge")
+      .select("id, event_id, full_name, username, created_at")
+      .order("created_at", { ascending: false })
+      .then(({ data }) => {
+        if (data) {
+          setJudges(data as JudgeRow[]);
+        }
+      });
+
+    supabase
+      .from("user_tabulator")
+      .select("id, event_id, full_name, username, created_at")
+      .order("created_at", { ascending: false })
+      .then(({ data }) => {
+        if (data) {
+          setTabulators(data as TabulatorRow[]);
+        }
+      });
+
+    supabase
+      .from("judge_assignment")
+      .select("judge_id, contest_id")
+      .then(({ data }) => {
+        if (data) {
+          setJudgeAssignments(data as JudgeAssignmentRow[]);
         }
       });
 
@@ -242,6 +422,183 @@ export default function AdminDashboard() {
     setCriteriaError(null);
     setCriteriaSuccess(null);
     setIsCriteriaModalOpen(true);
+  };
+
+  const openCreateCategoryModal = () => {
+    setEditingCategoryId(null);
+    setCategoryName("");
+    setCategoryError(null);
+    setCategorySuccess(null);
+    setIsCategoryModalOpen(true);
+  };
+
+  const openEditCategoryModal = (category: CategoryRow) => {
+    setEditingCategoryId(category.id);
+    setCategoryName(category.name);
+    setCategoryError(null);
+    setCategorySuccess(null);
+    setIsCategoryModalOpen(true);
+  };
+
+  const openCreateParticipantModal = () => {
+    setEditingParticipantId(null);
+    setSelectedContestIdForParticipant(null);
+    setSelectedCategoryIdForParticipant(null);
+    setParticipantFullName("");
+    setParticipantNumber("");
+    setParticipantError(null);
+    setParticipantSuccess(null);
+    setIsParticipantModalOpen(true);
+  };
+
+  const openEditParticipantModal = (participant: ParticipantRow) => {
+    setEditingParticipantId(participant.id);
+    setSelectedContestIdForParticipant(participant.contest_id);
+    setSelectedCategoryIdForParticipant(participant.group_id);
+    setParticipantFullName(participant.full_name);
+    setParticipantNumber(participant.contestant_number);
+    setParticipantError(null);
+    setParticipantSuccess(null);
+    setIsParticipantModalOpen(true);
+  };
+
+  const openCreateAdminModal = () => {
+    setEditingAdminId(null);
+    setAdminUsername("");
+    setAdminPassword("");
+    setAdminError(null);
+    setAdminSuccess(null);
+    setIsAdminModalOpen(true);
+  };
+
+  const openEditAdminModal = (admin: AdminRow) => {
+    setEditingAdminId(admin.id);
+    setAdminUsername(admin.username);
+    setAdminPassword("");
+    setAdminError(null);
+    setAdminSuccess(null);
+    setIsAdminModalOpen(true);
+  };
+
+  const openCreateJudgeModal = () => {
+    setEditingJudgeId(null);
+    setJudgeFullName("");
+    setJudgeUsername("");
+    setJudgePassword("");
+    setJudgeError(null);
+    setJudgeSuccess(null);
+    setSelectedContestIdsForJudge([]);
+    setIsJudgeModalOpen(true);
+  };
+
+  const openEditJudgeModal = (judge: JudgeRow) => {
+    setEditingJudgeId(judge.id);
+    setJudgeFullName(judge.full_name);
+    setJudgeUsername(judge.username);
+    setJudgePassword("");
+    setJudgeError(null);
+    setJudgeSuccess(null);
+     setSelectedContestIdsForJudge(
+      judgeAssignments
+        .filter((assignment) => assignment.judge_id === judge.id)
+        .map((assignment) => assignment.contest_id),
+    );
+    setIsJudgeModalOpen(true);
+  };
+
+  const openCreateTabulatorModal = () => {
+    setEditingTabulatorId(null);
+    setTabulatorFullName("");
+    setTabulatorUsername("");
+    setTabulatorPassword("");
+    setTabulatorError(null);
+    setTabulatorSuccess(null);
+    setIsTabulatorModalOpen(true);
+  };
+
+  const openEditTabulatorModal = (tabulator: TabulatorRow) => {
+    setEditingTabulatorId(tabulator.id);
+    setTabulatorFullName(tabulator.full_name);
+    setTabulatorUsername(tabulator.username);
+    setTabulatorPassword("");
+    setTabulatorError(null);
+    setTabulatorSuccess(null);
+    setIsTabulatorModalOpen(true);
+  };
+
+  const requireAdminGuard = (action: AdminPendingAction) => {
+    setPendingAdminAction(action);
+    setAdminGuardPassword("");
+    setAdminGuardError(null);
+    setIsAdminGuardModalOpen(true);
+  };
+
+  const handleVerifyAdminGuard = async () => {
+    setAdminGuardError(null);
+
+    if (!adminGuardPassword) {
+      setAdminGuardError("Please enter your admin password.");
+      return;
+    }
+
+    if (typeof window === "undefined") {
+      setAdminGuardError("No admin session found. Please sign in again.");
+      return;
+    }
+
+    const storedAdminUsername = window.localStorage.getItem("admin_username");
+
+    if (!storedAdminUsername) {
+      setAdminGuardError("No admin session found. Please sign in again.");
+      return;
+    }
+
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+    if (!supabaseUrl || !supabaseAnonKey) {
+      setAdminGuardError("Supabase is not configured.");
+      return;
+    }
+
+    setIsVerifyingAdminGuard(true);
+
+    const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
+    const { data, error } = await supabase.rpc("authenticate_admin", {
+      p_username: storedAdminUsername,
+      p_password: adminGuardPassword,
+    });
+
+    setIsVerifyingAdminGuard(false);
+
+    if (error) {
+      setAdminGuardError(error.message || "Unable to verify admin credentials.");
+      return;
+    }
+
+    if (!data || (Array.isArray(data) && data.length === 0)) {
+      setAdminGuardError("Invalid admin password.");
+      return;
+    }
+
+    const action = pendingAdminAction;
+    setPendingAdminAction(null);
+    setIsAdminGuardModalOpen(false);
+    setAdminGuardPassword("");
+
+    if (action) {
+      if (action.type === "create") {
+        openCreateAdminModal();
+      } else if (action.type === "edit") {
+        const target = admins.find((admin) => admin.id === action.adminId);
+        if (target) {
+          openEditAdminModal(target);
+        }
+      } else if (action.type === "delete") {
+        await handleDeleteAdmin(action.adminId);
+      }
+    }
   };
 
   const openEditCriteriaModal = (criteria: CriteriaRow) => {
@@ -551,23 +908,42 @@ export default function AdminDashboard() {
           );
           const eventCodeForContest = eventForContest?.code ?? "EVT";
 
-          const generatedContestCode = `${eventCodeForContest}-${typed.id}`;
+          const generatedContestCode = `${eventCodeForContest}${typed.id}`;
 
-          const { data: updatedContest } = await supabase
+          const { data: updatedContestData, error: updateError } = await supabase
             .from("contest")
             .update({
               contest_code: generatedContestCode,
             })
             .eq("id", typed.id)
-            .select("id, event_id, name, created_at, contest_code")
-            .single();
+            .select("id, event_id, name, created_at, contest_code");
 
-          const finalContest = (updatedContest as ContestRow | null) ?? {
-            ...typed,
-            contest_code: generatedContestCode,
-          };
+          if (updateError) {
+            setContestError(
+              updateError.message ||
+                "Contest was created but its code could not be saved. Check your database row-level security policies.",
+            );
 
-          setContests((previous) => [finalContest, ...previous]);
+            setContests((previous) => [typed, ...previous]);
+          } else {
+            const updatedContestArray =
+              (updatedContestData as ContestRow[] | null) ?? null;
+
+            if (
+              !updatedContestArray ||
+              !Array.isArray(updatedContestArray) ||
+              updatedContestArray.length === 0
+            ) {
+              setContestError(
+                "Contest was created but its code could not be saved. Check your database row-level security policies.",
+              );
+
+              setContests((previous) => [typed, ...previous]);
+            } else {
+              const finalContest = updatedContestArray[0];
+              setContests((previous) => [finalContest, ...previous]);
+            }
+          }
         } else {
           setContests((previous) => [typed, ...previous]);
         }
@@ -610,6 +986,7 @@ export default function AdminDashboard() {
       setContestSuccess("Contest has been updated.");
     }
 
+    setIsSavingContest(false);
     setContestName("");
     setEditingContestId(null);
     setIsContestModalOpen(false);
@@ -630,12 +1007,23 @@ export default function AdminDashboard() {
 
     const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
-    const { error } = await supabase.from("contest").delete().eq("id", id);
+    const { data, error } = await supabase
+      .from("contest")
+      .delete()
+      .eq("id", id)
+      .select("id");
 
     setIsDeletingContestId(null);
 
     if (error) {
       setContestError(error.message || "Unable to delete contest.");
+      return;
+    }
+
+    if (!data || data.length === 0) {
+      setContestError(
+        "Unable to delete contest. Check your database row-level security policies.",
+      );
       return;
     }
 
@@ -724,15 +1112,15 @@ export default function AdminDashboard() {
               (event) => event.id === contestForCriteria.event_id,
             );
             if (eventForContest) {
-              baseContestCode = `${eventForContest.code}-${contestForCriteria.id}`;
+              baseContestCode = `${eventForContest.code}${contestForCriteria.id}`;
             }
           }
 
           const generatedCriteriaCode = baseContestCode
-            ? `${baseContestCode}-${typed.id}`
-            : `CRIT-${typed.id}`;
+            ? `${baseContestCode}${typed.id}`
+            : `CRIT${typed.id}`;
 
-          const { data: updatedCriteria } = await supabase
+          const { data: updatedCriteriaData, error: updateError } = await supabase
             .from("criteria")
             .update({
               criteria_code: generatedCriteriaCode,
@@ -740,15 +1128,34 @@ export default function AdminDashboard() {
             .eq("id", typed.id)
             .select(
               "id, contest_id, name, percentage, created_at, description, criteria_code",
-            )
-            .single();
+            );
 
-          const finalCriteria = (updatedCriteria as CriteriaRow | null) ?? {
-            ...typed,
-            criteria_code: generatedCriteriaCode,
-          };
+          if (updateError) {
+            setCriteriaError(
+              updateError.message ||
+                "Criteria was created but its code could not be saved. Check your database row-level security policies.",
+            );
 
-          setCriteriaList((previous) => [finalCriteria, ...previous]);
+            setCriteriaList((previous) => [typed, ...previous]);
+          } else {
+            const updatedCriteriaArray =
+              (updatedCriteriaData as CriteriaRow[] | null) ?? null;
+
+            if (
+              !updatedCriteriaArray ||
+              !Array.isArray(updatedCriteriaArray) ||
+              updatedCriteriaArray.length === 0
+            ) {
+              setCriteriaError(
+                "Criteria was created but its code could not be saved. Check your database row-level security policies.",
+              );
+
+              setCriteriaList((previous) => [typed, ...previous]);
+            } else {
+              const finalCriteria = updatedCriteriaArray[0];
+              setCriteriaList((previous) => [finalCriteria, ...previous]);
+            }
+          }
         } else {
           setCriteriaList((previous) => [typed, ...previous]);
         }
@@ -810,7 +1217,11 @@ export default function AdminDashboard() {
 
     const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
-    const { error } = await supabase.from("criteria").delete().eq("id", id);
+    const { data, error } = await supabase
+      .from("criteria")
+      .delete()
+      .eq("id", id)
+      .select("id");
 
     setIsDeletingCriteriaId(null);
 
@@ -819,8 +1230,422 @@ export default function AdminDashboard() {
       return;
     }
 
+    if (!data || data.length === 0) {
+      setCriteriaError(
+        "Unable to delete criteria. Check your database row-level security policies.",
+      );
+      return;
+    }
+
     setCriteriaList((previous) =>
       previous.filter((criteria) => criteria.id !== id),
+    );
+  };
+
+  const handleSaveCategory = async () => {
+    setCategoryError(null);
+    setCategorySuccess(null);
+
+    if (activeEventId === null) {
+      setCategoryError("Set an active event first in the Event tab.");
+      return;
+    }
+
+    if (!categoryName.trim()) {
+      setCategoryError("Category name is required.");
+      return;
+    }
+
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+    if (!supabaseUrl || !supabaseAnonKey) {
+      setCategoryError("Supabase is not configured.");
+      return;
+    }
+
+    setIsSavingCategory(true);
+
+    const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
+    if (editingCategoryId === null) {
+      const { data, error } = await supabase
+        .from("group_category")
+        .insert({
+          event_id: activeEventId,
+          name: categoryName.trim(),
+        })
+        .select("id, event_id, name, created_at")
+        .single();
+
+      setIsSavingCategory(false);
+
+      if (error) {
+        setCategoryError(error.message || "Unable to save category.");
+        return;
+      }
+
+      if (data) {
+        setCategories((previous) => [data as CategoryRow, ...previous]);
+      }
+
+      setCategorySuccess("Category has been added.");
+    } else {
+      const { data, error } = await supabase
+        .from("group_category")
+        .update({
+          name: categoryName.trim(),
+        })
+        .eq("id", editingCategoryId)
+        .select("id, event_id, name, created_at")
+        .single();
+
+      setIsSavingCategory(false);
+
+      if (error) {
+        setCategoryError(error.message || "Unable to update category.");
+        return;
+      }
+
+      if (data) {
+        setCategories((previous) =>
+          previous.map((category) =>
+            category.id === data.id ? (data as CategoryRow) : category,
+          ),
+        );
+      }
+
+      setCategorySuccess("Category has been updated.");
+    }
+
+    setCategoryName("");
+    setEditingCategoryId(null);
+    setIsCategoryModalOpen(false);
+  };
+
+  const handleDeleteCategory = async (id: number) => {
+    setCategoryError(null);
+
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+    if (!supabaseUrl || !supabaseAnonKey) {
+      setCategoryError("Supabase is not configured.");
+      return;
+    }
+
+    setIsDeletingCategoryId(id);
+
+    const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
+    const { data, error } = await supabase
+      .from("group_category")
+      .delete()
+      .eq("id", id)
+      .select("id");
+
+    setIsDeletingCategoryId(null);
+
+    if (error) {
+      setCategoryError(error.message || "Unable to delete category.");
+      return;
+    }
+
+    if (!data || data.length === 0) {
+      setCategoryError(
+        "Unable to delete category. Check your database row-level security policies.",
+      );
+      return;
+    }
+
+    setCategories((previous) =>
+      previous.filter((category) => category.id !== id),
+    );
+  };
+
+  const handleSaveParticipant = async () => {
+    setParticipantError(null);
+    setParticipantSuccess(null);
+
+    if (activeEventId === null) {
+      setParticipantError("Set an active event first in the Event tab.");
+      return;
+    }
+
+    if (selectedContestIdForParticipant === null) {
+      setParticipantError("Please select a contest.");
+      return;
+    }
+
+    if (selectedCategoryIdForParticipant === null) {
+      setParticipantError("Please select a category.");
+      return;
+    }
+
+    if (!participantFullName.trim() || !participantNumber.trim()) {
+      setParticipantError("Please fill in all fields.");
+      return;
+    }
+
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+    if (!supabaseUrl || !supabaseAnonKey) {
+      setParticipantError("Supabase is not configured.");
+      return;
+    }
+
+    setIsSavingParticipant(true);
+
+    const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
+    if (editingParticipantId === null) {
+      const { data, error } = await supabase
+        .from("participant")
+        .insert({
+          contest_id: selectedContestIdForParticipant,
+          group_id: selectedCategoryIdForParticipant,
+          full_name: participantFullName.trim(),
+          contestant_number: participantNumber.trim(),
+        })
+        .select(
+          "id, contest_id, group_id, full_name, contestant_number, created_at",
+        );
+
+      setIsSavingParticipant(false);
+
+      if (error) {
+        setParticipantError(error.message || "Unable to save participant.");
+        return;
+      }
+
+      if (data && Array.isArray(data) && data.length > 0) {
+        const created = data[0] as ParticipantRow;
+        setParticipants((previous) => [created, ...previous]);
+      }
+
+      setParticipantSuccess("Participant has been added.");
+    } else {
+      const { data, error } = await supabase
+        .from("participant")
+        .update({
+          contest_id: selectedContestIdForParticipant,
+          group_id: selectedCategoryIdForParticipant,
+          full_name: participantFullName.trim(),
+          contestant_number: participantNumber.trim(),
+        })
+        .eq("id", editingParticipantId)
+        .select(
+          "id, contest_id, group_id, full_name, contestant_number, created_at",
+        );
+
+      setIsSavingParticipant(false);
+
+      if (error) {
+        setParticipantError(error.message || "Unable to update participant.");
+        return;
+      }
+
+      if (data && Array.isArray(data) && data.length > 0) {
+        const updated = data[0] as ParticipantRow;
+        setParticipants((previous) =>
+          previous.map((participant) =>
+            participant.id === updated.id ? updated : participant,
+          ),
+        );
+      }
+
+      setParticipantSuccess("Participant has been updated.");
+    }
+
+    setSelectedContestIdForParticipant(null);
+    setSelectedCategoryIdForParticipant(null);
+    setParticipantFullName("");
+    setParticipantNumber("");
+    setEditingParticipantId(null);
+    setIsParticipantModalOpen(false);
+  };
+
+  const handleDeleteParticipant = async (id: number) => {
+    setParticipantError(null);
+
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+    if (!supabaseUrl || !supabaseAnonKey) {
+      setParticipantError("Supabase is not configured.");
+      return;
+    }
+
+    setIsDeletingParticipantId(id);
+
+    const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
+    const { data, error } = await supabase
+      .from("participant")
+      .delete()
+      .eq("id", id)
+      .select("id");
+
+    setIsDeletingParticipantId(null);
+
+    if (error) {
+      setParticipantError(error.message || "Unable to delete participant.");
+      return;
+    }
+
+    if (!data || data.length === 0) {
+      setParticipantError(
+        "Unable to delete participant. Check your database row-level security policies.",
+      );
+      return;
+    }
+
+    setParticipants((previous) =>
+      previous.filter((participant) => participant.id !== id),
+    );
+  };
+
+  const handleSaveTabulator = async () => {
+    setTabulatorError(null);
+    setTabulatorSuccess(null);
+
+    if (activeEventId === null) {
+      setTabulatorError("Set an active event first in the Event tab.");
+      return;
+    }
+
+    if (
+      !tabulatorFullName.trim() ||
+      !tabulatorUsername.trim() ||
+      (editingTabulatorId === null && !tabulatorPassword)
+    ) {
+      setTabulatorError("Please fill in all fields.");
+      return;
+    }
+
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+    if (!supabaseUrl || !supabaseAnonKey) {
+      setTabulatorError("Supabase is not configured.");
+      return;
+    }
+
+    setIsSavingTabulator(true);
+
+    const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
+    let error = null;
+    let data: unknown = null;
+
+    if (editingTabulatorId === null) {
+      const response = await supabase
+        .from("user_tabulator")
+        .insert({
+          event_id: activeEventId,
+          full_name: tabulatorFullName.trim(),
+          username: tabulatorUsername.trim(),
+          password_hash: tabulatorPassword,
+        })
+        .select("id, event_id, full_name, username, created_at");
+
+      error = response.error;
+      data = response.data;
+
+      if (!error && data && Array.isArray(data) && data.length > 0) {
+        const created = data[0] as TabulatorRow;
+        setTabulators((previous) => [created, ...previous]);
+      }
+    } else {
+      const updatePayload: {
+        full_name: string;
+        username: string;
+        password_hash?: string;
+      } = {
+        full_name: tabulatorFullName.trim(),
+        username: tabulatorUsername.trim(),
+      };
+
+      if (tabulatorPassword) {
+        updatePayload.password_hash = tabulatorPassword;
+      }
+
+      const response = await supabase
+        .from("user_tabulator")
+        .update(updatePayload)
+        .eq("id", editingTabulatorId)
+        .select("id, event_id, full_name, username, created_at");
+
+      error = response.error;
+      data = response.data;
+
+      if (!error && data && Array.isArray(data) && data.length > 0) {
+        const updated = data[0] as TabulatorRow;
+        setTabulators((previous) =>
+          previous.map((tabulator) =>
+            tabulator.id === updated.id ? updated : tabulator,
+          ),
+        );
+      }
+    }
+
+    if (error) {
+      setTabulatorError(error.message || "Unable to save tabulator.");
+      setIsSavingTabulator(false);
+      return;
+    }
+
+    setTabulatorSuccess(
+      editingTabulatorId === null
+        ? "Tabulator has been added."
+        : "Tabulator has been updated.",
+    );
+    setIsSavingTabulator(false);
+    setEditingTabulatorId(null);
+    setTabulatorFullName("");
+    setTabulatorUsername("");
+    setTabulatorPassword("");
+    setIsTabulatorModalOpen(false);
+  };
+
+  const handleDeleteTabulator = async (id: number) => {
+    setTabulatorError(null);
+
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+    if (!supabaseUrl || !supabaseAnonKey) {
+      setTabulatorError("Supabase is not configured.");
+      return;
+    }
+
+    setIsDeletingTabulatorId(id);
+
+    const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
+    const { data, error } = await supabase
+      .from("user_tabulator")
+      .delete()
+      .eq("id", id)
+      .select("id");
+
+    setIsDeletingTabulatorId(null);
+
+    if (error) {
+      setTabulatorError(error.message || "Unable to delete tabulator.");
+      return;
+    }
+
+    if (!data || data.length === 0) {
+      setTabulatorError(
+        "Unable to delete tabulator. Check your database row-level security policies.",
+      );
+      return;
+    }
+
+    setTabulators((previous) =>
+      previous.filter((tabulator) => tabulator.id !== id),
     );
   };
 
@@ -854,12 +1679,95 @@ export default function AdminDashboard() {
 
     const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
-    const { error } = await supabase.from("user_judge").insert({
-      event_id: activeEventId,
-      full_name: judgeFullName.trim(),
-      username: judgeUsername.trim(),
-      password_hash: judgePassword,
-    });
+    let error = null;
+    let data: unknown = null;
+
+    if (editingJudgeId === null) {
+      const response = await supabase
+        .from("user_judge")
+        .insert({
+          event_id: activeEventId,
+          full_name: judgeFullName.trim(),
+          username: judgeUsername.trim(),
+          password_hash: judgePassword,
+        })
+        .select("id, event_id, full_name, username, created_at");
+
+      error = response.error;
+      data = response.data;
+
+      if (!error && data && Array.isArray(data) && data.length > 0) {
+        const created = data[0] as JudgeRow;
+        setJudges((previous) => [created, ...previous]);
+        if (selectedContestIdsForJudge.length > 0) {
+          const inserts = selectedContestIdsForJudge.map((contestId) => ({
+            judge_id: created.id,
+            contest_id: contestId,
+          }));
+          const { data: assignments, error: assignmentError } = await supabase
+            .from("judge_assignment")
+            .insert(inserts)
+            .select("judge_id, contest_id");
+          if (assignmentError) {
+            setJudgeError(
+              assignmentError.message || "Unable to assign contests to judge.",
+            );
+          } else if (assignments && Array.isArray(assignments)) {
+            setJudgeAssignments((previous) => [
+              ...previous,
+              ...(assignments as JudgeAssignmentRow[]),
+            ]);
+          }
+        }
+      }
+    } else {
+      const response = await supabase
+        .from("user_judge")
+        .update({
+          full_name: judgeFullName.trim(),
+          username: judgeUsername.trim(),
+          password_hash: judgePassword,
+        })
+        .eq("id", editingJudgeId)
+        .select("id, event_id, full_name, username, created_at");
+
+      error = response.error;
+      data = response.data;
+
+      if (!error && data && Array.isArray(data) && data.length > 0) {
+        const updated = data[0] as JudgeRow;
+        setJudges((previous) =>
+          previous.map((judge) => (judge.id === updated.id ? updated : judge)),
+        );
+        await supabase.from("judge_assignment").delete().eq("judge_id", updated.id);
+        if (selectedContestIdsForJudge.length > 0) {
+          const inserts = selectedContestIdsForJudge.map((contestId) => ({
+            judge_id: updated.id,
+            contest_id: contestId,
+          }));
+          const { data: assignments, error: assignmentError } = await supabase
+            .from("judge_assignment")
+            .insert(inserts)
+            .select("judge_id, contest_id");
+          if (assignmentError) {
+            setJudgeError(
+              assignmentError.message || "Unable to assign contests to judge.",
+            );
+          } else if (assignments && Array.isArray(assignments)) {
+            setJudgeAssignments((previous) => [
+              ...previous.filter(
+                (assignment) => assignment.judge_id !== updated.id,
+              ),
+              ...(assignments as JudgeAssignmentRow[]),
+            ]);
+          }
+        } else {
+          setJudgeAssignments((previous) =>
+            previous.filter((assignment) => assignment.judge_id !== updated.id),
+          );
+        }
+      }
+    }
 
     if (error) {
       setJudgeError(error.message || "Unable to save judge.");
@@ -867,16 +1775,176 @@ export default function AdminDashboard() {
       return;
     }
 
-    setJudgeSuccess("Judge has been added.");
+    setJudgeSuccess(
+      editingJudgeId === null ? "Judge has been added." : "Judge has been updated.",
+    );
     setIsSavingJudge(false);
+    setEditingJudgeId(null);
     setJudgeFullName("");
     setJudgeUsername("");
     setJudgePassword("");
     setIsJudgeModalOpen(false);
   };
 
+  const handleSaveAdmin = async () => {
+    setAdminError(null);
+    setAdminSuccess(null);
+
+    if (!adminUsername.trim() || !adminPassword) {
+      setAdminError("Please fill in all fields.");
+      return;
+    }
+
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+    if (!supabaseUrl || !supabaseAnonKey) {
+      setAdminError("Supabase is not configured.");
+      return;
+    }
+
+    setIsSavingAdmin(true);
+
+    const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
+    if (editingAdminId === null) {
+      const { data, error } = await supabase
+        .from("user_admin")
+        .insert({
+          username: adminUsername.trim(),
+          password_hash: adminPassword,
+        })
+        .select("id, username, created_at");
+
+      if (error) {
+        setAdminError(error.message || "Unable to save admin.");
+        setIsSavingAdmin(false);
+        return;
+      }
+
+      if (data && Array.isArray(data) && data.length > 0) {
+        const created = data[0] as AdminRow;
+        setAdmins((previous) => [created, ...previous]);
+      }
+
+      setAdminSuccess("Admin has been added.");
+    } else {
+      const { data, error } = await supabase
+        .from("user_admin")
+        .update({
+          username: adminUsername.trim(),
+          password_hash: adminPassword,
+        })
+        .eq("id", editingAdminId)
+        .select("id, username, created_at");
+
+      if (error) {
+        setAdminError(error.message || "Unable to update admin.");
+        setIsSavingAdmin(false);
+        return;
+      }
+
+      if (data && Array.isArray(data) && data.length > 0) {
+        const updated = data[0] as AdminRow;
+        setAdmins((previous) =>
+          previous.map((admin) => (admin.id === updated.id ? updated : admin)),
+        );
+      }
+
+      setAdminSuccess("Admin has been updated.");
+    }
+
+    setIsSavingAdmin(false);
+    setAdminUsername("");
+    setAdminPassword("");
+    setEditingAdminId(null);
+    setIsAdminModalOpen(false);
+  };
+
+  const handleDeleteJudge = async (id: number) => {
+    setJudgeError(null);
+
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+    if (!supabaseUrl || !supabaseAnonKey) {
+      setJudgeError("Supabase is not configured.");
+      return;
+    }
+
+    setIsDeletingJudgeId(id);
+
+    const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
+    const { data, error } = await supabase
+      .from("user_judge")
+      .delete()
+      .eq("id", id)
+      .select("id");
+
+    setIsDeletingJudgeId(null);
+
+    if (error) {
+      setJudgeError(
+        error.message ||
+          "Unable to delete judge. Check your database row-level security policies.",
+      );
+      return;
+    }
+
+    if (!data || data.length === 0) {
+      setJudgeError(
+        "Unable to delete judge. Check your database row-level security policies.",
+      );
+      return;
+    }
+
+    setJudges((previous) => previous.filter((judge) => judge.id !== id));
+    setJudgeAssignments((previous) =>
+      previous.filter((assignment) => assignment.judge_id !== id),
+    );
+  };
+
+  const handleDeleteAdmin = async (id: number) => {
+    setAdminError(null);
+
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+    if (!supabaseUrl || !supabaseAnonKey) {
+      setAdminError("Supabase is not configured.");
+      return;
+    }
+
+    setIsDeletingAdminId(id);
+
+    const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
+    const { data, error } = await supabase
+      .from("user_admin")
+      .delete()
+      .eq("id", id)
+      .select("id");
+
+    setIsDeletingAdminId(null);
+
+    if (error) {
+      setAdminError(error.message || "Unable to delete admin.");
+      return;
+    }
+
+    if (!data || data.length === 0) {
+      setAdminError(
+        "Unable to delete admin. Check your database row-level security policies.",
+      );
+      return;
+    }
+
+    setAdmins((previous) => previous.filter((admin) => admin.id !== id));
+  };
+
   return (
-    <div className="flex min-h-screen flex-col bg-gradient-to-br from-[#E3F2EA] via-white to-[#E3F2EA] text-slate-900">
+    <div className="flex min-h-screen flex-col overflow-x-hidden bg-gradient-to-br from-[#E3F2EA] via-white to-[#E3F2EA] text-slate-900">
       <header className="border-b border-[#1F4D3A1F] bg-white/90 backdrop-blur-sm">
         <div className="mx-auto flex max-w-6xl items-center px-6 py-3">
           <div className="flex items-center gap-2">
@@ -1339,6 +2407,15 @@ export default function AdminDashboard() {
                             }`}
                       </span>
                     </div>
+                    {(contestError || contestSuccess) && (
+                      <div
+                        className={`mb-2 text-[10px] ${
+                          contestError ? "text-red-500" : "text-emerald-600"
+                        }`}
+                      >
+                        {contestError ?? contestSuccess}
+                      </div>
+                    )}
                     <div className="overflow-x-auto">
                       <table className="min-w-full border-collapse text-left text-[11px]">
                         <thead>
@@ -1438,6 +2515,15 @@ export default function AdminDashboard() {
                           : `${criteriaList.length} criteria`}
                       </span>
                     </div>
+                    {(criteriaError || criteriaSuccess) && (
+                      <div
+                        className={`mb-2 text-[10px] ${
+                          criteriaError ? "text-red-500" : "text-emerald-600"
+                        }`}
+                      >
+                        {criteriaError ?? criteriaSuccess}
+                      </div>
+                    )}
                     <div className="overflow-x-auto">
                       <table className="min-w-full border-collapse text-left text-[11px]">
                         <thead>
@@ -1851,7 +2937,7 @@ export default function AdminDashboard() {
                     </div>
                     <button
                       type="button"
-                      onClick={() => setIsCategoryModalOpen(true)}
+                      onClick={openCreateCategoryModal}
                       className="inline-flex items-center rounded-full bg-[#1F4D3A] px-3 py-1.5 text-[11px] font-medium text-white shadow-sm transition hover:bg-[#163528]"
                     >
                       Add category
@@ -1864,9 +2950,22 @@ export default function AdminDashboard() {
                         Category list
                       </div>
                       <span className="text-[10px] text-slate-400">
-                        No categories yet
+                        {categories.length === 0
+                          ? "No categories yet"
+                          : `${categories.length} categor${
+                              categories.length > 1 ? "ies" : "y"
+                            }`}
                       </span>
                     </div>
+                    {(categoryError || categorySuccess) && (
+                      <div
+                        className={`mb-2 text-[10px] ${
+                          categoryError ? "text-red-500" : "text-emerald-600"
+                        }`}
+                      >
+                        {categoryError ?? categorySuccess}
+                      </div>
+                    )}
                     <div className="overflow-x-auto">
                       <table className="min-w-full border-collapse text-left text-[11px]">
                         <thead>
@@ -1879,15 +2978,60 @@ export default function AdminDashboard() {
                           </tr>
                         </thead>
                         <tbody>
-                          <tr className="border-b border-[#F1F5F9]">
-                            <td
-                              className="px-3 py-2 text-slate-400"
-                              colSpan={3}
-                            >
-                              Once you add categories, you can edit or delete
-                              them here.
-                            </td>
-                          </tr>
+                          {categories.length === 0 ? (
+                            <tr className="border-b border-[#F1F5F9]">
+                              <td
+                                className="px-3 py-2 text-slate-400"
+                                colSpan={3}
+                              >
+                                Once you add categories, you can edit or delete
+                                them here.
+                              </td>
+                            </tr>
+                          ) : (
+                            categories.map((category) => (
+                              <tr
+                                key={category.id}
+                                className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC]"
+                              >
+                                <td className="px-3 py-2 text-slate-600">
+                                  {events.find(
+                                    (event) => event.id === category.event_id,
+                                  )?.name ?? "Unknown event"}
+                                </td>
+                                <td className="px-3 py-2 font-medium text-slate-700">
+                                  {category.name}
+                                </td>
+                                <td className="px-3 py-2">
+                                  <div className="flex gap-1.5 text-[10px] text-slate-500">
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        openEditCategoryModal(category)
+                                      }
+                                      className="rounded-full border border-[#E2E8F0] px-2 py-0.5 text-[10px] hover:bg-[#F8FAFC]"
+                                    >
+                                      Edit
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        handleDeleteCategory(category.id)
+                                      }
+                                      disabled={
+                                        isDeletingCategoryId === category.id
+                                      }
+                                      className="rounded-full border border-[#FEE2E2] px-2 py-0.5 text-[10px] text-red-500 hover:bg-[#FEF2F2] disabled:opacity-60"
+                                    >
+                                      {isDeletingCategoryId === category.id
+                                        ? "Deleting..."
+                                        : "Delete"}
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            ))
+                          )}
                         </tbody>
                       </table>
                     </div>
@@ -1903,7 +3047,7 @@ export default function AdminDashboard() {
                     </div>
                     <button
                       type="button"
-                      onClick={() => setIsParticipantModalOpen(true)}
+                      onClick={openCreateParticipantModal}
                       className="inline-flex items-center rounded-full bg-[#1F4D3A] px-3 py-1.5 text-[11px] font-medium text-white shadow-sm transition hover:bg-[#163528]"
                     >
                       Add participant
@@ -1916,9 +3060,22 @@ export default function AdminDashboard() {
                         Participant list
                       </div>
                       <span className="text-[10px] text-slate-400">
-                        No participants yet
+                        {participants.length === 0
+                          ? "No participants yet"
+                          : `${participants.length} participant${
+                              participants.length > 1 ? "s" : ""
+                            }`}
                       </span>
                     </div>
+                    {(participantError || participantSuccess) && (
+                      <div
+                        className={`mb-2 text-[10px] ${
+                          participantError ? "text-red-500" : "text-emerald-600"
+                        }`}
+                      >
+                        {participantError ?? participantSuccess}
+                      </div>
+                    )}
                     <div className="overflow-x-auto">
                       <table className="min-w-full border-collapse text-left text-[11px]">
                         <thead>
@@ -1933,15 +3090,72 @@ export default function AdminDashboard() {
                           </tr>
                         </thead>
                         <tbody>
-                          <tr className="border-b border-[#F1F5F9]">
-                            <td
-                              className="px-3 py-2 text-slate-400"
-                              colSpan={5}
-                            >
-                              Once you add participants, you can edit or delete
-                              them here.
-                            </td>
-                          </tr>
+                          {participants.length === 0 ? (
+                            <tr className="border-b border-[#F1F5F9]">
+                              <td
+                                className="px-3 py-2 text-slate-400"
+                                colSpan={5}
+                              >
+                                Once you add participants, you can edit or
+                                delete them here.
+                              </td>
+                            </tr>
+                          ) : (
+                            participants.map((participant) => (
+                              <tr
+                                key={participant.id}
+                                className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC]"
+                              >
+                                <td className="px-3 py-2 text-slate-600">
+                                  {contests.find(
+                                    (contest) =>
+                                      contest.id === participant.contest_id,
+                                  )?.name ?? "Unknown contest"}
+                                </td>
+                                <td className="px-3 py-2 text-slate-600">
+                                  {categories.find(
+                                    (category) =>
+                                      category.id === participant.group_id,
+                                  )?.name ?? "Unknown category"}
+                                </td>
+                                <td className="px-3 py-2 font-medium text-slate-700">
+                                  {participant.full_name}
+                                </td>
+                                <td className="px-3 py-2 text-slate-600">
+                                  {participant.contestant_number}
+                                </td>
+                                <td className="px-3 py-2">
+                                  <div className="flex gap-1.5 text-[10px] text-slate-500">
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        openEditParticipantModal(participant)
+                                      }
+                                      className="rounded-full border border-[#E2E8F0] px-2 py-0.5 hover:bg-[#F8FAFC]"
+                                    >
+                                      Edit
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        handleDeleteParticipant(participant.id)
+                                      }
+                                      disabled={
+                                        isDeletingParticipantId ===
+                                        participant.id
+                                      }
+                                      className="rounded-full border border-[#FEE2E2] px-2 py-0.5 text-red-500 hover:bg-[#FEF2F2] disabled:opacity-60"
+                                    >
+                                      {isDeletingParticipantId ===
+                                      participant.id
+                                        ? "Deleting..."
+                                        : "Delete"}
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            ))
+                          )}
                         </tbody>
                       </table>
                     </div>
@@ -1986,10 +3200,21 @@ export default function AdminDashboard() {
                     Category name
                   </div>
                   <input
+                    value={categoryName}
+                    onChange={(event) => setCategoryName(event.target.value)}
                     className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
                     placeholder="Category name"
                   />
                 </div>
+                {(categoryError || categorySuccess) && (
+                  <div
+                    className={`text-[10px] ${
+                      categoryError ? "text-red-500" : "text-emerald-600"
+                    }`}
+                  >
+                    {categoryError ?? categorySuccess}
+                  </div>
+                )}
               </div>
               <div className="flex items-center justify-end gap-2 border-t border-[#E2E8F0] px-5 py-3">
                 <button
@@ -2001,10 +3226,13 @@ export default function AdminDashboard() {
                 </button>
                 <button
                   type="button"
-                  disabled={activeEventId === null}
-                  className="rounded-full bg-[#1F4D3A] px-4 py-1.5 text-[11px] font-medium text-white shadow-sm hover:bg-[#163528]"
+                  onClick={handleSaveCategory}
+                  disabled={isSavingCategory || activeEventId === null}
+                  className={`rounded-full bg-[#1F4D3A] px-4 py-1.5 text-[11px] font-medium text-white shadow-sm hover:bg-[#163528] ${
+                    isSavingCategory ? "cursor-not-allowed opacity-70" : ""
+                  }`}
                 >
-                  Save category
+                  {isSavingCategory ? "Saving..." : "Save category"}
                 </button>
               </div>
             </div>
@@ -2034,21 +3262,65 @@ export default function AdminDashboard() {
               <div className="space-y-3 px-5 py-4 text-[11px]">
                 <div className="space-y-1">
                   <div className="text-[10px] text-slate-500">Select contest</div>
-                  <select className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]">
-                    <option>Select contest</option>
+                  <select
+                    value={selectedContestIdForParticipant ?? ""}
+                    onChange={(event) => {
+                      const value = event.target.value;
+                      setSelectedContestIdForParticipant(
+                        value ? Number(value) : null,
+                      );
+                    }}
+                    className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                  >
+                    <option value="">Select contest</option>
+                    {contests
+                      .filter(
+                        (contest) =>
+                          activeEventId === null ||
+                          contest.event_id === activeEventId,
+                      )
+                      .map((contest) => (
+                        <option key={contest.id} value={contest.id}>
+                          {contest.name}
+                        </option>
+                      ))}
                   </select>
                 </div>
                 <div className="space-y-1">
                   <div className="text-[10px] text-slate-500">
                     Select category
                   </div>
-                  <select className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]">
-                    <option>Select category</option>
+                  <select
+                    value={selectedCategoryIdForParticipant ?? ""}
+                    onChange={(event) => {
+                      const value = event.target.value;
+                      setSelectedCategoryIdForParticipant(
+                        value ? Number(value) : null,
+                      );
+                    }}
+                    className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                  >
+                    <option value="">Select category</option>
+                    {categories
+                      .filter(
+                        (category) =>
+                          activeEventId === null ||
+                          category.event_id === activeEventId,
+                      )
+                      .map((category) => (
+                        <option key={category.id} value={category.id}>
+                          {category.name}
+                        </option>
+                      ))}
                   </select>
                 </div>
                 <div className="space-y-1">
                   <div className="text-[10px] text-slate-500">Full name</div>
                   <input
+                    value={participantFullName}
+                    onChange={(event) =>
+                      setParticipantFullName(event.target.value)
+                    }
                     className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
                     placeholder="Full name"
                   />
@@ -2058,10 +3330,23 @@ export default function AdminDashboard() {
                     Contestant number
                   </div>
                   <input
+                    value={participantNumber}
+                    onChange={(event) =>
+                      setParticipantNumber(event.target.value)
+                    }
                     className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
                     placeholder="Contestant number"
                   />
                 </div>
+                {(participantError || participantSuccess) && (
+                  <div
+                    className={`text-[10px] ${
+                      participantError ? "text-red-500" : "text-emerald-600"
+                    }`}
+                  >
+                    {participantError ?? participantSuccess}
+                  </div>
+                )}
               </div>
               <div className="flex items-center justify-end gap-2 border-t border-[#E2E8F0] px-5 py-3">
                 <button
@@ -2073,9 +3358,17 @@ export default function AdminDashboard() {
                 </button>
                 <button
                   type="button"
-                  className="rounded-full bg-[#1F4D3A] px-4 py-1.5 text-[11px] font-medium text-white shadow-sm hover:bg-[#163528]"
+                  onClick={handleSaveParticipant}
+                  disabled={isSavingParticipant || activeEventId === null}
+                  className={`rounded-full bg-[#1F4D3A] px-4 py-1.5 text-[11px] font-medium text-white shadow-sm hover:bg-[#163528] ${
+                    isSavingParticipant ? "cursor-not-allowed opacity-70" : ""
+                  }`}
                 >
-                  Save participant
+                  {isSavingParticipant
+                    ? "Saving..."
+                    : editingParticipantId === null
+                    ? "Save participant"
+                    : "Update participant"}
                 </button>
               </div>
             </div>
@@ -2088,7 +3381,7 @@ export default function AdminDashboard() {
               <div className="flex items-center justify-between border-b border-[#E2E8F0] px-5 py-3">
                 <div>
                   <div className="text-sm font-semibold text-[#1F4D3A]">
-                    Add admin
+                    {editingAdminId === null ? "Add admin" : "Edit admin"}
                   </div>
                   <div className="text-[11px] text-slate-500">
                     Create an administrator account for the system.
@@ -2104,20 +3397,37 @@ export default function AdminDashboard() {
               </div>
               <div className="space-y-3 px-5 py-4 text-[11px]">
                 <div className="space-y-1">
-                  <div className="text-[10px] text-slate-500">Username</div>
+                  <div className="text-[10px] text-slate-500">
+                    New admin username
+                  </div>
                   <input
+                    value={adminUsername}
+                    onChange={(event) => setAdminUsername(event.target.value)}
                     className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
-                    placeholder="Username"
+                    placeholder="New admin username"
                   />
                 </div>
                 <div className="space-y-1">
-                  <div className="text-[10px] text-slate-500">Password</div>
+                  <div className="text-[10px] text-slate-500">
+                    New admin password
+                  </div>
                   <input
                     type="password"
+                    value={adminPassword}
+                    onChange={(event) => setAdminPassword(event.target.value)}
                     className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
-                    placeholder="Password"
+                    placeholder="New admin password"
                   />
                 </div>
+                {(adminError || adminSuccess) && (
+                  <div
+                    className={`text-[10px] ${
+                      adminError ? "text-red-500" : "text-emerald-600"
+                    }`}
+                  >
+                    {adminError ?? adminSuccess}
+                  </div>
+                )}
               </div>
               <div className="flex items-center justify-end gap-2 border-t border-[#E2E8F0] px-5 py-3">
                 <button
@@ -2129,9 +3439,73 @@ export default function AdminDashboard() {
                 </button>
                 <button
                   type="button"
+                  onClick={handleSaveAdmin}
+                  disabled={isSavingAdmin}
                   className="rounded-full bg-[#1F4D3A] px-4 py-1.5 text-[11px] font-medium text-white shadow-sm hover:bg-[#163528]"
                 >
-                  Save admin
+                  {isSavingAdmin
+                    ? "Saving..."
+                    : editingAdminId === null
+                    ? "Save admin"
+                    : "Update admin"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {isAdminGuardModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+            <div className="w-full max-w-xs rounded-2xl border border-[#1F4D3A1F] bg-white shadow-xl">
+              <div className="border-b border-[#E2E8F0] px-5 py-3">
+                <div className="text-sm font-semibold text-[#1F4D3A]">
+                  Admin password required
+                </div>
+                <div className="text-[11px] text-slate-500">
+                  Enter your admin password to manage admin accounts.
+                </div>
+              </div>
+              <div className="space-y-3 px-5 py-4 text-[11px]">
+                <div className="space-y-1">
+                  <div className="text-[10px] text-slate-500">Admin password</div>
+                  <input
+                    type="password"
+                    value={adminGuardPassword}
+                    onChange={(event) =>
+                      setAdminGuardPassword(event.target.value)
+                    }
+                    className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                    placeholder="Enter admin password"
+                  />
+                </div>
+                {adminGuardError && (
+                  <div className="text-[10px] text-red-500">
+                    {adminGuardError}
+                  </div>
+                )}
+              </div>
+              <div className="flex items-center justify-end gap-2 border-t border-[#E2E8F0] px-5 py-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsAdminGuardModalOpen(false);
+                    setAdminGuardPassword("");
+                    setAdminGuardError(null);
+                    setPendingAdminAction(null);
+                  }}
+                  className="rounded-full border border-[#E2E8F0] px-3 py-1.5 text-[11px] text-slate-600 hover:bg-[#F8FAFC]"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleVerifyAdminGuard}
+                  disabled={isVerifyingAdminGuard}
+                  className={`rounded-full bg-[#1F4D3A] px-4 py-1.5 text-[11px] font-medium text-white shadow-sm hover:bg-[#163528] ${
+                    isVerifyingAdminGuard ? "cursor-not-allowed opacity-70" : ""
+                  }`}
+                >
+                  {isVerifyingAdminGuard ? "Verifying..." : "Continue"}
                 </button>
               </div>
             </div>
@@ -2144,7 +3518,7 @@ export default function AdminDashboard() {
               <div className="flex items-center justify-between border-b border-[#E2E8F0] px-5 py-3">
                 <div>
                   <div className="text-sm font-semibold text-[#1F4D3A]">
-                    Add judge
+                    {editingJudgeId === null ? "Add judge" : "Edit judge"}
                   </div>
                   <div className="text-[11px] text-slate-500">
                     Assign a judge to an event.
@@ -2195,6 +3569,32 @@ export default function AdminDashboard() {
                     onChange={(event) => setJudgePassword(event.target.value)}
                   />
                 </div>
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between text-[10px] text-slate-500">
+                    <span>Assigned contests</span>
+                    <button
+                      type="button"
+                      onClick={() => setIsJudgeContestModalOpen(true)}
+                      className="rounded-full border border-[#D0D7E2] px-2 py-0.5 text-[10px] text-[#1F4D3A] hover:bg-[#F1F5F9]"
+                    >
+                      Manage
+                    </button>
+                  </div>
+                  <div className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs text-slate-600">
+                    {contests
+                      .filter((contest) =>
+                        selectedContestIdsForJudge.includes(contest.id),
+                      )
+                      .map((contest) => contest.name).length === 0
+                      ? "No contests selected"
+                      : contests
+                          .filter((contest) =>
+                            selectedContestIdsForJudge.includes(contest.id),
+                          )
+                          .map((contest) => contest.name)
+                          .join(", ")}
+                  </div>
+                </div>
                 {(judgeError || judgeSuccess) && (
                   <div
                     className={`text-[10px] ${
@@ -2208,7 +3608,10 @@ export default function AdminDashboard() {
               <div className="flex items-center justify-end gap-2 border-t border-[#E2E8F0] px-5 py-3">
                 <button
                   type="button"
-                  onClick={() => setIsJudgeModalOpen(false)}
+                  onClick={() => {
+                    setIsJudgeModalOpen(false);
+                    setEditingJudgeId(null);
+                  }}
                   className="rounded-full border border-[#E2E8F0] px-3 py-1.5 text-[11px] text-slate-600 hover:bg-[#F8FAFC]"
                 >
                   Cancel
@@ -2218,10 +3621,121 @@ export default function AdminDashboard() {
                   onClick={handleSaveJudge}
                   disabled={isSavingJudge || activeEventId === null}
                   className={`rounded-full bg-[#1F4D3A] px-4 py-1.5 text-[11px] font-medium text-white shadow-sm hover:bg-[#163528] ${
-                    isSavingJudge ? "cursor-not-allowed opacity-70" : ""
+                    isSavingJudge || activeEventId === null
+                      ? "cursor-not-allowed opacity-70"
+                      : ""
                   }`}
                 >
-                  {isSavingJudge ? "Saving..." : "Save judge"}
+                  {isSavingJudge
+                    ? "Saving..."
+                    : editingJudgeId === null
+                    ? "Save judge"
+                    : "Update judge"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {isJudgeContestModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+            <div className="w-full max-w-md rounded-2xl border border-[#1F4D3A1F] bg-white shadow-xl">
+              <div className="flex items-center justify-between border-b border-[#E2E8F0] px-5 py-3">
+                <div>
+                  <div className="text-sm font-semibold text-[#1F4D3A]">
+                    Assign contests
+                  </div>
+                  <div className="text-[11px] text-slate-500">
+                    Select one or more contests for this judge.
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsJudgeContestModalOpen(false)}
+                  className="rounded-full bg-[#F1F5F9] px-2 py-1 text-[11px] text-slate-500 hover:bg-[#E2E8F0]"
+                >
+                  Close
+                </button>
+              </div>
+              <div className="space-y-3 px-5 py-4 text-[11px]">
+                <div className="space-y-1">
+                  <div className="text-[10px] text-slate-500">
+                    Search contests
+                  </div>
+                  <input
+                    className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                    placeholder="Search by contest name"
+                    value={judgeContestSearch}
+                    onChange={(event) => setJudgeContestSearch(event.target.value)}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <div className="max-h-56 space-y-1 overflow-y-auto rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs">
+                    {contests
+                      .filter(
+                        (contest) => contest.event_id === activeEventId,
+                      )
+                      .filter((contest) =>
+                        contest.name
+                          .toLowerCase()
+                          .includes(judgeContestSearch.toLowerCase()),
+                      ).length === 0 ? (
+                      <div className="text-[10px] text-slate-400">
+                        No contests found.
+                      </div>
+                    ) : (
+                      contests
+                        .filter(
+                          (contest) => contest.event_id === activeEventId,
+                        )
+                        .filter((contest) =>
+                          contest.name
+                            .toLowerCase()
+                            .includes(judgeContestSearch.toLowerCase()),
+                        )
+                        .map((contest) => (
+                          <label
+                            key={contest.id}
+                            className="flex items-center justify-between gap-2 py-0.5"
+                          >
+                            <div className="flex items-center gap-2">
+                              <input
+                                type="checkbox"
+                                className="h-3.5 w-3.5 rounded border-[#D0D7E2] text-[#1F4D3A] focus:ring-[#1F4D3A]"
+                                checked={selectedContestIdsForJudge.includes(
+                                  contest.id,
+                                )}
+                                onChange={(event) => {
+                                  setSelectedContestIdsForJudge((previous) => {
+                                    if (event.target.checked) {
+                                      if (previous.includes(contest.id)) {
+                                        return previous;
+                                      }
+                                      return [...previous, contest.id];
+                                    }
+                                    return previous.filter(
+                                      (id) => id !== contest.id,
+                                    );
+                                  });
+                                }}
+                              />
+                              <span className="text-[11px] text-slate-700">
+                                {contest.name}
+                              </span>
+                            </div>
+                          </label>
+                        ))
+                    )}
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-center justify-end gap-2 border-t border-[#E2E8F0] px-5 py-3">
+                <button
+                  type="button"
+                  onClick={() => setIsJudgeContestModalOpen(false)}
+                  className="rounded-full border border-[#E2E8F0] px-3 py-1.5 text-[11px] text-slate-600 hover:bg-[#F8FAFC]"
+                >
+                  Done
                 </button>
               </div>
             </div>
@@ -2234,7 +3748,7 @@ export default function AdminDashboard() {
               <div className="flex items-center justify-between border-b border-[#E2E8F0] px-5 py-3">
                 <div>
                   <div className="text-sm font-semibold text-[#1F4D3A]">
-                    Add tabulator
+                    {editingTabulatorId === null ? "Add tabulator" : "Edit tabulator"}
                   </div>
                   <div className="text-[11px] text-slate-500">
                     Assign a tabulator to an event.
@@ -2242,7 +3756,10 @@ export default function AdminDashboard() {
                 </div>
                 <button
                   type="button"
-                  onClick={() => setIsTabulatorModalOpen(false)}
+                  onClick={() => {
+                    setIsTabulatorModalOpen(false);
+                    setEditingTabulatorId(null);
+                  }}
                   className="rounded-full bg-[#F1F5F9] px-2 py-1 text-[11px] text-slate-500 hover:bg-[#E2E8F0]"
                 >
                   Close
@@ -2262,6 +3779,10 @@ export default function AdminDashboard() {
                   <input
                     className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
                     placeholder="Full name"
+                    value={tabulatorFullName}
+                    onChange={(event) =>
+                      setTabulatorFullName(event.target.value)
+                    }
                   />
                 </div>
                 <div className="space-y-1">
@@ -2269,6 +3790,10 @@ export default function AdminDashboard() {
                   <input
                     className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
                     placeholder="Username"
+                    value={tabulatorUsername}
+                    onChange={(event) =>
+                      setTabulatorUsername(event.target.value)
+                    }
                   />
                 </div>
                 <div className="space-y-1">
@@ -2277,23 +3802,48 @@ export default function AdminDashboard() {
                     type="password"
                     className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
                     placeholder="Password"
+                    value={tabulatorPassword}
+                    onChange={(event) =>
+                      setTabulatorPassword(event.target.value)
+                    }
                   />
                 </div>
+                {(tabulatorError || tabulatorSuccess) && (
+                  <div
+                    className={`text-[10px] ${
+                      tabulatorError ? "text-red-500" : "text-emerald-600"
+                    }`}
+                  >
+                    {tabulatorError ?? tabulatorSuccess}
+                  </div>
+                )}
               </div>
               <div className="flex items-center justify-end gap-2 border-t border-[#E2E8F0] px-5 py-3">
                 <button
                   type="button"
-                  onClick={() => setIsTabulatorModalOpen(false)}
+                  onClick={() => {
+                    setIsTabulatorModalOpen(false);
+                    setEditingTabulatorId(null);
+                  }}
                   className="rounded-full border border-[#E2E8F0] px-3 py-1.5 text-[11px] text-slate-600 hover:bg-[#F8FAFC]"
                 >
                   Cancel
                 </button>
                 <button
                   type="button"
-                  disabled={activeEventId === null}
-                  className="rounded-full bg-[#1F4D3A] px-4 py-1.5 text-[11px] font-medium text-white shadow-sm hover:bg-[#163528]"
+                  onClick={handleSaveTabulator}
+                  disabled={isSavingTabulator || activeEventId === null}
+                  className={`rounded-full bg-[#1F4D3A] px-4 py-1.5 text-[11px] font-medium text-white shadow-sm hover:bg-[#163528] ${
+                    isSavingTabulator || activeEventId === null
+                      ? "cursor-not-allowed opacity-70"
+                      : ""
+                  }`}
                 >
-                  Save tabulator
+                  {isSavingTabulator
+                    ? "Saving..."
+                    : editingTabulatorId === null
+                    ? "Save tabulator"
+                    : "Update tabulator"}
                 </button>
               </div>
             </div>
@@ -2358,7 +3908,7 @@ export default function AdminDashboard() {
                     </div>
                     <button
                       type="button"
-                      onClick={() => setIsAdminModalOpen(true)}
+                      onClick={() => requireAdminGuard({ type: "create" })}
                       className="inline-flex items-center rounded-full bg-[#1F4D3A] px-3 py-1.5 text-[11px] font-medium text-white shadow-sm transition hover:bg-[#163528]"
                     >
                       Add admin
@@ -2371,7 +3921,11 @@ export default function AdminDashboard() {
                         Admin list
                       </div>
                       <span className="text-[10px] text-slate-400">
-                        No admins yet
+                        {admins.length === 0
+                          ? "No admins yet"
+                          : `${admins.length} admin${
+                              admins.length > 1 ? "s" : ""
+                            }`}
                       </span>
                     </div>
                     <div className="overflow-x-auto">
@@ -2384,15 +3938,62 @@ export default function AdminDashboard() {
                           </tr>
                         </thead>
                         <tbody>
-                          <tr className="border-b border-[#F1F5F9]">
-                            <td
-                              className="px-3 py-2 text-slate-400"
-                              colSpan={3}
-                            >
-                              Once you add admins, you can edit or delete them
-                              here.
-                            </td>
-                          </tr>
+                          {admins.length === 0 ? (
+                            <tr className="border-b border-[#F1F5F9]">
+                              <td
+                                className="px-3 py-2 text-slate-400"
+                                colSpan={3}
+                              >
+                                Once you add admins, you can edit or delete them
+                                here.
+                              </td>
+                            </tr>
+                          ) : (
+                            admins.map((admin) => (
+                              <tr
+                                key={admin.id}
+                                className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC]"
+                              >
+                                <td className="px-3 py-2 font-medium text-slate-700">
+                                  {admin.username}
+                                </td>
+                                <td className="px-3 py-2 text-slate-600">
+                                  Admin
+                                </td>
+                                <td className="px-3 py-2">
+                                  <div className="flex gap-1.5 text-[10px] text-slate-500">
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        requireAdminGuard({
+                                          type: "edit",
+                                          adminId: admin.id,
+                                        })
+                                      }
+                                      className="rounded-full border border-[#E2E8F0] px-2 py-0.5 hover:bg-[#F8FAFC]"
+                                    >
+                                      Edit
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        requireAdminGuard({
+                                          type: "delete",
+                                          adminId: admin.id,
+                                        })
+                                      }
+                                      disabled={isDeletingAdminId === admin.id}
+                                      className="rounded-full border border-[#FEE2E2] px-2 py-0.5 text-red-500 hover:bg-[#FEF2F2] disabled:opacity-60"
+                                    >
+                                      {isDeletingAdminId === admin.id
+                                        ? "Deleting..."
+                                        : "Delete"}
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            ))
+                          )}
                         </tbody>
                       </table>
                     </div>
@@ -2408,7 +4009,7 @@ export default function AdminDashboard() {
                     </div>
                     <button
                       type="button"
-                      onClick={() => setIsJudgeModalOpen(true)}
+                      onClick={openCreateJudgeModal}
                       className="inline-flex items-center rounded-full bg-[#1F4D3A] px-3 py-1.5 text-[11px] font-medium text-white shadow-sm transition hover:bg-[#163528]"
                     >
                       Add judge
@@ -2421,7 +4022,11 @@ export default function AdminDashboard() {
                         Judge list
                       </div>
                       <span className="text-[10px] text-slate-400">
-                        No judges yet
+                        {judges.length === 0
+                          ? "No judges yet"
+                          : `${judges.length} judge${
+                              judges.length > 1 ? "s" : ""
+                            }`}
                       </span>
                     </div>
                     <div className="overflow-x-auto">
@@ -2430,20 +4035,87 @@ export default function AdminDashboard() {
                           <tr className="border-b border-[#E2E8F0] bg-[#F5F7FF] text-[10px] uppercase tracking-wide text-slate-500">
                             <th className="px-3 py-2 font-medium">Full name</th>
                             <th className="px-3 py-2 font-medium">Username</th>
+                            <th className="px-3 py-2 font-medium">Contests</th>
                             <th className="px-3 py-2 font-medium">Event</th>
                             <th className="px-3 py-2 font-medium">Actions</th>
                           </tr>
                         </thead>
                         <tbody>
-                          <tr className="border-b border-[#F1F5F9]">
-                            <td
-                              className="px-3 py-2 text-slate-400"
-                              colSpan={4}
-                            >
-                              Once you add judges, you can edit or delete them
-                              here.
-                            </td>
-                          </tr>
+                          {judges.length === 0 ? (
+                            <tr className="border-b border-[#F1F5F9]">
+                              <td
+                                className="px-3 py-2 text-slate-400"
+                                colSpan={4}
+                              >
+                                Once you add judges, you can edit or delete them
+                                here.
+                              </td>
+                            </tr>
+                          ) : (
+                            judges.map((judge) => {
+                              const event = events.find(
+                                (e) => e.id === judge.event_id,
+                              );
+                              const assignedContestNames = judgeAssignments
+                                .filter(
+                                  (assignment) =>
+                                    assignment.judge_id === judge.id,
+                                )
+                                .map((assignment) => {
+                                  const contest = contests.find(
+                                    (contest) =>
+                                      contest.id === assignment.contest_id,
+                                  );
+                                  return contest ? contest.name : null;
+                                })
+                                .filter(
+                                  (name): name is string => name !== null,
+                                );
+
+                              return (
+                                <tr
+                                  key={judge.id}
+                                  className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC]"
+                                >
+                                  <td className="px-3 py-2 font-medium text-slate-700">
+                                    {judge.full_name}
+                                  </td>
+                                  <td className="px-3 py-2 text-slate-600">
+                                    {judge.username}
+                                  </td>
+                                  <td className="px-3 py-2 text-slate-600">
+                                    {assignedContestNames.length === 0
+                                      ? "No contests"
+                                      : assignedContestNames.join(", ")}
+                                  </td>
+                                  <td className="px-3 py-2 text-slate-600">
+                                    {event ? event.name : "Unknown event"}
+                                  </td>
+                                  <td className="px-3 py-2">
+                                    <div className="flex gap-1.5 text-[10px] text-slate-500">
+                                      <button
+                                        type="button"
+                                        onClick={() => openEditJudgeModal(judge)}
+                                        className="rounded-full border border-[#E2E8F0] px-2 py-0.5 hover:bg-[#F8FAFC]"
+                                      >
+                                        Edit
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleDeleteJudge(judge.id)}
+                                        disabled={isDeletingJudgeId === judge.id}
+                                        className="rounded-full border border-[#FEE2E2] px-2 py-0.5 text-red-500 hover:bg-[#FEF2F2] disabled:opacity-60"
+                                      >
+                                        {isDeletingJudgeId === judge.id
+                                          ? "Deleting..."
+                                          : "Delete"}
+                                      </button>
+                                    </div>
+                                  </td>
+                                </tr>
+                              );
+                            })
+                          )}
                         </tbody>
                       </table>
                     </div>
@@ -2459,7 +4131,7 @@ export default function AdminDashboard() {
                     </div>
                     <button
                       type="button"
-                      onClick={() => setIsTabulatorModalOpen(true)}
+                      onClick={openCreateTabulatorModal}
                       className="inline-flex items-center rounded-full bg-[#1F4D3A] px-3 py-1.5 text-[11px] font-medium text-white shadow-sm transition hover:bg-[#163528]"
                     >
                       Add tabulator
@@ -2472,9 +4144,22 @@ export default function AdminDashboard() {
                         Tabulator list
                       </div>
                       <span className="text-[10px] text-slate-400">
-                        No tabulators yet
+                        {tabulators.length === 0
+                          ? "No tabulators yet"
+                          : `${tabulators.length} tabulator${
+                              tabulators.length > 1 ? "s" : ""
+                            }`}
                       </span>
                     </div>
+                    {(tabulatorError || tabulatorSuccess) && (
+                      <div
+                        className={`mb-2 text-[10px] ${
+                          tabulatorError ? "text-red-500" : "text-emerald-600"
+                        }`}
+                      >
+                        {tabulatorError ?? tabulatorSuccess}
+                      </div>
+                    )}
                     <div className="overflow-x-auto">
                       <table className="min-w-full border-collapse text-left text-[11px]">
                         <thead>
@@ -2486,15 +4171,60 @@ export default function AdminDashboard() {
                           </tr>
                         </thead>
                         <tbody>
-                          <tr className="border-b border-[#F1F5F9]">
-                            <td
-                              className="px-3 py-2 text-slate-400"
-                              colSpan={4}
-                            >
-                              Once you add tabulators, you can edit or delete
-                              them here.
-                            </td>
-                          </tr>
+                          {tabulators.length === 0 ? (
+                            <tr className="border-b border-[#F1F5F9]">
+                              <td
+                                className="px-3 py-2 text-slate-400"
+                                colSpan={4}
+                              >
+                                Once you add tabulators, they will appear here.
+                              </td>
+                            </tr>
+                          ) : (
+                            tabulators.map((tabulator) => {
+                              const event = events.find(
+                                (e) => e.id === tabulator.event_id,
+                              );
+
+                              return (
+                                <tr
+                                  key={tabulator.id}
+                                  className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC]"
+                                >
+                                  <td className="px-3 py-2 font-medium text-slate-700">
+                                    {tabulator.full_name}
+                                  </td>
+                                  <td className="px-3 py-2 text-slate-600">
+                                    {tabulator.username}
+                                  </td>
+                                  <td className="px-3 py-2 text-slate-600">
+                                    {event ? event.name : "Unknown event"}
+                                  </td>
+                                  <td className="px-3 py-2">
+                                    <div className="flex gap-1.5 text-[10px] text-slate-500">
+                                      <button
+                                        type="button"
+                                        onClick={() => openEditTabulatorModal(tabulator)}
+                                        className="rounded-full border border-[#E2E8F0] px-2 py-0.5 hover:bg-[#F8FAFC]"
+                                      >
+                                        Edit
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleDeleteTabulator(tabulator.id)}
+                                        disabled={isDeletingTabulatorId === tabulator.id}
+                                        className="rounded-full border border-[#FEE2E2] px-2 py-0.5 text-red-500 hover:bg-[#FEF2F2] disabled:opacity-60"
+                                      >
+                                        {isDeletingTabulatorId === tabulator.id
+                                          ? "Deleting..."
+                                          : "Delete"}
+                                      </button>
+                                    </div>
+                                  </td>
+                                </tr>
+                              );
+                            })
+                          )}
                         </tbody>
                       </table>
                     </div>
