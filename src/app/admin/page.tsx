@@ -2,7 +2,14 @@
 
 import Link from "next/link";
 import { createClient } from "@supabase/supabase-js";
-import { useEffect, useState } from "react";
+import {
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 const navItems = [
   { key: "home", label: "Home" },
@@ -28,8 +35,13 @@ const monthOptions = [
 ];
 
 type AdminTab = "home" | "tabulation" | "event" | "participants" | "users";
-type EventSubTab = "addEvent" | "addContest" | "addCriteria";
-type ParticipantSubTab = "category" | "participant";
+type EventSubTab =
+  | "addEvent"
+  | "addContest"
+  | "addCriteria"
+  | "awards"
+  | "template";
+type ParticipantSubTab = "category" | "participant" | "judge";
 type UserSubTab = "admin" | "judge" | "tabulator";
 
 type EventRow = {
@@ -41,12 +53,15 @@ type EventRow = {
   created_at: string;
 };
 
+type ContestScoringType = "percentage" | "points";
+
 type ContestRow = {
   id: number;
   event_id: number;
   name: string;
   created_at: string;
   contest_code: string | null;
+  scoring_type: ContestScoringType | null;
 };
 
 type CriteriaRow = {
@@ -57,6 +72,7 @@ type CriteriaRow = {
   created_at: string;
   description: string | null;
   criteria_code: string | null;
+  category: string | null;
 };
 
 type CategoryRow = {
@@ -66,13 +82,494 @@ type CategoryRow = {
   created_at: string;
 };
 
+type AwardType = "criteria" | "special";
+
+type AwardRow = {
+  id: number;
+  event_id: number;
+  contest_id: number | null;
+  name: string;
+  description: string | null;
+  award_type: AwardType;
+  criteria_id: number | null;
+  is_active: boolean;
+  created_at: string;
+};
+
+type AwardRecipientRow = {
+  id: number;
+  award_id: number;
+  participant_id: number;
+  created_at: string;
+};
+
+type TeamRow = {
+  id: number;
+  event_id: number;
+  name: string;
+  created_at: string;
+};
+
+type ContestLayoutTemplateKey = "standard" | "pageant";
+
+type PageantSettingsSection =
+  | "groupsAndBadges"
+  | "cardsAndNames"
+  | "participantName"
+  | "criteriaHeaderAndRows"
+  | "scoringTable"
+  | "scoringModal";
+
+type PageantSectionProps = {
+  title: string;
+  sectionKey: PageantSettingsSection;
+  isOpen: boolean;
+  onToggle: (section: PageantSettingsSection) => void;
+  children: ReactNode;
+};
+
+function PageantSection({
+  title,
+  sectionKey,
+  isOpen,
+  onToggle,
+  children,
+}: PageantSectionProps) {
+  return (
+    <div className="overflow-hidden rounded-2xl border border-[#E2E8F0] bg-white">
+      <button
+        type="button"
+        onClick={() => onToggle(sectionKey)}
+        className="flex w-full items-center justify-between px-3 py-2 text-[10px] font-semibold uppercase tracking-wide text-slate-600"
+      >
+        <span>{title}</span>
+        <span className="text-[10px] text-slate-400">
+          {isOpen ? "Hide section" : "Show section"}
+        </span>
+      </button>
+      {isOpen && (
+        <div className="border-t border-[#E2E8F0] bg-[#F8FAFC] p-3">{children}</div>
+      )}
+    </div>
+  );
+}
+
+type ContestLayoutTheme = {
+  workspaceBg?: string;
+  workspaceBgOpacity?: number;
+  femaleGroupBg?: string;
+  femaleGroupBgOpacity?: number;
+  femaleBadgeBg?: string;
+  femaleBadgeBgOpacity?: number;
+  maleGroupBg?: string;
+  maleGroupBgOpacity?: number;
+  maleBadgeBg?: string;
+  maleBadgeBgOpacity?: number;
+  criteriaHeaderBg?: string;
+  criteriaHeaderTextColor?: string;
+  criteriaHeaderFontSize?: number;
+  criteriaHeaderFontFamily?: string;
+  criteriaHeaderBgOpacity?: number;
+  criteriaHeaderTextColorOpacity?: number;
+  cardBg?: string;
+  cardBgOpacity?: number;
+  numberTextColor?: string;
+  numberTextColorOpacity?: number;
+  numberFontSize?: number;
+  numberFontFamily?: string;
+  nameTextColor?: string;
+  nameTextColorOpacity?: number;
+  nameFontSize?: number;
+  nameFontFamily?: string;
+  numberBadgeBg?: string;
+  numberBadgeBgOpacity?: number;
+  criteriaTextColor?: string;
+  criteriaTextFontSize?: number;
+  criteriaTextFontFamily?: string;
+  criteriaTextColorOpacity?: number;
+  scoringTableBg?: string;
+  scoringTableBgOpacity?: number;
+  scoringCategoryRowBg?: string;
+  scoringCategoryRowBgOpacity?: number;
+  scoringTotalRowBg?: string;
+  scoringTotalRowBgOpacity?: number;
+  scoringTotalRowLabelTextColor?: string;
+  scoringTotalRowLabelTextColorOpacity?: number;
+  scoringTotalRowScoreTextColor?: string;
+  scoringTotalRowScoreTextColorOpacity?: number;
+  scoreInputBg?: string;
+  scoreInputBgOpacity?: number;
+  scoreInputBorderColor?: string;
+  scoreInputBorderColorOpacity?: number;
+  scoreInputTextColor?: string;
+  scoreInputTextColorOpacity?: number;
+  modalBodyBg?: string;
+  modalBodyBgOpacity?: number;
+  modalFooterBg?: string;
+  modalFooterBgOpacity?: number;
+  modalHeaderBg?: string;
+  modalHeaderBgOpacity?: number;
+  modalHeaderPrimaryTextColor?: string;
+  modalHeaderPrimaryTextColorOpacity?: number;
+  modalHeaderSecondaryTextColor?: string;
+  modalHeaderSecondaryTextColorOpacity?: number;
+  modalContestantBadgeBg?: string;
+  modalContestantBadgeBgOpacity?: number;
+  modalContestantBadgeTextColor?: string;
+  modalContestantBadgeTextColorOpacity?: number;
+  modalPrimaryButtonBg?: string;
+  modalPrimaryButtonBgOpacity?: number;
+  modalPrimaryButtonTextColor?: string;
+  modalPrimaryButtonTextColorOpacity?: number;
+  modalSecondaryButtonBg?: string;
+  modalSecondaryButtonBgOpacity?: number;
+  modalSecondaryButtonTextColor?: string;
+  modalSecondaryButtonTextColorOpacity?: number;
+};
+
+function hexWithOpacity(hex: string, opacity?: number) {
+  const value = hex.replace("#", "");
+  if (value.length !== 6) {
+    return hex;
+  }
+  const r = Number.parseInt(value.slice(0, 2), 16);
+  const g = Number.parseInt(value.slice(2, 4), 16);
+  const b = Number.parseInt(value.slice(4, 6), 16);
+  const alpha =
+    typeof opacity === "number"
+      ? Math.min(1, Math.max(0, opacity))
+      : 1;
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+type ContestLayout = {
+  version: number;
+  templateKey: ContestLayoutTemplateKey;
+  templateId?: number | null;
+  theme?: ContestLayoutTheme;
+};
+
+const pageantDefaultLayout: ContestLayout = {
+  version: 1,
+  templateKey: "pageant",
+  theme: {
+    femaleGroupBg: "#f9fafb",
+    femaleGroupBgOpacity: 100,
+    femaleBadgeBg: "#f97316",
+    femaleBadgeBgOpacity: 100,
+    maleGroupBg: "#f9fafb",
+    maleGroupBgOpacity: 100,
+    maleBadgeBg: "#2563eb",
+    maleBadgeBgOpacity: 100,
+    cardBg: "#ffffff",
+    cardBgOpacity: 100,
+    numberTextColor: "#0f172a",
+    numberTextColorOpacity: 100,
+    nameTextColor: "#0f172a",
+    nameTextColorOpacity: 100,
+    criteriaHeaderBg: "#f9fafb",
+    criteriaHeaderBgOpacity: 100,
+    criteriaHeaderTextColor: "#0f172a",
+    criteriaHeaderTextColorOpacity: 100,
+    criteriaHeaderFontSize: 11,
+    criteriaHeaderFontFamily: "sans",
+    criteriaTextColor: "#111827",
+    criteriaTextColorOpacity: 100,
+    criteriaTextFontSize: 13,
+    criteriaTextFontFamily: "sans",
+    scoringTableBg: "#ffffff",
+    scoringTableBgOpacity: 100,
+    scoringCategoryRowBg: "#f9fafb",
+    scoringCategoryRowBgOpacity: 100,
+    scoringTotalRowBg: "#f9fafb",
+    scoringTotalRowBgOpacity: 100,
+    scoringTotalRowLabelTextColor: "#0f172a",
+    scoringTotalRowLabelTextColorOpacity: 100,
+    scoringTotalRowScoreTextColor: "#16a34a",
+    scoringTotalRowScoreTextColorOpacity: 100,
+    scoreInputBg: "#ffffff",
+    scoreInputBgOpacity: 100,
+    scoreInputBorderColor: "#e2e8f0",
+    scoreInputBorderColorOpacity: 100,
+    scoreInputTextColor: "#0f172a",
+    scoreInputTextColorOpacity: 100,
+    modalBodyBg: "#ffffff",
+    modalBodyBgOpacity: 100,
+    modalFooterBg: "#f9fafb",
+    modalFooterBgOpacity: 100,
+    modalHeaderBg: "#0f172a",
+    modalHeaderBgOpacity: 100,
+    modalHeaderPrimaryTextColor: "#f9fafb",
+    modalHeaderPrimaryTextColorOpacity: 100,
+    modalHeaderSecondaryTextColor: "#94a3b8",
+    modalHeaderSecondaryTextColorOpacity: 100,
+    modalContestantBadgeBg: "#e2f3ea",
+    modalContestantBadgeBgOpacity: 100,
+    modalContestantBadgeTextColor: "#14532d",
+    modalContestantBadgeTextColorOpacity: 100,
+    modalPrimaryButtonBg: "#16a34a",
+    modalPrimaryButtonBgOpacity: 100,
+    modalPrimaryButtonTextColor: "#ffffff",
+    modalPrimaryButtonTextColorOpacity: 100,
+    modalSecondaryButtonBg: "#ffffff",
+    modalSecondaryButtonBgOpacity: 100,
+    modalSecondaryButtonTextColor: "#0f172a",
+    modalSecondaryButtonTextColorOpacity: 100,
+  },
+};
+
+const pageantPlatinumMistLayout: ContestLayout = {
+  version: 1,
+  templateKey: "pageant",
+  theme: {
+    workspaceBg: "#2B2E33",
+    workspaceBgOpacity: 100,
+    femaleGroupBg: "#C1C4C8",
+    femaleGroupBgOpacity: 100,
+    femaleBadgeBg: "#7B7F85",
+    femaleBadgeBgOpacity: 100,
+    maleGroupBg: "#C1C4C8",
+    maleGroupBgOpacity: 100,
+    maleBadgeBg: "#2B2E33",
+    maleBadgeBgOpacity: 100,
+    cardBg: "#F5F6F7",
+    cardBgOpacity: 100,
+    numberTextColor: "#FFFFFF",
+    numberTextColorOpacity: 100,
+    numberBadgeBg: "#2B2E33",
+    numberBadgeBgOpacity: 90,
+    numberFontSize: 11,
+    numberFontFamily: "sans",
+    nameTextColor: "#2B2E33",
+    nameTextColorOpacity: 100,
+    nameFontSize: 11,
+    nameFontFamily: "sans",
+    criteriaHeaderBg: "#F5F6F7",
+    criteriaHeaderBgOpacity: 100,
+    criteriaHeaderTextColor: "#2B2E33",
+    criteriaHeaderTextColorOpacity: 100,
+    criteriaHeaderFontSize: 11,
+    criteriaHeaderFontFamily: "sans",
+    criteriaTextColor: "#2B2E33",
+    criteriaTextColorOpacity: 100,
+    criteriaTextFontSize: 13,
+    criteriaTextFontFamily: "sans",
+    scoringTableBg: "#FFFFFF",
+    scoringTableBgOpacity: 100,
+    scoringCategoryRowBg: "#F5F6F7",
+    scoringCategoryRowBgOpacity: 100,
+    scoringTotalRowBg: "#C1C4C8",
+    scoringTotalRowBgOpacity: 100,
+    scoringTotalRowLabelTextColor: "#2B2E33",
+    scoringTotalRowLabelTextColorOpacity: 100,
+    scoringTotalRowScoreTextColor: "#7B7F85",
+    scoringTotalRowScoreTextColorOpacity: 100,
+    scoreInputBg: "#FFFFFF",
+    scoreInputBgOpacity: 100,
+    scoreInputBorderColor: "#C1C4C8",
+    scoreInputBorderColorOpacity: 100,
+    scoreInputTextColor: "#2B2E33",
+    scoreInputTextColorOpacity: 100,
+    modalBodyBg: "#FFFFFF",
+    modalBodyBgOpacity: 100,
+    modalFooterBg: "#F5F6F7",
+    modalFooterBgOpacity: 100,
+    modalHeaderBg: "#2B2E33",
+    modalHeaderBgOpacity: 100,
+    modalHeaderPrimaryTextColor: "#F5F6F7",
+    modalHeaderPrimaryTextColorOpacity: 100,
+    modalHeaderSecondaryTextColor: "#C1C4C8",
+    modalHeaderSecondaryTextColorOpacity: 100,
+    modalContestantBadgeBg: "#7B7F85",
+    modalContestantBadgeBgOpacity: 100,
+    modalContestantBadgeTextColor: "#F5F6F7",
+    modalContestantBadgeTextColorOpacity: 100,
+    modalPrimaryButtonBg: "#2B2E33",
+    modalPrimaryButtonBgOpacity: 100,
+    modalPrimaryButtonTextColor: "#F5F6F7",
+    modalPrimaryButtonTextColorOpacity: 100,
+    modalSecondaryButtonBg: "#FFFFFF",
+    modalSecondaryButtonBgOpacity: 100,
+    modalSecondaryButtonTextColor: "#2B2E33",
+    modalSecondaryButtonTextColorOpacity: 100,
+  },
+};
+
+const pageantRoyalLayout: ContestLayout = {
+  version: 1,
+  templateKey: "pageant",
+  theme: {
+    workspaceBg: "#020617",
+    workspaceBgOpacity: 100,
+    femaleGroupBg: "#020617",
+    femaleGroupBgOpacity: 100,
+    femaleBadgeBg: "#EAB308",
+    femaleBadgeBgOpacity: 100,
+    maleGroupBg: "#020617",
+    maleGroupBgOpacity: 100,
+    maleBadgeBg: "#1D4ED8",
+    maleBadgeBgOpacity: 100,
+    cardBg: "#0B1120",
+    cardBgOpacity: 100,
+    numberTextColor: "#FACC15",
+    numberTextColorOpacity: 100,
+    numberBadgeBg: "#020617",
+    numberBadgeBgOpacity: 100,
+    numberFontSize: 11,
+    numberFontFamily: "sans",
+    nameTextColor: "#F9FAFB",
+    nameTextColorOpacity: 100,
+    nameFontSize: 11,
+    nameFontFamily: "sans",
+    criteriaHeaderBg: "#020617",
+    criteriaHeaderBgOpacity: 100,
+    criteriaHeaderTextColor: "#FACC15",
+    criteriaHeaderTextColorOpacity: 100,
+    criteriaHeaderFontSize: 11,
+    criteriaHeaderFontFamily: "sans",
+    criteriaTextColor: "#E5E7EB",
+    criteriaTextColorOpacity: 100,
+    criteriaTextFontSize: 13,
+    criteriaTextFontFamily: "sans",
+    scoringTableBg: "#020617",
+    scoringTableBgOpacity: 100,
+    scoringCategoryRowBg: "#020617",
+    scoringCategoryRowBgOpacity: 100,
+    scoringTotalRowBg: "#111827",
+    scoringTotalRowBgOpacity: 100,
+    scoringTotalRowLabelTextColor: "#E5E7EB",
+    scoringTotalRowLabelTextColorOpacity: 100,
+    scoringTotalRowScoreTextColor: "#FACC15",
+    scoringTotalRowScoreTextColorOpacity: 100,
+    scoreInputBg: "#020617",
+    scoreInputBgOpacity: 100,
+    scoreInputBorderColor: "#334155",
+    scoreInputBorderColorOpacity: 100,
+    scoreInputTextColor: "#F9FAFB",
+    scoreInputTextColorOpacity: 100,
+    modalBodyBg: "#020617",
+    modalBodyBgOpacity: 100,
+    modalFooterBg: "#020617",
+    modalFooterBgOpacity: 100,
+    modalHeaderBg: "#020617",
+    modalHeaderBgOpacity: 100,
+    modalHeaderPrimaryTextColor: "#FACC15",
+    modalHeaderPrimaryTextColorOpacity: 100,
+    modalHeaderSecondaryTextColor: "#9CA3AF",
+    modalHeaderSecondaryTextColorOpacity: 100,
+    modalContestantBadgeBg: "#111827",
+    modalContestantBadgeBgOpacity: 100,
+    modalContestantBadgeTextColor: "#FACC15",
+    modalContestantBadgeTextColorOpacity: 100,
+    modalPrimaryButtonBg: "#FACC15",
+    modalPrimaryButtonBgOpacity: 100,
+    modalPrimaryButtonTextColor: "#111827",
+    modalPrimaryButtonTextColorOpacity: 100,
+    modalSecondaryButtonBg: "#020617",
+    modalSecondaryButtonBgOpacity: 100,
+    modalSecondaryButtonTextColor: "#FACC15",
+    modalSecondaryButtonTextColorOpacity: 100,
+  },
+};
+
+const pageantImperialTopazLayout: ContestLayout = {
+  version: 1,
+  templateKey: "pageant",
+  theme: {
+    workspaceBg: "#FFD77A",
+    workspaceBgOpacity: 100,
+    femaleGroupBg: "#FFD77A",
+    femaleGroupBgOpacity: 100,
+    femaleBadgeBg: "#E6A520",
+    femaleBadgeBgOpacity: 100,
+    maleGroupBg: "#FFD77A",
+    maleGroupBgOpacity: 100,
+    maleBadgeBg: "#7A4A00",
+    maleBadgeBgOpacity: 100,
+    cardBg: "#FFF8E7",
+    cardBgOpacity: 100,
+    numberTextColor: "#FFF8E7",
+    numberTextColorOpacity: 100,
+    numberBadgeBg: "#E6A520",
+    numberBadgeBgOpacity: 100,
+    numberFontSize: 11,
+    numberFontFamily: "sans",
+    nameTextColor: "#7A4A00",
+    nameTextColorOpacity: 100,
+    nameFontSize: 11,
+    nameFontFamily: "sans",
+    criteriaHeaderBg: "#FFF8E7",
+    criteriaHeaderBgOpacity: 100,
+    criteriaHeaderTextColor: "#7A4A00",
+    criteriaHeaderTextColorOpacity: 100,
+    criteriaHeaderFontSize: 11,
+    criteriaHeaderFontFamily: "sans",
+    criteriaTextColor: "#7A4A00",
+    criteriaTextColorOpacity: 100,
+    criteriaTextFontSize: 13,
+    criteriaTextFontFamily: "sans",
+    scoringTableBg: "#FFFFFF",
+    scoringTableBgOpacity: 100,
+    scoringCategoryRowBg: "#FFF8E7",
+    scoringCategoryRowBgOpacity: 100,
+    scoringTotalRowBg: "#FFD77A",
+    scoringTotalRowBgOpacity: 100,
+    scoringTotalRowLabelTextColor: "#7A4A00",
+    scoringTotalRowLabelTextColorOpacity: 100,
+    scoringTotalRowScoreTextColor: "#E6A520",
+    scoringTotalRowScoreTextColorOpacity: 100,
+    scoreInputBg: "#FFFFFF",
+    scoreInputBgOpacity: 100,
+    scoreInputBorderColor: "#FFD77A",
+    scoreInputBorderColorOpacity: 100,
+    scoreInputTextColor: "#7A4A00",
+    scoreInputTextColorOpacity: 100,
+    modalBodyBg: "#FFFFFF",
+    modalBodyBgOpacity: 100,
+    modalFooterBg: "#FFF8E7",
+    modalFooterBgOpacity: 100,
+    modalHeaderBg: "#7A4A00",
+    modalHeaderBgOpacity: 100,
+    modalHeaderPrimaryTextColor: "#FFF8E7",
+    modalHeaderPrimaryTextColorOpacity: 100,
+    modalHeaderSecondaryTextColor: "#FFD77A",
+    modalHeaderSecondaryTextColorOpacity: 100,
+    modalContestantBadgeBg: "#E6A520",
+    modalContestantBadgeBgOpacity: 100,
+    modalContestantBadgeTextColor: "#7A4A00",
+    modalContestantBadgeTextColorOpacity: 100,
+    modalPrimaryButtonBg: "#E6A520",
+    modalPrimaryButtonBgOpacity: 100,
+    modalPrimaryButtonTextColor: "#7A4A00",
+    modalPrimaryButtonTextColorOpacity: 100,
+    modalSecondaryButtonBg: "#FFFFFF",
+    modalSecondaryButtonBgOpacity: 100,
+    modalSecondaryButtonTextColor: "#7A4A00",
+    modalSecondaryButtonTextColorOpacity: 100,
+  },
+};
+
+type ContestLayoutRow = {
+  contest_id: number;
+  layout_json: ContestLayout;
+};
+
+type LayoutTemplateRow = {
+  id: number;
+  name: string;
+  layout_json: ContestLayout;
+  created_at: string;
+};
+
 type ParticipantRow = {
   id: number;
   contest_id: number;
-  group_id: number;
+  division_id: number;
+  team_id: number | null;
   full_name: string;
   contestant_number: string;
   created_at: string;
+  avatar_url: string | null;
 };
 
 type AdminRow = {
@@ -86,6 +583,144 @@ type JudgeRow = {
   event_id: number;
   full_name: string;
   username: string;
+  created_at: string;
+};
+
+type JudgeContestSubmissionRow = {
+  judge_id: number;
+  contest_id: number;
+  submitted_at: string;
+};
+
+type JudgeScoringPermissionRow = {
+  judge_id: number;
+  contest_id: number;
+  criteria_id: number | null;
+  can_edit: boolean;
+  created_at: string;
+};
+
+type JudgeDivisionPermissionRow = {
+  id: number;
+  judge_id: number;
+  contest_id: number;
+  division_id: number;
+  created_at: string;
+};
+
+type JudgeParticipantPermissionRow = {
+  id: number;
+  judge_id: number;
+  contest_id: number;
+  participant_id: number;
+  created_at: string;
+};
+
+type MultiSelectOption = {
+  id: number;
+  label: string;
+};
+
+type MultiSelectDropdownProps = {
+  placeholder: string;
+  options: MultiSelectOption[];
+  selectedIds: number[];
+  disabled?: boolean;
+  onChange: (ids: number[]) => void;
+};
+
+function MultiSelectDropdown({
+  placeholder,
+  options,
+  selectedIds,
+  disabled,
+  onChange,
+}: MultiSelectDropdownProps) {
+  const [isOpen, setIsOpen] = useState(false);
+
+  const selectedLabels = options
+    .filter((option) => selectedIds.includes(option.id))
+    .map((option) => option.label);
+
+  const displayText =
+    selectedLabels.length === 0
+      ? placeholder
+      : selectedLabels.length === 1
+      ? selectedLabels[0]
+      : `${selectedLabels[0]} + ${selectedLabels.length - 1} more`;
+
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => {
+          if (disabled) {
+            return;
+          }
+          setIsOpen((open) => !open);
+        }}
+        className={`flex w-full items-center justify-between rounded-xl border px-3 py-2 text-left text-xs outline-none transition ${
+          disabled
+            ? "cursor-not-allowed border-[#E2E8F0] bg-slate-50 text-slate-400"
+            : "border-[#D0D7E2] bg-white text-slate-700 focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+        }`}
+      >
+        <span
+          className={
+            selectedLabels.length === 0 ? "text-slate-400" : "text-slate-700"
+          }
+        >
+          {displayText}
+        </span>
+        <span className="ml-2 text-[10px] text-slate-400">▾</span>
+      </button>
+      {isOpen && !disabled && (
+        <div className="absolute z-20 mt-1 max-h-56 w-full overflow-auto rounded-xl border border-[#E2E8F0] bg-white py-1 text-xs shadow-lg">
+          {options.length === 0 ? (
+            <div className="px-3 py-2 text-[11px] text-slate-400">
+              No options available
+            </div>
+          ) : (
+            options.map((option) => {
+              const checked = selectedIds.includes(option.id);
+              return (
+                <label
+                  key={option.id}
+                  className="flex cursor-pointer items-center gap-2 px-3 py-1.5 hover:bg-[#F8FAFC]"
+                >
+                  <input
+                    type="checkbox"
+                    className="h-3 w-3 rounded border-[#D0D7E2] text-[#1F4D3A] focus:ring-[#1F4D3A]"
+                    checked={checked}
+                    onChange={(event) => {
+                      const isChecked = event.target.checked;
+                      onChange(
+                        isChecked
+                          ? [...selectedIds, option.id]
+                          : selectedIds.filter((id) => id !== option.id),
+                      );
+                    }}
+                  />
+                  <span className="text-[11px] text-slate-700">
+                    {option.label}
+                  </span>
+                </label>
+              );
+            })
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+type JudgeParticipantTotalRow = {
+  id: number;
+  judge_id: number;
+  participant_id: number;
+  contest_id: number;
+  total_score: number;
   created_at: string;
 };
 
@@ -125,6 +760,7 @@ export default function AdminDashboard() {
   const [contests, setContests] = useState<ContestRow[]>([]);
   const [criteriaList, setCriteriaList] = useState<CriteriaRow[]>([]);
   const [categories, setCategories] = useState<CategoryRow[]>([]);
+  const [teams, setTeams] = useState<TeamRow[]>([]);
   const [participants, setParticipants] = useState<ParticipantRow[]>([]);
   const [admins, setAdmins] = useState<AdminRow[]>([]);
   const [judges, setJudges] = useState<JudgeRow[]>([]);
@@ -176,6 +812,9 @@ export default function AdminDashboard() {
   const [judgeAssignments, setJudgeAssignments] = useState<JudgeAssignmentRow[]>(
     [],
   );
+  const [judgeScoringPermissions, setJudgeScoringPermissions] = useState<
+    JudgeScoringPermissionRow[]
+  >([]);
   const [isDeletingJudgeId, setIsDeletingJudgeId] = useState<number | null>(
     null,
   );
@@ -189,16 +828,122 @@ export default function AdminDashboard() {
     number | null
   >(null);
   const [contestName, setContestName] = useState("");
+  const [contestCategoryText, setContestCategoryText] = useState("");
+  const [contestDivisionNames, setContestDivisionNames] = useState<string[]>(
+    [],
+  );
+  const [contestScoringType, setContestScoringType] =
+    useState<ContestScoringType>("percentage");
   const [isSavingContest, setIsSavingContest] = useState(false);
   const [contestError, setContestError] = useState<string | null>(null);
   const [contestSuccess, setContestSuccess] = useState<string | null>(null);
-  const [selectedContestIdForCriteria, setSelectedContestIdForCriteria] = useState<number | null>(null);
+  const [selectedContestIdForCriteria, setSelectedContestIdForCriteria] =
+    useState<number | null>(null);
   const [criteriaName, setCriteriaName] = useState("");
   const [criteriaWeight, setCriteriaWeight] = useState("");
   const [criteriaDescription, setCriteriaDescription] = useState("");
+  const [criteriaCategory, setCriteriaCategory] = useState("");
   const [isSavingCriteria, setIsSavingCriteria] = useState(false);
   const [criteriaError, setCriteriaError] = useState<string | null>(null);
   const [criteriaSuccess, setCriteriaSuccess] = useState<string | null>(null);
+  const [criteriaItems, setCriteriaItems] = useState<
+    { name: string; weight: string }[]
+  >([{ name: "", weight: "" }]);
+  const [awards, setAwards] = useState<AwardRow[]>([]);
+  const [awardRecipients, setAwardRecipients] = useState<AwardRecipientRow[]>(
+    [],
+  );
+  const [isAwardModalOpen, setIsAwardModalOpen] = useState(false);
+  const [editingAwardId, setEditingAwardId] = useState<number | null>(null);
+  const [awardName, setAwardName] = useState("");
+  const [awardType, setAwardType] = useState<AwardType>("criteria");
+  const [awardContestId, setAwardContestId] = useState<number | null>(null);
+  const [awardCriteriaId, setAwardCriteriaId] = useState<number | null>(null);
+  const [awardDescription, setAwardDescription] = useState("");
+  const [awardIsActive, setAwardIsActive] = useState(true);
+  const [awardError, setAwardError] = useState<string | null>(null);
+  const [awardSuccess, setAwardSuccess] = useState<string | null>(null);
+  const [isSavingAward, setIsSavingAward] = useState(false);
+  const [isDeletingAwardId, setIsDeletingAwardId] = useState<number | null>(
+    null,
+  );
+  const [awardsTabulationError, setAwardsTabulationError] = useState<
+    string | null
+  >(null);
+  const [awardsTabulationSuccess, setAwardsTabulationSuccess] = useState<
+    string | null
+  >(null);
+  const [isConfirmingAwardId, setIsConfirmingAwardId] = useState<number | null>(
+    null,
+  );
+  const [selectedContestIdForTemplate, setSelectedContestIdForTemplate] =
+    useState<number | null>(null);
+  const [selectedTemplateKey, setSelectedTemplateKey] =
+    useState<ContestLayoutTemplateKey>("standard");
+  const [templateTheme, setTemplateTheme] = useState<ContestLayoutTheme>({});
+  const pendingTemplateThemeRef = useRef<Partial<ContestLayoutTheme> | null>(
+    null,
+  );
+  const templateThemeTimeoutRef = useRef<number | null>(null);
+  const [openPageantSections, setOpenPageantSections] = useState<
+    Record<PageantSettingsSection, boolean>
+  >({
+    groupsAndBadges: false,
+    cardsAndNames: false,
+    participantName: false,
+    criteriaHeaderAndRows: false,
+    scoringTable: false,
+    scoringModal: false,
+  });
+  const updateTemplateTheme = useCallback(
+    (partial: Partial<ContestLayoutTheme>) => {
+      pendingTemplateThemeRef.current = {
+        ...(pendingTemplateThemeRef.current ?? {}),
+        ...partial,
+      };
+
+      if (templateThemeTimeoutRef.current === null) {
+        templateThemeTimeoutRef.current = window.setTimeout(() => {
+          const updates = pendingTemplateThemeRef.current;
+          if (updates) {
+            setTemplateTheme((previous) => ({
+              ...previous,
+              ...updates,
+            }));
+          }
+          pendingTemplateThemeRef.current = null;
+          templateThemeTimeoutRef.current = null;
+        }, 50);
+      }
+    },
+    [],
+  );
+  const handleTogglePageantSection = useCallback(
+    (section: PageantSettingsSection) => {
+      setOpenPageantSections((previous) => ({
+        ...previous,
+        [section]: !previous[section],
+      }));
+    },
+    [],
+  );
+  const [templateModalParticipant, setTemplateModalParticipant] =
+    useState<ParticipantRow | null>(null);
+  const [isSavingTemplate, setIsSavingTemplate] = useState(false);
+  const [templateError, setTemplateError] = useState<string | null>(null);
+  const [templateSuccess, setTemplateSuccess] = useState<string | null>(null);
+  const [layoutTemplates, setLayoutTemplates] = useState<LayoutTemplateRow[]>(
+    [],
+  );
+  const [templateName, setTemplateName] = useState("");
+  const [isDeletingTemplateId, setIsDeletingTemplateId] = useState<number | null>(
+    null,
+  );
+  const [isSavingTemplateToLibrary, setIsSavingTemplateToLibrary] =
+    useState(false);
+  const [selectedTemplateId, setSelectedTemplateId] = useState<number | null>(
+    null,
+  );
   const [categoryName, setCategoryName] = useState("");
   const [isSavingCategory, setIsSavingCategory] = useState(false);
   const [categoryError, setCategoryError] = useState<string | null>(null);
@@ -210,8 +955,14 @@ export default function AdminDashboard() {
     useState<number | null>(null);
   const [selectedCategoryIdForParticipant, setSelectedCategoryIdForParticipant] =
     useState<number | null>(null);
+  const [selectedTeamIdForParticipant, setSelectedTeamIdForParticipant] =
+    useState<number | null>(null);
   const [participantFullName, setParticipantFullName] = useState("");
   const [participantNumber, setParticipantNumber] = useState("");
+  const [participantAvatarUrl, setParticipantAvatarUrl] = useState("");
+  const [participantAvatarZoom, setParticipantAvatarZoom] = useState(1.1);
+  const [isUploadingParticipantAvatar, setIsUploadingParticipantAvatar] =
+    useState(false);
   const [isSavingParticipant, setIsSavingParticipant] = useState(false);
   const [participantError, setParticipantError] = useState<string | null>(null);
   const [participantSuccess, setParticipantSuccess] = useState<string | null>(
@@ -220,6 +971,39 @@ export default function AdminDashboard() {
   const [isDeletingParticipantId, setIsDeletingParticipantId] = useState<
     number | null
   >(null);
+  const [judgeDivisionPermissions, setJudgeDivisionPermissions] = useState<
+    JudgeDivisionPermissionRow[]
+  >([]);
+  const [judgeParticipantPermissions, setJudgeParticipantPermissions] =
+    useState<JudgeParticipantPermissionRow[]>([]);
+  const [selectedJudgeIdsForPermissions, setSelectedJudgeIdsForPermissions] =
+    useState<number[]>([]);
+  const [selectedContestIdForPermissions, setSelectedContestIdForPermissions] =
+    useState<number | null>(null);
+  const [judgePermissionsMode, setJudgePermissionsMode] = useState<
+    "all" | "none" | "custom"
+  >("all");
+  const [judgePermissionsCriteriaIds, setJudgePermissionsCriteriaIds] =
+    useState<number[]>([]);
+  const [judgePermissionsError, setJudgePermissionsError] = useState<
+    string | null
+  >(null);
+  const [judgePermissionsSuccess, setJudgePermissionsSuccess] = useState<
+    string | null
+  >(null);
+  const [isSavingJudgePermissions, setIsSavingJudgePermissions] =
+    useState(false);
+  const [judgeDivisionMode, setJudgeDivisionMode] =
+    useState<"all" | "custom">("all");
+  const [judgeDivisionIds, setJudgeDivisionIds] = useState<number[]>([]);
+  const [judgeParticipantMode, setJudgeParticipantMode] =
+    useState<"all" | "custom">("all");
+  const [judgeParticipantIds, setJudgeParticipantIds] = useState<number[]>([]);
+
+  const activeJudgeIdForPermissions =
+    selectedJudgeIdsForPermissions.length === 1
+      ? selectedJudgeIdsForPermissions[0]
+      : null;
   const [adminUsername, setAdminUsername] = useState("");
   const [adminPassword, setAdminPassword] = useState("");
   const [isSavingAdmin, setIsSavingAdmin] = useState(false);
@@ -239,6 +1023,25 @@ export default function AdminDashboard() {
   const [eventFilterMonth, setEventFilterMonth] = useState("all");
   const [isJudgeContestModalOpen, setIsJudgeContestModalOpen] = useState(false);
   const [judgeContestSearch, setJudgeContestSearch] = useState("");
+  const [judgeContestSubmissions, setJudgeContestSubmissions] = useState<
+    JudgeContestSubmissionRow[]
+  >([]);
+  const [tabulationEventFilterId, setTabulationEventFilterId] = useState<
+    number | "all"
+  >("all");
+  const [tabulationContestFilterId, setTabulationContestFilterId] = useState<
+    number | "all"
+  >("all");
+  const [tabulationDivisionFilterId, setTabulationDivisionFilterId] = useState<
+    number | "all"
+  >("all");
+  const [adminTabulationView, setAdminTabulationView] = useState<
+    "overall" | "awards"
+  >("overall");
+  const [tabulationAwardFilterId, setTabulationAwardFilterId] = useState<
+    number | "all"
+  >("all");
+  const [judgeTotals, setJudgeTotals] = useState<JudgeParticipantTotalRow[]>([]);
 
   useEffect(() => {
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -268,7 +1071,7 @@ export default function AdminDashboard() {
 
     supabase
       .from("contest")
-      .select("id, event_id, name, created_at, contest_code")
+      .select("id, event_id, name, created_at, contest_code, scoring_type")
       .order("created_at", { ascending: false })
       .then(({ data }) => {
         if (data) {
@@ -279,9 +1082,9 @@ export default function AdminDashboard() {
     supabase
       .from("criteria")
       .select(
-        "id, contest_id, name, percentage, created_at, description, criteria_code",
+        "id, contest_id, name, percentage, created_at, description, criteria_code, category",
       )
-      .order("created_at", { ascending: false })
+      .order("created_at", { ascending: true })
       .then(({ data }) => {
         if (data) {
           setCriteriaList(data as CriteriaRow[]);
@@ -289,7 +1092,29 @@ export default function AdminDashboard() {
       });
 
     supabase
-      .from("group_category")
+      .from("award")
+      .select(
+        "id, event_id, contest_id, name, description, award_type, criteria_id, is_active, created_at",
+      )
+      .order("created_at", { ascending: false })
+      .then(({ data }) => {
+        if (data) {
+          setAwards(data as AwardRow[]);
+        }
+      });
+
+    supabase
+      .from("award_recipient")
+      .select("id, award_id, participant_id, created_at")
+      .order("created_at", { ascending: false })
+      .then(({ data }) => {
+        if (data) {
+          setAwardRecipients(data as AwardRecipientRow[]);
+        }
+      });
+
+    supabase
+      .from("division")
       .select("id, event_id, name, created_at")
       .order("created_at", { ascending: false })
       .then(({ data }) => {
@@ -299,9 +1124,19 @@ export default function AdminDashboard() {
       });
 
     supabase
+      .from("team")
+      .select("id, event_id, name, created_at")
+      .order("created_at", { ascending: false })
+      .then(({ data }) => {
+        if (data) {
+          setTeams(data as TeamRow[]);
+        }
+      });
+
+    supabase
       .from("participant")
       .select(
-        "id, contest_id, group_id, full_name, contestant_number, created_at",
+        "id, contest_id, division_id, team_id, full_name, contestant_number, created_at, avatar_url",
       )
       .order("created_at", { ascending: false })
       .then(({ data }) => {
@@ -349,8 +1184,197 @@ export default function AdminDashboard() {
         }
       });
 
+    supabase
+      .from("judge_scoring_permission")
+      .select("judge_id, contest_id, criteria_id, can_edit, created_at")
+      .then(({ data }) => {
+        if (data) {
+          setJudgeScoringPermissions(data as JudgeScoringPermissionRow[]);
+        }
+      });
+
+    supabase
+      .from("judge_contest_submission")
+      .select("judge_id, contest_id, submitted_at")
+      .then(({ data }) => {
+        if (data) {
+          setJudgeContestSubmissions(data as JudgeContestSubmissionRow[]);
+        }
+      });
+
+    supabase
+      .from("judge_participant_total")
+      .select(
+        "id, judge_id, participant_id, contest_id, total_score, created_at",
+      )
+      .then(({ data }) => {
+        if (data) {
+          setJudgeTotals(data as JudgeParticipantTotalRow[]);
+        }
+      });
+
+    supabase
+      .from("judge_division_permission")
+      .select("id, judge_id, contest_id, division_id, created_at")
+      .then(({ data }) => {
+        if (data) {
+          setJudgeDivisionPermissions(data as JudgeDivisionPermissionRow[]);
+        }
+      });
+
+    supabase
+      .from("judge_participant_permission")
+      .select("id, judge_id, contest_id, participant_id, created_at")
+      .then(({ data }) => {
+        if (data) {
+          setJudgeParticipantPermissions(
+            data as JudgeParticipantPermissionRow[],
+          );
+        }
+      });
+
+    supabase
+      .from("layout_template")
+      .select("id, name, layout_json, created_at")
+      .order("created_at", { ascending: false })
+      .then(async ({ data, error }) => {
+        if (error) {
+          return;
+        }
+
+        if (data && data.length > 0) {
+          const typed = data as LayoutTemplateRow[];
+
+          const defaultTemplate = typed.find(
+            (template) => template.name === "Pageant \u2013 Default",
+          );
+
+          if (defaultTemplate) {
+            await supabase
+              .from("layout_template")
+              .update({ layout_json: pageantDefaultLayout })
+              .eq("id", defaultTemplate.id);
+
+            defaultTemplate.layout_json = pageantDefaultLayout;
+          }
+
+          const platinumTemplate = typed.find((template) => {
+            const nameLower = template.name.toLowerCase();
+            return nameLower.includes("platinum") && nameLower.includes("mist");
+          });
+
+          if (platinumTemplate) {
+            await supabase
+              .from("layout_template")
+              .update({ layout_json: pageantPlatinumMistLayout })
+              .eq("id", platinumTemplate.id);
+
+            platinumTemplate.layout_json = pageantPlatinumMistLayout;
+          } else {
+            const { data: insertedPlatinum, error: insertPlatinumError } =
+              await supabase
+                .from("layout_template")
+                .insert({
+                  name: "Platinum Mist",
+                  layout_json: pageantPlatinumMistLayout,
+                })
+                .select("id, name, layout_json, created_at")
+                .single();
+
+            if (!insertPlatinumError && insertedPlatinum) {
+              typed.unshift(insertedPlatinum as LayoutTemplateRow);
+            }
+          }
+
+          const imperialTemplate = typed.find((template) => {
+            const nameLower = template.name.toLowerCase();
+            return nameLower.includes("imperial") && nameLower.includes("topaz");
+          });
+
+          if (imperialTemplate) {
+            await supabase
+              .from("layout_template")
+              .update({ layout_json: pageantImperialTopazLayout })
+              .eq("id", imperialTemplate.id);
+
+            imperialTemplate.layout_json = pageantImperialTopazLayout;
+          } else {
+            const { data: insertedImperial, error: insertImperialError } =
+              await supabase
+                .from("layout_template")
+                .insert({
+                  name: "Imperial Topaz",
+                  layout_json: pageantImperialTopazLayout,
+                })
+                .select("id, name, layout_json, created_at")
+                .single();
+
+            if (!insertImperialError && insertedImperial) {
+              typed.unshift(insertedImperial as LayoutTemplateRow);
+            }
+          }
+
+          const royalTemplate = typed.find((template) => {
+            const nameLower = template.name.toLowerCase();
+            return nameLower.includes("royal");
+          });
+
+          if (royalTemplate) {
+            await supabase
+              .from("layout_template")
+              .update({ layout_json: pageantRoyalLayout })
+              .eq("id", royalTemplate.id);
+
+            royalTemplate.layout_json = pageantRoyalLayout;
+          } else {
+            const { data: insertedRoyal, error: insertRoyalError } =
+              await supabase
+                .from("layout_template")
+                .insert({
+                  name: "Royal",
+                  layout_json: pageantRoyalLayout,
+                })
+                .select("id, name, layout_json, created_at")
+                .single();
+
+            if (!insertRoyalError && insertedRoyal) {
+              typed.unshift(insertedRoyal as LayoutTemplateRow);
+            }
+          }
+
+          setLayoutTemplates(typed);
+          return;
+        }
+
+        const { data: inserted, error: insertError } = await supabase
+          .from("layout_template")
+          .insert([
+            {
+              name: "Pageant \u2013 Default",
+              layout_json: pageantDefaultLayout,
+            },
+            {
+              name: "Platinum Mist",
+              layout_json: pageantPlatinumMistLayout,
+            },
+            {
+              name: "Imperial Topaz",
+              layout_json: pageantImperialTopazLayout,
+            },
+            {
+              name: "Royal",
+              layout_json: pageantRoyalLayout,
+            },
+          ])
+          .select("id, name, layout_json, created_at");
+
+        if (!insertError && inserted) {
+          setLayoutTemplates(inserted as LayoutTemplateRow[]);
+        }
+      });
+
     const channel = supabase
-      .channel("event-changes")
+      .channel("admin-changes")
       .on(
         "postgres_changes",
         {
@@ -359,31 +1383,510 @@ export default function AdminDashboard() {
           table: "event",
         },
         (payload) => {
-          if (payload.eventType === "INSERT") {
+          if (payload.eventType === "INSERT" || payload.eventType === "UPDATE") {
             const newRow = payload.new as EventRow;
-            setEvents((prev) => [newRow, ...prev]);
+            setEvents((previous) => {
+              const exists = previous.some((event) => event.id === newRow.id);
+
+              if (payload.eventType === "INSERT" && !exists) {
+                return [newRow, ...previous];
+              }
+
+              return previous.map((event) =>
+                event.id === newRow.id ? newRow : event,
+              );
+            });
+
             if (newRow.is_active) {
               setActiveEventId(newRow.id);
-            }
-          } else if (payload.eventType === "UPDATE") {
-            const newRow = payload.new as EventRow;
-            setEvents((prev) =>
-              prev.map((event) => (event.id === newRow.id ? newRow : event)),
-            );
-            if (newRow.is_active) {
-              setActiveEventId(newRow.id);
-            } else {
+            } else if (payload.eventType === "UPDATE") {
               setActiveEventId((current) =>
                 current === newRow.id ? null : current,
               );
             }
           } else if (payload.eventType === "DELETE") {
             const oldRow = payload.old as { id: number };
-            setEvents((prev) =>
-              prev.filter((event) => event.id !== oldRow.id),
+            setEvents((previous) =>
+              previous.filter((event) => event.id !== oldRow.id),
             );
             setActiveEventId((current) =>
               current === oldRow.id ? null : current,
+            );
+          }
+        },
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "contest",
+        },
+        (payload) => {
+          if (payload.eventType === "INSERT" || payload.eventType === "UPDATE") {
+            const newRow = payload.new as ContestRow;
+            setContests((previous) => {
+              const exists = previous.some((contest) => contest.id === newRow.id);
+
+              if (payload.eventType === "INSERT" && !exists) {
+                return [newRow, ...previous];
+              }
+
+              return previous.map((contest) =>
+                contest.id === newRow.id ? newRow : contest,
+              );
+            });
+          } else if (payload.eventType === "DELETE") {
+            const oldRow = payload.old as { id: number };
+            setContests((previous) =>
+              previous.filter((contest) => contest.id !== oldRow.id),
+            );
+          }
+        },
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "criteria",
+        },
+        (payload) => {
+          if (payload.eventType === "INSERT" || payload.eventType === "UPDATE") {
+            const newRow = payload.new as CriteriaRow;
+            setCriteriaList((previous) => {
+              const exists = previous.some(
+                (criteria) => criteria.id === newRow.id,
+              );
+
+              if (payload.eventType === "INSERT" && !exists) {
+                return [newRow, ...previous];
+              }
+
+              return previous.map((criteria) =>
+                criteria.id === newRow.id ? newRow : criteria,
+              );
+            });
+          } else if (payload.eventType === "DELETE") {
+            const oldRow = payload.old as { id: number };
+            setCriteriaList((previous) =>
+              previous.filter((criteria) => criteria.id !== oldRow.id),
+            );
+          }
+        },
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "award",
+        },
+        (payload) => {
+          if (payload.eventType === "INSERT" || payload.eventType === "UPDATE") {
+            const newRow = payload.new as AwardRow;
+            setAwards((previous) => {
+              const exists = previous.some((award) => award.id === newRow.id);
+
+              if (payload.eventType === "INSERT" && !exists) {
+                return [newRow, ...previous];
+              }
+
+              return previous.map((award) =>
+                award.id === newRow.id ? newRow : award,
+              );
+            });
+          } else if (payload.eventType === "DELETE") {
+            const oldRow = payload.old as { id: number };
+            setAwards((previous) =>
+              previous.filter((award) => award.id !== oldRow.id),
+            );
+          }
+        },
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "division",
+        },
+        (payload) => {
+          if (payload.eventType === "INSERT" || payload.eventType === "UPDATE") {
+            const newRow = payload.new as CategoryRow;
+            setCategories((previous) => {
+              const exists = previous.some(
+                (category) => category.id === newRow.id,
+              );
+
+              if (payload.eventType === "INSERT" && !exists) {
+                return [newRow, ...previous];
+              }
+
+              return previous.map((category) =>
+                category.id === newRow.id ? newRow : category,
+              );
+            });
+          } else if (payload.eventType === "DELETE") {
+            const oldRow = payload.old as { id: number };
+            setCategories((previous) =>
+              previous.filter((category) => category.id !== oldRow.id),
+            );
+          }
+        },
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "team",
+        },
+        (payload) => {
+          if (payload.eventType === "INSERT" || payload.eventType === "UPDATE") {
+            const newRow = payload.new as TeamRow;
+            setTeams((previous) => {
+              const exists = previous.some((team) => team.id === newRow.id);
+
+              if (payload.eventType === "INSERT" && !exists) {
+                return [newRow, ...previous];
+              }
+
+              return previous.map((team) =>
+                team.id === newRow.id ? newRow : team,
+              );
+            });
+          } else if (payload.eventType === "DELETE") {
+            const oldRow = payload.old as { id: number };
+            setTeams((previous) =>
+              previous.filter((team) => team.id !== oldRow.id),
+            );
+          }
+        },
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "participant",
+        },
+        (payload) => {
+          if (payload.eventType === "INSERT" || payload.eventType === "UPDATE") {
+            const newRow = payload.new as ParticipantRow;
+            setParticipants((previous) => {
+              const exists = previous.some(
+                (participant) => participant.id === newRow.id,
+              );
+
+              if (payload.eventType === "INSERT" && !exists) {
+                return [newRow, ...previous];
+              }
+
+              return previous.map((participant) =>
+                participant.id === newRow.id ? newRow : participant,
+              );
+            });
+          } else if (payload.eventType === "DELETE") {
+            const oldRow = payload.old as { id: number };
+            setParticipants((previous) =>
+              previous.filter((participant) => participant.id !== oldRow.id),
+            );
+          }
+        },
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "user_admin",
+        },
+        (payload) => {
+          if (payload.eventType === "INSERT" || payload.eventType === "UPDATE") {
+            const newRow = payload.new as AdminRow;
+            setAdmins((previous) => {
+              const exists = previous.some((admin) => admin.id === newRow.id);
+
+              if (payload.eventType === "INSERT" && !exists) {
+                return [newRow, ...previous];
+              }
+
+              return previous.map((admin) =>
+                admin.id === newRow.id ? newRow : admin,
+              );
+            });
+          } else if (payload.eventType === "DELETE") {
+            const oldRow = payload.old as { id: number };
+            setAdmins((previous) =>
+              previous.filter((admin) => admin.id !== oldRow.id),
+            );
+          }
+        },
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "user_judge",
+        },
+        (payload) => {
+          if (payload.eventType === "INSERT" || payload.eventType === "UPDATE") {
+            const newRow = payload.new as JudgeRow;
+            setJudges((previous) => {
+              const exists = previous.some((judge) => judge.id === newRow.id);
+
+              if (payload.eventType === "INSERT" && !exists) {
+                return [newRow, ...previous];
+              }
+
+              return previous.map((judge) =>
+                judge.id === newRow.id ? newRow : judge,
+              );
+            });
+          } else if (payload.eventType === "DELETE") {
+            const oldRow = payload.old as { id: number };
+            setJudges((previous) =>
+              previous.filter((judge) => judge.id !== oldRow.id),
+            );
+          }
+        },
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "user_tabulator",
+        },
+        (payload) => {
+          if (payload.eventType === "INSERT" || payload.eventType === "UPDATE") {
+            const newRow = payload.new as TabulatorRow;
+            setTabulators((previous) => {
+              const exists = previous.some(
+                (tabulator) => tabulator.id === newRow.id,
+              );
+
+              if (payload.eventType === "INSERT" && !exists) {
+                return [newRow, ...previous];
+              }
+
+              return previous.map((tabulator) =>
+                tabulator.id === newRow.id ? newRow : tabulator,
+              );
+            });
+          } else if (payload.eventType === "DELETE") {
+            const oldRow = payload.old as { id: number };
+            setTabulators((previous) =>
+              previous.filter((tabulator) => tabulator.id !== oldRow.id),
+            );
+          }
+        },
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "judge_assignment",
+        },
+        (payload) => {
+          if (payload.eventType === "INSERT" || payload.eventType === "UPDATE") {
+            const newRow = payload.new as JudgeAssignmentRow;
+            setJudgeAssignments((previous) => {
+              const exists = previous.some(
+                (assignment) =>
+                  assignment.judge_id === newRow.judge_id &&
+                  assignment.contest_id === newRow.contest_id,
+              );
+
+              if (payload.eventType === "INSERT" && !exists) {
+                return [...previous, newRow];
+              }
+
+              return previous.map((assignment) =>
+                assignment.judge_id === newRow.judge_id &&
+                assignment.contest_id === newRow.contest_id
+                  ? newRow
+                  : assignment,
+              );
+            });
+          } else if (payload.eventType === "DELETE") {
+            const oldRow = payload.old as JudgeAssignmentRow;
+            setJudgeAssignments((previous) =>
+              previous.filter(
+                (assignment) =>
+                  !(
+                    assignment.judge_id === oldRow.judge_id &&
+                    assignment.contest_id === oldRow.contest_id
+                  ),
+              ),
+            );
+          }
+        },
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "judge_scoring_permission",
+        },
+        (payload) => {
+          if (payload.eventType === "INSERT" || payload.eventType === "UPDATE") {
+            const newRow = payload.new as JudgeScoringPermissionRow;
+            setJudgeScoringPermissions((previous) => {
+              const exists = previous.some(
+                (permission) =>
+                  permission.judge_id === newRow.judge_id &&
+                  permission.contest_id === newRow.contest_id &&
+                  permission.criteria_id === newRow.criteria_id,
+              );
+
+              if (payload.eventType === "INSERT" && !exists) {
+                return [...previous, newRow];
+              }
+
+              return previous.map((permission) =>
+                permission.judge_id === newRow.judge_id &&
+                permission.contest_id === newRow.contest_id &&
+                permission.criteria_id === newRow.criteria_id
+                  ? newRow
+                  : permission,
+              );
+            });
+          } else if (payload.eventType === "DELETE") {
+            const oldRow = payload.old as JudgeScoringPermissionRow;
+            setJudgeScoringPermissions((previous) =>
+              previous.filter(
+                (permission) =>
+                  !(
+                    permission.judge_id === oldRow.judge_id &&
+                    permission.contest_id === oldRow.contest_id &&
+                    permission.criteria_id === oldRow.criteria_id
+                  ),
+              ),
+            );
+          }
+        },
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "judge_participant_total",
+        },
+        (payload) => {
+          if (payload.eventType === "INSERT" || payload.eventType === "UPDATE") {
+            const newRow = payload.new as JudgeParticipantTotalRow;
+            setJudgeTotals((previous) => {
+              const exists = previous.some((row) => row.id === newRow.id);
+
+              if (payload.eventType === "INSERT" && !exists) {
+                return [newRow, ...previous];
+              }
+
+              return previous.map((row) => (row.id === newRow.id ? newRow : row));
+            });
+          } else if (payload.eventType === "DELETE") {
+            const oldRow = payload.old as { id: number } | null;
+            if (!oldRow) {
+              return;
+            }
+            setJudgeTotals((previous) =>
+              previous.filter((row) => row.id !== oldRow.id),
+            );
+          }
+        },
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "judge_division_permission",
+        },
+        (payload) => {
+          if (payload.eventType === "INSERT" || payload.eventType === "UPDATE") {
+            const newRow = payload.new as JudgeDivisionPermissionRow;
+            setJudgeDivisionPermissions((previous) => {
+              const exists = previous.some((row) => row.id === newRow.id);
+
+              if (payload.eventType === "INSERT" && !exists) {
+                return [newRow, ...previous];
+              }
+
+              return previous.map((row) => (row.id === newRow.id ? newRow : row));
+            });
+          } else if (payload.eventType === "DELETE") {
+            const oldRow = payload.old as { id: number } | null;
+            if (!oldRow) {
+              return;
+            }
+            setJudgeDivisionPermissions((previous) =>
+              previous.filter((row) => row.id !== oldRow.id),
+            );
+          }
+        },
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "judge_participant_permission",
+        },
+        (payload) => {
+          if (payload.eventType === "INSERT" || payload.eventType === "UPDATE") {
+            const newRow = payload.new as JudgeParticipantPermissionRow;
+            setJudgeParticipantPermissions((previous) => {
+              const exists = previous.some((row) => row.id === newRow.id);
+
+              if (payload.eventType === "INSERT" && !exists) {
+                return [newRow, ...previous];
+              }
+
+              return previous.map((row) => (row.id === newRow.id ? newRow : row));
+            });
+          } else if (payload.eventType === "DELETE") {
+            const oldRow = payload.old as { id: number } | null;
+            if (!oldRow) {
+              return;
+            }
+            setJudgeParticipantPermissions((previous) =>
+              previous.filter((row) => row.id !== oldRow.id),
+            );
+          }
+        },
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "award_recipient",
+        },
+        (payload) => {
+          if (payload.eventType === "INSERT" || payload.eventType === "UPDATE") {
+            const newRow = payload.new as AwardRecipientRow;
+            setAwardRecipients((previous) => {
+              const exists = previous.some((row) => row.id === newRow.id);
+
+              if (payload.eventType === "INSERT" && !exists) {
+                return [newRow, ...previous];
+              }
+
+              return previous.map((row) => (row.id === newRow.id ? newRow : row));
+            });
+          } else if (payload.eventType === "DELETE") {
+            const oldRow = payload.old as { id: number } | null;
+            if (!oldRow) {
+              return;
+            }
+            setAwardRecipients((previous) =>
+              previous.filter((row) => row.id !== oldRow.id),
             );
           }
         },
@@ -394,6 +1897,108 @@ export default function AdminDashboard() {
       supabase.removeChannel(channel);
     };
   }, []);
+
+  useEffect(() => {
+    if (
+      activeJudgeIdForPermissions === null ||
+      selectedContestIdForPermissions === null
+    ) {
+      setJudgeDivisionMode("all");
+      setJudgeDivisionIds([]);
+      setJudgeParticipantMode("all");
+      setJudgeParticipantIds([]);
+      return;
+    }
+
+    const divisionPermissionsForSelection = judgeDivisionPermissions.filter(
+      (permission) =>
+        permission.judge_id === activeJudgeIdForPermissions &&
+        permission.contest_id === selectedContestIdForPermissions,
+    );
+
+    if (divisionPermissionsForSelection.length === 0) {
+      setJudgeDivisionMode("all");
+      setJudgeDivisionIds([]);
+    } else {
+      setJudgeDivisionMode("custom");
+      setJudgeDivisionIds(
+        divisionPermissionsForSelection.map((permission) => permission.division_id),
+      );
+    }
+
+    const participantPermissionsForSelection =
+      judgeParticipantPermissions.filter(
+        (permission) =>
+          permission.judge_id === activeJudgeIdForPermissions &&
+          permission.contest_id === selectedContestIdForPermissions,
+      );
+
+    if (participantPermissionsForSelection.length === 0) {
+      setJudgeParticipantMode("all");
+      setJudgeParticipantIds([]);
+    } else {
+      setJudgeParticipantMode("custom");
+      setJudgeParticipantIds(
+        participantPermissionsForSelection.map(
+          (permission) => permission.participant_id,
+        ),
+      );
+    }
+  }, [
+    activeJudgeIdForPermissions,
+    selectedJudgeIdsForPermissions,
+    selectedContestIdForPermissions,
+    judgeDivisionPermissions,
+    judgeParticipantPermissions,
+  ]);
+
+  useEffect(() => {
+    if (
+      activeJudgeIdForPermissions === null ||
+      selectedContestIdForPermissions === null
+    ) {
+      setJudgePermissionsMode("all");
+      setJudgePermissionsCriteriaIds([]);
+      return;
+    }
+
+    const permissionsForSelection = judgeScoringPermissions.filter(
+      (permission) =>
+        permission.judge_id === activeJudgeIdForPermissions &&
+        permission.contest_id === selectedContestIdForPermissions,
+    );
+
+    if (permissionsForSelection.length === 0) {
+      setJudgePermissionsMode("all");
+      setJudgePermissionsCriteriaIds([]);
+      return;
+    }
+
+    const globalPermission = permissionsForSelection.find(
+      (permission) => permission.criteria_id === null,
+    );
+
+    if (globalPermission) {
+      setJudgePermissionsMode(globalPermission.can_edit ? "all" : "none");
+      setJudgePermissionsCriteriaIds([]);
+      return;
+    }
+
+    setJudgePermissionsMode("custom");
+    setJudgePermissionsCriteriaIds(
+      permissionsForSelection
+        .filter(
+          (permission) =>
+            permission.criteria_id !== null && permission.can_edit,
+        )
+        .map((permission) => permission.criteria_id as number),
+    );
+  }, [
+    activeJudgeIdForPermissions,
+    selectedJudgeIdsForPermissions,
+    selectedContestIdForPermissions,
+    judgeScoringPermissions,
+  ]);
 
   const openCreateEventModal = () => {
     setEditingEventId(null);
@@ -406,8 +2011,16 @@ export default function AdminDashboard() {
   };
 
   const openCreateContestModal = () => {
+    const initialDivisions = categoriesForActiveEvent
+      .map((division) => division.name)
+      .slice()
+      .sort((a, b) => a.localeCompare(b));
+
     setEditingContestId(null);
     setContestName("");
+    setContestCategoryText("");
+    setContestDivisionNames(initialDivisions);
+    setContestScoringType("percentage");
     setContestError(null);
     setContestSuccess(null);
     setIsContestModalOpen(true);
@@ -419,6 +2032,8 @@ export default function AdminDashboard() {
     setCriteriaName("");
     setCriteriaWeight("");
     setCriteriaDescription("");
+    setCriteriaCategory("");
+    setCriteriaItems([{ name: "", weight: "" }]);
     setCriteriaError(null);
     setCriteriaSuccess(null);
     setIsCriteriaModalOpen(true);
@@ -432,9 +2047,9 @@ export default function AdminDashboard() {
     setIsCategoryModalOpen(true);
   };
 
-  const openEditCategoryModal = (category: CategoryRow) => {
-    setEditingCategoryId(category.id);
-    setCategoryName(category.name);
+  const openEditCategoryModal = (team: TeamRow) => {
+    setEditingCategoryId(team.id);
+    setCategoryName(team.name);
     setCategoryError(null);
     setCategorySuccess(null);
     setIsCategoryModalOpen(true);
@@ -444,8 +2059,11 @@ export default function AdminDashboard() {
     setEditingParticipantId(null);
     setSelectedContestIdForParticipant(null);
     setSelectedCategoryIdForParticipant(null);
+    setSelectedTeamIdForParticipant(null);
     setParticipantFullName("");
     setParticipantNumber("");
+    setParticipantAvatarUrl("");
+    setParticipantAvatarZoom(1.1);
     setParticipantError(null);
     setParticipantSuccess(null);
     setIsParticipantModalOpen(true);
@@ -454,9 +2072,11 @@ export default function AdminDashboard() {
   const openEditParticipantModal = (participant: ParticipantRow) => {
     setEditingParticipantId(participant.id);
     setSelectedContestIdForParticipant(participant.contest_id);
-    setSelectedCategoryIdForParticipant(participant.group_id);
+    setSelectedCategoryIdForParticipant(participant.division_id);
+    setSelectedTeamIdForParticipant(participant.team_id);
     setParticipantFullName(participant.full_name);
     setParticipantNumber(participant.contestant_number);
+    setParticipantAvatarUrl(participant.avatar_url ?? "");
     setParticipantError(null);
     setParticipantSuccess(null);
     setIsParticipantModalOpen(true);
@@ -607,14 +2227,43 @@ export default function AdminDashboard() {
     setCriteriaName(criteria.name);
     setCriteriaWeight(String(criteria.percentage));
     setCriteriaDescription(criteria.description ?? "");
+    setCriteriaCategory(criteria.category ?? "");
+    setCriteriaItems([
+      { name: criteria.name, weight: String(criteria.percentage) },
+    ]);
+    setCriteriaCategory(criteria.category ?? "");
     setCriteriaError(null);
     setCriteriaSuccess(null);
     setIsCriteriaModalOpen(true);
   };
 
+  const handleAddCriteriaItem = () => {
+    setCriteriaItems((previous) => [...previous, { name: "", weight: "" }]);
+  };
+
+  const handleChangeCriteriaItem = (
+    index: number,
+    field: "name" | "weight",
+    value: string,
+  ) => {
+    setCriteriaItems((previous) =>
+      previous.map((item, itemIndex) =>
+        itemIndex === index ? { ...item, [field]: value } : item,
+      ),
+    );
+  };
+
   const openEditContestModal = (contest: ContestRow) => {
+    const initialDivisions = categoriesForActiveEvent
+      .map((division) => division.name)
+      .slice()
+      .sort((a, b) => a.localeCompare(b));
+
     setEditingContestId(contest.id);
     setContestName(contest.name);
+    setContestCategoryText("");
+    setContestDivisionNames(initialDivisions);
+    setContestScoringType(contest.scoring_type ?? "percentage");
     setContestError(null);
     setContestSuccess(null);
     setIsContestModalOpen(true);
@@ -829,6 +2478,574 @@ export default function AdminDashboard() {
       ? null
       : events.find((event) => event.id === activeEventId) ?? null;
 
+  const contestsForActiveEvent = useMemo(
+    () =>
+      activeEventId === null
+        ? contests
+        : contests.filter((contest) => contest.event_id === activeEventId),
+    [contests, activeEventId],
+  );
+
+  const criteriaForActiveEvent = useMemo(() => {
+    if (activeEventId === null) {
+      return criteriaList;
+    }
+
+    const contestIdsForEvent = new Set(
+      contests
+        .filter((contest) => contest.event_id === activeEventId)
+        .map((contest) => contest.id),
+    );
+
+    return criteriaList.filter((criteria) =>
+      contestIdsForEvent.has(criteria.contest_id),
+    );
+  }, [criteriaList, contests, activeEventId]);
+
+  const criteriaValueHeader = useMemo(() => {
+    if (criteriaForActiveEvent.length === 0) {
+      return "Weight (%)";
+    }
+
+    let hasPoints = false;
+    let hasPercentage = false;
+
+    for (const criteria of criteriaForActiveEvent) {
+      const contest = contests.find(
+        (contest) => contest.id === criteria.contest_id,
+      );
+      const scoringType = contest?.scoring_type ?? "percentage";
+
+      if (scoringType === "points") {
+        hasPoints = true;
+      } else {
+        hasPercentage = true;
+      }
+    }
+
+    if (hasPoints && !hasPercentage) {
+      return "Points";
+    }
+    if (!hasPoints && hasPercentage) {
+      return "Weight (%)";
+    }
+    return "Weight / points";
+  }, [criteriaForActiveEvent, contests]);
+
+  const teamsForActiveEvent = useMemo(
+    () =>
+      activeEventId === null
+        ? teams
+        : teams.filter((team) => team.event_id === activeEventId),
+    [teams, activeEventId],
+  );
+
+  const categoriesForActiveEvent = useMemo(
+    () =>
+      activeEventId === null
+        ? categories
+        : categories.filter((category) => category.event_id === activeEventId),
+    [categories, activeEventId],
+  );
+
+  const participantsForActiveEvent = useMemo(() => {
+    if (activeEventId === null) {
+      return participants;
+    }
+
+    const contestIdsForEvent = new Set(
+      contests
+        .filter((contest) => contest.event_id === activeEventId)
+        .map((contest) => contest.id),
+    );
+
+    return participants.filter((participant) =>
+      contestIdsForEvent.has(participant.contest_id),
+    );
+  }, [participants, contests, activeEventId]);
+
+  const judgesForActiveEvent = useMemo(
+    () =>
+      activeEventId === null
+        ? judges
+        : judges.filter((judge) => judge.event_id === activeEventId),
+    [judges, activeEventId],
+  );
+
+  const tabulatorsForActiveEvent = useMemo(
+    () =>
+      activeEventId === null
+        ? tabulators
+        : tabulators.filter((tabulator) => tabulator.event_id === activeEventId),
+    [tabulators, activeEventId],
+  );
+
+  const awardsForActiveEvent = useMemo(
+    () =>
+      activeEventId === null
+        ? awards
+        : awards.filter((award) => award.event_id === activeEventId),
+    [awards, activeEventId],
+  );
+
+  useEffect(() => {
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+    if (!supabaseUrl || !supabaseAnonKey) {
+      return;
+    }
+
+    if (!selectedContestIdForTemplate) {
+      setSelectedTemplateKey("standard");
+      setTemplateTheme({});
+      setSelectedTemplateId(null);
+      return;
+    }
+
+    const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
+    supabase
+      .from("contest_layout")
+      .select("contest_id, layout_json")
+      .eq("contest_id", selectedContestIdForTemplate)
+      .limit(1)
+      .then(({ data }) => {
+        if (!data || data.length === 0) {
+          setSelectedTemplateKey("standard");
+          setTemplateTheme({});
+          return;
+        }
+
+        const row = data[0] as ContestLayoutRow;
+        const layout = row.layout_json;
+        const templateKey = layout.templateKey;
+
+        if (templateKey === "standard" || templateKey === "pageant") {
+          setSelectedTemplateKey(templateKey);
+        } else {
+          setSelectedTemplateKey("standard");
+        }
+
+        setSelectedTemplateId(layout.templateId ?? null);
+        setTemplateTheme(layout.theme ?? {});
+        setTemplateModalParticipant(null);
+      });
+  }, [selectedContestIdForTemplate]);
+
+  const tabulationRows = useMemo(() => {
+    const contestFilterId =
+      tabulationContestFilterId === "all" ? null : tabulationContestFilterId;
+    const eventFilterId =
+      tabulationEventFilterId === "all" ? null : tabulationEventFilterId;
+
+    const contestIds = new Set(
+      contests
+        .filter((contest) => {
+          if (eventFilterId !== null && contest.event_id !== eventFilterId) {
+            return false;
+          }
+          if (contestFilterId !== null && contest.id !== contestFilterId) {
+            return false;
+          }
+          return true;
+        })
+        .map((contest) => contest.id),
+    );
+
+    if (contestIds.size === 0) {
+      return [];
+    }
+
+    let relevantParticipants = participants.filter((participant) =>
+      contestIds.has(participant.contest_id),
+    );
+
+    if (tabulationDivisionFilterId !== "all") {
+      relevantParticipants = relevantParticipants.filter(
+        (participant) => participant.division_id === tabulationDivisionFilterId,
+      );
+    }
+
+    if (relevantParticipants.length === 0) {
+      return [];
+    }
+
+    const totalsByParticipantAndContest = new Map<
+      string,
+      { sum: number; count: number }
+    >();
+
+    for (const totalRow of judgeTotals) {
+      if (!contestIds.has(totalRow.contest_id)) {
+        continue;
+      }
+
+      const key = `${totalRow.contest_id}-${totalRow.participant_id}`;
+      const existing = totalsByParticipantAndContest.get(key) ?? {
+        sum: 0,
+        count: 0,
+      };
+      totalsByParticipantAndContest.set(key, {
+        sum: existing.sum + Number(totalRow.total_score),
+        count: existing.count + 1,
+      });
+    }
+
+    type Row = {
+      contestId: number;
+      contestName: string;
+      categoryName: string;
+      participantId: number;
+      participantName: string;
+      contestantNumber: string;
+      totalScore: number;
+      rank: number;
+    };
+
+    const rows: Row[] = [];
+
+    for (const participant of relevantParticipants) {
+      const key = `${participant.contest_id}-${participant.id}`;
+      const totalsForParticipant = totalsByParticipantAndContest.get(key);
+
+      if (!totalsForParticipant) {
+        continue;
+      }
+
+      const contest = contests.find(
+        (contestRow) => contestRow.id === participant.contest_id,
+      );
+
+      if (!contest) {
+        continue;
+      }
+
+      const category = categories.find(
+        (categoryRow) => categoryRow.id === participant.division_id,
+      );
+
+      const average =
+        totalsForParticipant.count === 0
+          ? 0
+          : totalsForParticipant.sum / totalsForParticipant.count;
+
+      rows.push({
+        contestId: contest.id,
+        contestName: contest.name,
+        categoryName: category ? category.name : "Uncategorized",
+        participantId: participant.id,
+        participantName: participant.full_name,
+        contestantNumber: participant.contestant_number,
+        totalScore: Number(average.toFixed(2)),
+        rank: 0,
+      });
+    }
+
+    const rowsByContest = new Map<number, Row[]>();
+
+    for (const row of rows) {
+      const group = rowsByContest.get(row.contestId) ?? [];
+      group.push(row);
+      rowsByContest.set(row.contestId, group);
+    }
+
+    const rankedRows: Row[] = [];
+
+    for (const contestRows of rowsByContest.values()) {
+      contestRows.sort((a, b) => b.totalScore - a.totalScore);
+
+      let previousScore: number | null = null;
+      let currentRank = 0;
+      let index = 0;
+
+      for (const row of contestRows) {
+        index += 1;
+        if (previousScore === null || row.totalScore < previousScore) {
+          currentRank = index;
+        }
+        row.rank = currentRank;
+        previousScore = row.totalScore;
+      }
+
+      rankedRows.push(
+        ...contestRows.sort((a, b) => {
+          if (a.rank !== b.rank) {
+            return a.rank - b.rank;
+          }
+          return a.participantName.localeCompare(b.participantName);
+        }),
+      );
+    }
+
+    rankedRows.sort((a, b) => {
+      if (a.contestName !== b.contestName) {
+        return a.contestName.localeCompare(b.contestName);
+      }
+      return a.rank - b.rank;
+    });
+
+    return rankedRows;
+  }, [
+    contests,
+    participants,
+    categories,
+    judgeAssignments,
+    judgeContestSubmissions,
+    tabulationEventFilterId,
+    tabulationContestFilterId,
+    tabulationDivisionFilterId,
+    judgeTotals,
+  ]);
+
+  const awardsResults = useMemo(() => {
+    type AwardWinnerRow = {
+      awardId: number;
+      awardName: string;
+      awardType: AwardType;
+      contestName: string;
+      criteriaName: string | null;
+      winners: {
+        participantId: number;
+        participantName: string;
+        contestantNumber: string;
+        rank: number;
+        totalScore: number;
+      }[];
+      note: string | null;
+    };
+
+    const result: AwardWinnerRow[] = [];
+
+    const activeAwards = awardsForActiveEvent.filter(
+      (award) => award.is_active,
+    );
+
+    for (const award of activeAwards) {
+      if (award.award_type === "criteria" && award.criteria_id !== null) {
+        const criteria = criteriaList.find(
+          (criteriaRow) => criteriaRow.id === award.criteria_id,
+        );
+
+        if (!criteria) {
+          result.push({
+            awardId: award.id,
+            awardName: award.name,
+            awardType: award.award_type,
+            contestName: "Unknown contest",
+            criteriaName: null,
+            winners: [],
+            note: "Criteria not found.",
+          });
+          continue;
+        }
+
+        const contest = contests.find(
+          (contestRow) =>
+            contestRow.id === (award.contest_id ?? criteria.contest_id),
+        );
+
+        if (!contest) {
+          result.push({
+            awardId: award.id,
+            awardName: award.name,
+            awardType: award.award_type,
+            contestName: "Unknown contest",
+            criteriaName: criteria.name,
+            winners: [],
+            note: "Contest not found.",
+          });
+          continue;
+        }
+
+        const rowsForContest = tabulationRows.filter(
+          (row) => row.contestId === contest.id,
+        );
+
+        if (rowsForContest.length === 0) {
+          result.push({
+            awardId: award.id,
+            awardName: award.name,
+            awardType: award.award_type,
+            contestName: contest.name,
+            criteriaName: criteria.name,
+            winners: [],
+            note: "No tabulation data yet.",
+          });
+          continue;
+        }
+
+        const bestRank = rowsForContest.reduce(
+          (min, row) => (row.rank < min ? row.rank : min),
+          rowsForContest[0]?.rank ?? 1,
+        );
+
+        const winners = rowsForContest
+          .filter((row) => row.rank === bestRank)
+          .map((row) => ({
+            participantId: row.participantId,
+            participantName: row.participantName,
+            contestantNumber: row.contestantNumber,
+            rank: row.rank,
+            totalScore: row.totalScore,
+          }));
+
+        result.push({
+          awardId: award.id,
+          awardName: award.name,
+          awardType: award.award_type,
+          contestName: contest.name,
+          criteriaName: criteria.name,
+          winners,
+          note: null,
+        });
+      } else {
+        let contestName = "All contests";
+
+        if (award.contest_id !== null) {
+          const contest = contests.find(
+            (contestRow) => contestRow.id === award.contest_id,
+          );
+          contestName = contest ? contest.name : "Unknown contest";
+        }
+
+        result.push({
+          awardId: award.id,
+          awardName: award.name,
+          awardType: award.award_type,
+          contestName,
+          criteriaName: null,
+          winners: [],
+          note: "Special award. Assign recipients manually.",
+        });
+      }
+    }
+
+    return result;
+  }, [awardsForActiveEvent, criteriaList, contests, tabulationRows]);
+
+  const selectedTabulationAwardResult = useMemo(() => {
+    if (tabulationAwardFilterId === "all") {
+      return null;
+    }
+    return (
+      awardsResults.find(
+        (awardResult) => awardResult.awardId === tabulationAwardFilterId,
+      ) ?? null
+    );
+  }, [awardsResults, tabulationAwardFilterId]);
+
+  const templatePreviewParticipants = useMemo(() => {
+    if (selectedContestIdForTemplate === null) {
+      return [];
+    }
+
+    const forContest = participants.filter(
+      (participant) => participant.contest_id === selectedContestIdForTemplate,
+    );
+
+    const parseNumber = (value: string) => {
+      const trimmed = value.trim();
+      const parsed = Number.parseInt(trimmed, 10);
+
+      if (Number.isNaN(parsed)) {
+        return Number.MAX_SAFE_INTEGER;
+      }
+
+      return parsed;
+    };
+
+    return [...forContest].sort((a, b) => {
+      const aNumber = parseNumber(a.contestant_number);
+      const bNumber = parseNumber(b.contestant_number);
+
+      if (aNumber !== bNumber) {
+        return aNumber - bNumber;
+      }
+
+      return a.contestant_number.localeCompare(b.contestant_number);
+    });
+  }, [participants, selectedContestIdForTemplate]);
+
+  const templatePreviewPageantGroups = useMemo(() => {
+    if (templatePreviewParticipants.length === 0) {
+      return [];
+    }
+
+    const groups = new Map<
+      string,
+      { groupLabel: string; items: ParticipantRow[] }
+    >();
+
+    templatePreviewParticipants.forEach((participant) => {
+      const division = categories.find(
+        (category) => category.id === participant.division_id,
+      );
+
+      const rawLabel = division?.name?.trim() ?? "";
+      const labelKey = rawLabel || "All";
+      const existing = groups.get(labelKey);
+
+      if (existing) {
+        existing.items.push(participant);
+      } else {
+        groups.set(labelKey, {
+          groupLabel: rawLabel,
+          items: [participant],
+        });
+      }
+    });
+
+    const result = Array.from(groups.values());
+
+    if (result.length <= 1) {
+      return [
+        {
+          groupLabel: "",
+          items: templatePreviewParticipants,
+        },
+      ];
+    }
+
+    const orderValue = (label: string) => {
+      const lower = label.toLowerCase();
+      if (lower === "female") return 0;
+      if (lower === "male") return 1;
+      return 2;
+    };
+
+    return result.sort(
+      (a, b) => orderValue(a.groupLabel) - orderValue(b.groupLabel),
+    );
+  }, [templatePreviewParticipants, categories]);
+
+  const templatePreviewCriteria = useMemo(() => {
+    if (selectedContestIdForTemplate === null) {
+      return [];
+    }
+
+    return criteriaList.filter(
+      (criteria) => criteria.contest_id === selectedContestIdForTemplate,
+    );
+  }, [criteriaList, selectedContestIdForTemplate]);
+
+  const participantInitials = (fullName: string) => {
+    const parts = fullName.split(" ").filter(Boolean);
+
+    if (parts.length === 0) {
+      return "?";
+    }
+
+    if (parts.length === 1) {
+      return parts[0].charAt(0).toUpperCase();
+    }
+
+    const first = parts[0].charAt(0).toUpperCase();
+    const last = parts[parts.length - 1].charAt(0).toUpperCase();
+
+    return `${first}${last}`;
+  };
+
   const handleSaveContest = async () => {
     setContestError(null);
     setContestSuccess(null);
@@ -874,14 +3091,110 @@ export default function AdminDashboard() {
 
     const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
+    const rawDivisionNames = [
+      ...contestDivisionNames,
+      contestCategoryText.trim(),
+    ];
+
+    const parsedCategoryNames = rawDivisionNames
+      .map((value) => value.trim())
+      .filter((value, index, all) => {
+        if (!value.length) {
+          return false;
+        }
+        const lower = value.toLowerCase();
+        return (
+          all.findIndex(
+            (other) => other.trim().toLowerCase() === lower,
+          ) === index
+        );
+      });
+
+    const syncDivisionsForEvent = async () => {
+      if (activeEventId === null) {
+        return;
+      }
+
+      const existingForEvent = categories.filter(
+        (category) => category.event_id === activeEventId,
+      );
+
+      const existingNamesLower = existingForEvent.map((division) =>
+        division.name.trim().toLowerCase(),
+      );
+
+      const desiredNamesLower = parsedCategoryNames.map((name) =>
+        name.trim().toLowerCase(),
+      );
+
+      const namesToInsert = parsedCategoryNames.filter((name) => {
+        const normalized = name.toLowerCase();
+        return !existingNamesLower.includes(normalized);
+      });
+
+      const divisionsToDelete = existingForEvent.filter((division) => {
+        const normalized = division.name.trim().toLowerCase();
+        return !desiredNamesLower.includes(normalized);
+      });
+
+      if (namesToInsert.length > 0) {
+        const { data: inserted, error: insertError } = await supabase
+          .from("division")
+          .insert(
+            namesToInsert.map((name) => ({
+              event_id: activeEventId,
+              name,
+            })),
+          )
+          .select("id, event_id, name, created_at");
+
+        if (insertError) {
+          setContestError(
+            insertError.message || "Unable to save new divisions for event.",
+          );
+        } else if (inserted) {
+          setCategories((previous) => [
+            ...(inserted as CategoryRow[]),
+            ...previous,
+          ]);
+        }
+      }
+
+      if (divisionsToDelete.length > 0) {
+        const idsToDelete = divisionsToDelete.map((division) => division.id);
+
+        const { data: deleted, error: deleteError } = await supabase
+          .from("division")
+          .delete()
+          .in("id", idsToDelete)
+          .select("id");
+
+        if (deleteError) {
+          setContestError(
+            deleteError.message ||
+              "Some divisions could not be deleted. They may already be used by participants.",
+          );
+        } else if (deleted && deleted.length > 0) {
+          const deletedIds = new Set(
+            (deleted as { id: number }[]).map((row) => row.id),
+          );
+
+          setCategories((previous) =>
+            previous.filter((division) => !deletedIds.has(division.id)),
+          );
+        }
+      }
+    };
+
     if (editingContestId === null) {
       const { data, error } = await supabase
         .from("contest")
         .insert({
           event_id: activeEventId,
           name: contestName.trim(),
+          scoring_type: contestScoringType,
         })
-        .select("id, event_id, name, created_at, contest_code")
+        .select("id, event_id, name, created_at, contest_code, scoring_type")
         .single();
 
       if (error) {
@@ -924,7 +3237,10 @@ export default function AdminDashboard() {
                 "Contest was created but its code could not be saved. Check your database row-level security policies.",
             );
 
-            setContests((previous) => [typed, ...previous]);
+            setContests((previous) => [
+              typed,
+              ...previous.filter((contest) => contest.id !== typed.id),
+            ]);
           } else {
             const updatedContestArray =
               (updatedContestData as ContestRow[] | null) ?? null;
@@ -938,16 +3254,27 @@ export default function AdminDashboard() {
                 "Contest was created but its code could not be saved. Check your database row-level security policies.",
               );
 
-              setContests((previous) => [typed, ...previous]);
+              setContests((previous) => [
+                typed,
+                ...previous.filter((contest) => contest.id !== typed.id),
+              ]);
             } else {
               const finalContest = updatedContestArray[0];
-              setContests((previous) => [finalContest, ...previous]);
+              setContests((previous) => [
+                finalContest,
+                ...previous.filter((contest) => contest.id !== finalContest.id),
+              ]);
             }
           }
         } else {
-          setContests((previous) => [typed, ...previous]);
+          setContests((previous) => [
+            typed,
+            ...previous.filter((contest) => contest.id !== typed.id),
+          ]);
         }
       }
+
+      await syncDivisionsForEvent();
 
       setContestSuccess("Contest has been created.");
     } else {
@@ -955,9 +3282,10 @@ export default function AdminDashboard() {
         .from("contest")
         .update({
           name: contestName.trim(),
+          scoring_type: contestScoringType,
         })
         .eq("id", editingContestId)
-        .select("id, event_id, name, created_at, contest_code")
+        .select("id, event_id, name, created_at, contest_code, scoring_type")
         .single();
 
       if (error) {
@@ -975,6 +3303,8 @@ export default function AdminDashboard() {
         return;
       }
 
+      await syncDivisionsForEvent();
+
       if (data) {
         setContests((previous) =>
           previous.map((contest) =>
@@ -988,8 +3318,248 @@ export default function AdminDashboard() {
 
     setIsSavingContest(false);
     setContestName("");
+    setContestCategoryText("");
     setEditingContestId(null);
     setIsContestModalOpen(false);
+  };
+
+  const handleSaveTemplate = async () => {
+    setTemplateError(null);
+    setTemplateSuccess(null);
+
+    if (selectedContestIdForTemplate === null) {
+      setTemplateError("Select a contest first.");
+      return;
+    }
+
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+    if (!supabaseUrl || !supabaseAnonKey) {
+      setTemplateError("Supabase is not configured.");
+      return;
+    }
+
+    setIsSavingTemplate(true);
+
+    const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
+    const layout: ContestLayout = {
+      version: 1,
+      templateKey: selectedTemplateKey,
+      templateId: selectedTemplateId,
+      theme: templateTheme,
+    };
+
+    const { error } = await supabase
+      .from("contest_layout")
+      .upsert(
+        {
+          contest_id: selectedContestIdForTemplate,
+          layout_json: layout,
+        },
+        { onConflict: "contest_id" },
+      );
+
+    setIsSavingTemplate(false);
+
+    if (error) {
+      setTemplateError(error.message || "Unable to save template.");
+      return;
+    }
+
+    setTemplateSuccess("Template has been saved for this contest.");
+  };
+
+  const handleSaveTemplateToLibrary = async () => {
+    setTemplateError(null);
+    setTemplateSuccess(null);
+
+    const trimmedName = templateName.trim();
+
+    if (trimmedName === "") {
+      setTemplateError("Enter a template name.");
+      return;
+    }
+
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+    if (!supabaseUrl || !supabaseAnonKey) {
+      setTemplateError("Supabase is not configured.");
+      return;
+    }
+
+    setIsSavingTemplateToLibrary(true);
+
+    const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
+    const layout: ContestLayout = {
+      version: 1,
+      templateKey: selectedTemplateKey,
+      theme: templateTheme,
+    };
+
+    const { data, error } = await supabase
+      .from("layout_template")
+      .insert({
+        name: trimmedName,
+        layout_json: layout,
+      })
+      .select("id, name, layout_json, created_at")
+      .single();
+
+    setIsSavingTemplateToLibrary(false);
+
+    if (error) {
+      setTemplateError(error.message || "Unable to save template to library.");
+      return;
+    }
+
+    if (!data) {
+      setTemplateError("Unable to save template to library.");
+      return;
+    }
+
+    const typed = data as LayoutTemplateRow;
+
+    setLayoutTemplates((previous) => [typed, ...previous]);
+    setSelectedTemplateId(typed.id);
+    setTemplateSuccess("Template has been saved to the template library.");
+    setTemplateName("");
+  };
+
+  const handleDeleteTemplateFromLibrary = async (id: number) => {
+    setTemplateError(null);
+    setTemplateSuccess(null);
+
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+    if (!supabaseUrl || !supabaseAnonKey) {
+      setTemplateError("Supabase is not configured.");
+      return;
+    }
+
+    setIsDeletingTemplateId(id);
+
+    const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
+    const { data, error } = await supabase
+      .from("layout_template")
+      .delete()
+      .eq("id", id)
+      .select("id");
+
+    setIsDeletingTemplateId(null);
+
+    if (error) {
+      setTemplateError(error.message || "Unable to delete template.");
+      return;
+    }
+
+    if (!data || data.length === 0) {
+      setTemplateError(
+        "Unable to delete template. Check your database row-level security policies.",
+      );
+      return;
+    }
+
+    setLayoutTemplates((previous) =>
+      previous.filter((template) => template.id !== id),
+    );
+
+    if (selectedTemplateId === id) {
+      setSelectedTemplateId(null);
+    }
+  };
+
+  const handleLoadTemplateFromLibrary = (template: LayoutTemplateRow) => {
+    const nameLower = template.name.toLowerCase();
+
+    const layout =
+      nameLower.includes("pageant") && nameLower.includes("default")
+        ? pageantDefaultLayout
+        : template.layout_json;
+    const templateKey = layout.templateKey;
+
+    if (templateKey === "standard" || templateKey === "pageant") {
+      setSelectedTemplateKey(templateKey);
+    } else {
+      setSelectedTemplateKey("standard");
+    }
+
+    setSelectedTemplateId(template.id);
+    setTemplateTheme(layout.theme ?? {});
+    setTemplateModalParticipant(null);
+    setTemplateError(null);
+    setTemplateSuccess(`Template "${template.name}" loaded.`);
+  };
+
+  const handleApplyTemplateToContest = async (template: LayoutTemplateRow) => {
+    setTemplateError(null);
+    setTemplateSuccess(null);
+
+    if (selectedContestIdForTemplate === null) {
+      setTemplateError("Select a contest first.");
+      return;
+    }
+
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+    if (!supabaseUrl || !supabaseAnonKey) {
+      setTemplateError("Supabase is not configured.");
+      return;
+    }
+
+    setIsSavingTemplate(true);
+
+    const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
+    const nameLower = template.name.toLowerCase();
+
+    const sourceLayout =
+      nameLower.includes("pageant") && nameLower.includes("default")
+        ? pageantDefaultLayout
+        : template.layout_json;
+
+    const layout: ContestLayout = {
+      ...sourceLayout,
+      templateId: template.id,
+    };
+
+    const { error } = await supabase
+      .from("contest_layout")
+      .upsert(
+        {
+          contest_id: selectedContestIdForTemplate,
+          layout_json: layout,
+        },
+        { onConflict: "contest_id" },
+      );
+
+    setIsSavingTemplate(false);
+
+    if (error) {
+      setTemplateError(
+        error.message || "Unable to apply template to selected contest.",
+      );
+      return;
+    }
+
+    const templateKey = layout.templateKey;
+
+    if (templateKey === "standard" || templateKey === "pageant") {
+      setSelectedTemplateKey(templateKey);
+    } else {
+      setSelectedTemplateKey("standard");
+    }
+
+    setSelectedTemplateId(template.id);
+    setTemplateTheme(layout.theme ?? {});
+    setTemplateModalParticipant(null);
+    setTemplateSuccess("Template has been applied to the selected contest.");
   };
 
   const handleDeleteContest = async (id: number) => {
@@ -1048,20 +3618,153 @@ export default function AdminDashboard() {
       return;
     }
 
+    if (editingCriteriaId === null) {
+      const cleanedItems = criteriaItems
+        .map((item) => ({
+          name: item.name.trim(),
+          weight: item.weight.trim(),
+        }))
+        .filter((item) => item.name !== "" || item.weight !== "");
+
+      if (cleanedItems.length === 0) {
+        setCriteriaError("Add at least one criteria and points.");
+        return;
+      }
+
+      for (const item of cleanedItems) {
+        if (!item.name) {
+          setCriteriaError("Each criteria must have a name.");
+          return;
+        }
+        if (!item.weight) {
+          setCriteriaError("Each criteria must have points.");
+          return;
+        }
+        const parsed = Number(item.weight);
+        if (!Number.isFinite(parsed) || parsed <= 0 || parsed > 100) {
+          setCriteriaError("Points must be a number between 0 and 100.");
+          return;
+        }
+      }
+
+      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+      const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+      if (!supabaseUrl || !supabaseAnonKey) {
+        setCriteriaError("Supabase is not configured.");
+        return;
+      }
+
+      setIsSavingCriteria(true);
+
+      const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
+      const rowsToInsert = cleanedItems.map((item) => ({
+        contest_id: selectedContestIdForCriteria,
+        name: item.name,
+        percentage: Number(item.weight),
+        description: null,
+        category: criteriaCategory.trim() || null,
+      }));
+
+      const { data, error } = await supabase
+        .from("criteria")
+        .insert(rowsToInsert)
+        .select(
+          "id, contest_id, name, percentage, created_at, description, criteria_code, category",
+        );
+
+      if (error) {
+        setCriteriaError(error.message || "Unable to add criteria.");
+        setIsSavingCriteria(false);
+        return;
+      }
+
+      const createdArray = (data as CriteriaRow[] | null) ?? null;
+
+      if (createdArray && Array.isArray(createdArray) && createdArray.length > 0) {
+        for (const created of createdArray) {
+          let criteriaToUse = created;
+
+          if (!created.criteria_code) {
+            const contestForCriteria = contests.find(
+              (contest) => contest.id === created.contest_id,
+            );
+
+            let baseContestCode = contestForCriteria?.contest_code ?? null;
+
+            if (!baseContestCode && contestForCriteria) {
+              const eventForContest = events.find(
+                (event) => event.id === contestForCriteria.event_id,
+              );
+              if (eventForContest) {
+                baseContestCode = `${eventForContest.code}${contestForCriteria.id}`;
+              }
+            }
+
+            const generatedCriteriaCode = baseContestCode
+              ? `${baseContestCode}${created.id}`
+              : `CRIT${created.id}`;
+
+            const { data: updatedCriteriaData, error: updateError } =
+              await supabase
+                .from("criteria")
+                .update({
+                  criteria_code: generatedCriteriaCode,
+                })
+                .eq("id", created.id)
+                .select(
+                  "id, contest_id, name, percentage, created_at, description, criteria_code, category",
+                );
+
+            if (!updateError) {
+              const updatedArray =
+                (updatedCriteriaData as CriteriaRow[] | null) ?? null;
+
+              if (
+                updatedArray &&
+                Array.isArray(updatedArray) &&
+                updatedArray.length > 0
+              ) {
+                criteriaToUse = updatedArray[0];
+              }
+            }
+          }
+
+          setCriteriaList((previous) => [
+            criteriaToUse,
+            ...previous.filter((criteria) => criteria.id !== criteriaToUse.id),
+          ]);
+        }
+      }
+
+      setCriteriaSuccess("Criteria have been added.");
+      setIsSavingCriteria(false);
+      setSelectedContestIdForCriteria(null);
+      setCriteriaCategory("");
+      setCriteriaItems([{ name: "", weight: "" }]);
+      setCriteriaName("");
+      setCriteriaWeight("");
+      setCriteriaDescription("");
+      setEditingCriteriaId(null);
+      setIsCriteriaModalOpen(false);
+      return;
+    }
+
     if (!criteriaName.trim()) {
       setCriteriaError("Criteria name is required.");
       return;
     }
 
     if (!criteriaWeight.trim()) {
-      setCriteriaError("Weight is required.");
+      setCriteriaError("Points are required.");
       return;
     }
 
     const parsedWeight = Number(criteriaWeight);
 
     if (!Number.isFinite(parsedWeight) || parsedWeight <= 0 || parsedWeight > 100) {
-      setCriteriaError("Weight must be a number between 0 and 100.");
+      setCriteriaError("Points must be a number between 0 and 100.");
       return;
     }
 
@@ -1077,127 +3780,43 @@ export default function AdminDashboard() {
 
     const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
-    if (editingCriteriaId === null) {
-      const { data, error } = await supabase
-        .from("criteria")
-        .insert({
-          contest_id: selectedContestIdForCriteria,
-          name: criteriaName.trim(),
-          percentage: parsedWeight,
-          description: criteriaDescription.trim() || null,
-        })
-        .select(
-          "id, contest_id, name, percentage, created_at, description, criteria_code",
-        )
-        .single();
+    const { data, error } = await supabase
+      .from("criteria")
+      .update({
+        contest_id: selectedContestIdForCriteria,
+        name: criteriaName.trim(),
+        percentage: parsedWeight,
+        description: criteriaDescription.trim() || null,
+        category: criteriaCategory.trim() || null,
+      })
+      .eq("id", editingCriteriaId)
+      .select(
+        "id, contest_id, name, percentage, created_at, description, criteria_code, category",
+      )
+      .single();
 
-      if (error) {
-        setCriteriaError(error.message || "Unable to add criteria.");
-        setIsSavingCriteria(false);
-        return;
-      }
-
-      if (data) {
-        const typed = data as CriteriaRow;
-
-        if (!typed.criteria_code) {
-          const contestForCriteria = contests.find(
-            (contest) => contest.id === typed.contest_id,
-          );
-
-          let baseContestCode = contestForCriteria?.contest_code ?? null;
-
-          if (!baseContestCode && contestForCriteria) {
-            const eventForContest = events.find(
-              (event) => event.id === contestForCriteria.event_id,
-            );
-            if (eventForContest) {
-              baseContestCode = `${eventForContest.code}${contestForCriteria.id}`;
-            }
-          }
-
-          const generatedCriteriaCode = baseContestCode
-            ? `${baseContestCode}${typed.id}`
-            : `CRIT${typed.id}`;
-
-          const { data: updatedCriteriaData, error: updateError } = await supabase
-            .from("criteria")
-            .update({
-              criteria_code: generatedCriteriaCode,
-            })
-            .eq("id", typed.id)
-            .select(
-              "id, contest_id, name, percentage, created_at, description, criteria_code",
-            );
-
-          if (updateError) {
-            setCriteriaError(
-              updateError.message ||
-                "Criteria was created but its code could not be saved. Check your database row-level security policies.",
-            );
-
-            setCriteriaList((previous) => [typed, ...previous]);
-          } else {
-            const updatedCriteriaArray =
-              (updatedCriteriaData as CriteriaRow[] | null) ?? null;
-
-            if (
-              !updatedCriteriaArray ||
-              !Array.isArray(updatedCriteriaArray) ||
-              updatedCriteriaArray.length === 0
-            ) {
-              setCriteriaError(
-                "Criteria was created but its code could not be saved. Check your database row-level security policies.",
-              );
-
-              setCriteriaList((previous) => [typed, ...previous]);
-            } else {
-              const finalCriteria = updatedCriteriaArray[0];
-              setCriteriaList((previous) => [finalCriteria, ...previous]);
-            }
-          }
-        } else {
-          setCriteriaList((previous) => [typed, ...previous]);
-        }
-      }
-
-      setCriteriaSuccess("Criteria has been added.");
-    } else {
-      const { data, error } = await supabase
-        .from("criteria")
-        .update({
-          contest_id: selectedContestIdForCriteria,
-          name: criteriaName.trim(),
-          percentage: parsedWeight,
-          description: criteriaDescription.trim() || null,
-        })
-        .eq("id", editingCriteriaId)
-        .select(
-          "id, contest_id, name, percentage, created_at, description, criteria_code",
-        )
-        .single();
-
-      if (error) {
-        setCriteriaError(error.message || "Unable to update criteria.");
-        setIsSavingCriteria(false);
-        return;
-      }
-
-      if (data) {
-        setCriteriaList((previous) =>
-          previous.map((criteria) =>
-            criteria.id === data.id ? (data as CriteriaRow) : criteria,
-          ),
-        );
-      }
-
-      setCriteriaSuccess("Criteria has been updated.");
+    if (error) {
+      setCriteriaError(error.message || "Unable to update criteria.");
+      setIsSavingCriteria(false);
+      return;
     }
+
+    if (data) {
+      setCriteriaList((previous) =>
+        previous.map((criteria) =>
+          criteria.id === data.id ? (data as CriteriaRow) : criteria,
+        ),
+      );
+    }
+
+    setCriteriaSuccess("Criteria has been updated.");
     setIsSavingCriteria(false);
     setSelectedContestIdForCriteria(null);
     setCriteriaName("");
     setCriteriaWeight("");
     setCriteriaDescription("");
+    setCriteriaCategory("");
+    setCriteriaItems([{ name: "", weight: "" }]);
     setEditingCriteriaId(null);
     setIsCriteriaModalOpen(false);
   };
@@ -1242,6 +3861,254 @@ export default function AdminDashboard() {
     );
   };
 
+  const openCreateAwardModal = () => {
+    setEditingAwardId(null);
+    setAwardName("");
+    setAwardType("criteria");
+    setAwardContestId(null);
+    setAwardCriteriaId(null);
+    setAwardDescription("");
+    setAwardIsActive(true);
+    setAwardError(null);
+    setAwardSuccess(null);
+    setIsAwardModalOpen(true);
+  };
+
+  const openEditAwardModal = (award: AwardRow) => {
+    setEditingAwardId(award.id);
+    setAwardName(award.name);
+    setAwardType(award.award_type);
+    setAwardContestId(award.contest_id);
+    setAwardCriteriaId(award.criteria_id);
+    setAwardDescription(award.description ?? "");
+    setAwardIsActive(award.is_active);
+    setAwardError(null);
+    setAwardSuccess(null);
+    setIsAwardModalOpen(true);
+  };
+
+  const handleSaveAward = async () => {
+    setAwardError(null);
+    setAwardSuccess(null);
+
+    if (activeEventId === null) {
+      setAwardError("Set an active event first in the Event tab.");
+      return;
+    }
+
+    if (!awardName.trim()) {
+      setAwardError("Award name is required.");
+      return;
+    }
+
+    if (awardType === "criteria" && awardCriteriaId === null) {
+      setAwardError("Select a criteria for this award.");
+      return;
+    }
+
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+    if (!supabaseUrl || !supabaseAnonKey) {
+      setAwardError("Supabase is not configured.");
+      return;
+    }
+
+    setIsSavingAward(true);
+
+    const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
+    const payload = {
+      event_id: activeEventId,
+      contest_id: awardContestId,
+      name: awardName.trim(),
+      description: awardDescription.trim() || null,
+      award_type: awardType,
+      criteria_id: awardType === "criteria" ? awardCriteriaId : null,
+      is_active: awardIsActive,
+    };
+
+    if (editingAwardId === null) {
+      const { data, error } = await supabase
+        .from("award")
+        .insert(payload)
+        .select(
+          "id, event_id, contest_id, name, description, award_type, criteria_id, is_active, created_at",
+        )
+        .single();
+
+      if (error) {
+        setAwardError(error.message || "Unable to add award.");
+        setIsSavingAward(false);
+        return;
+      }
+
+      if (data) {
+        setAwards((previous) => [
+          data as AwardRow,
+          ...previous.filter((award) => award.id !== (data as AwardRow).id),
+        ]);
+      }
+
+      setAwardSuccess("Award has been added.");
+    } else {
+      const { data, error } = await supabase
+        .from("award")
+        .update(payload)
+        .eq("id", editingAwardId)
+        .select(
+          "id, event_id, contest_id, name, description, award_type, criteria_id, is_active, created_at",
+        )
+        .single();
+
+      if (error) {
+        setAwardError(error.message || "Unable to update award.");
+        setIsSavingAward(false);
+        return;
+      }
+
+      if (data) {
+        setAwards((previous) =>
+          previous.map((award) =>
+            award.id === data.id ? (data as AwardRow) : award,
+          ),
+        );
+      }
+
+      setAwardSuccess("Award has been updated.");
+    }
+
+    setIsSavingAward(false);
+    setIsAwardModalOpen(false);
+    setEditingAwardId(null);
+    setAwardName("");
+    setAwardContestId(null);
+    setAwardCriteriaId(null);
+    setAwardDescription("");
+    setAwardIsActive(true);
+  };
+
+  const handleDeleteAward = async (id: number) => {
+    setAwardError(null);
+
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+    if (!supabaseUrl || !supabaseAnonKey) {
+      setAwardError("Supabase is not configured.");
+      return;
+    }
+
+    setIsDeletingAwardId(id);
+
+    const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
+    const { data, error } = await supabase
+      .from("award")
+      .delete()
+      .eq("id", id)
+      .select("id");
+
+    setIsDeletingAwardId(null);
+
+    if (error) {
+      setAwardError(error.message || "Unable to delete award.");
+      return;
+    }
+
+    if (!data || data.length === 0) {
+      setAwardError(
+        "Unable to delete award. Check your database row-level security policies.",
+      );
+      return;
+    }
+
+    setAwards((previous) => previous.filter((award) => award.id !== id));
+  };
+
+  const handleConfirmAwardWinners = async (awardId: number) => {
+    setAwardsTabulationError(null);
+    setAwardsTabulationSuccess(null);
+
+    const award = awardsForActiveEvent.find((item) => item.id === awardId);
+
+    if (!award) {
+      setAwardsTabulationError("Award not found.");
+      return;
+    }
+
+    if (award.award_type !== "criteria") {
+      setAwardsTabulationError(
+        "Only criteria-based awards can be auto-confirmed.",
+      );
+      return;
+    }
+
+    const awardResult = awardsResults.find(
+      (result) => result.awardId === awardId,
+    );
+
+    if (!awardResult || awardResult.winners.length === 0) {
+      setAwardsTabulationError("No winners available to confirm for this award.");
+      return;
+    }
+
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+    if (!supabaseUrl || !supabaseAnonKey) {
+      setAwardsTabulationError("Supabase is not configured.");
+      return;
+    }
+
+    const existingRecipientIds = new Set(
+      awardRecipients
+        .filter((row) => row.award_id === awardId)
+        .map((row) => row.participant_id),
+    );
+
+    const winnersToSave = awardResult.winners.filter(
+      (winner) => !existingRecipientIds.has(winner.participantId),
+    );
+
+    if (winnersToSave.length === 0) {
+      setAwardsTabulationSuccess("Recipients for this award are already saved.");
+      return;
+    }
+
+    setIsConfirmingAwardId(awardId);
+
+    const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
+    const rowsToInsert = winnersToSave.map((winner) => ({
+      award_id: awardId,
+      participant_id: winner.participantId,
+    }));
+
+    const { data, error } = await supabase
+      .from("award_recipient")
+      .insert(rowsToInsert)
+      .select("id, award_id, participant_id, created_at");
+
+    setIsConfirmingAwardId(null);
+
+    if (error) {
+      setAwardsTabulationError(
+        error.message || "Unable to confirm award recipients.",
+      );
+      return;
+    }
+
+    if (data && Array.isArray(data)) {
+      setAwardRecipients((previous) => [
+        ...data.map((row) => row as AwardRecipientRow),
+        ...previous,
+      ]);
+    }
+
+    setAwardsTabulationSuccess("Award recipients have been saved.");
+  };
+
   const handleSaveCategory = async () => {
     setCategoryError(null);
     setCategorySuccess(null);
@@ -1252,7 +4119,7 @@ export default function AdminDashboard() {
     }
 
     if (!categoryName.trim()) {
-      setCategoryError("Category name is required.");
+      setCategoryError("Team name is required.");
       return;
     }
 
@@ -1270,7 +4137,7 @@ export default function AdminDashboard() {
 
     if (editingCategoryId === null) {
       const { data, error } = await supabase
-        .from("group_category")
+        .from("team")
         .insert({
           event_id: activeEventId,
           name: categoryName.trim(),
@@ -1281,18 +4148,18 @@ export default function AdminDashboard() {
       setIsSavingCategory(false);
 
       if (error) {
-        setCategoryError(error.message || "Unable to save category.");
+        setCategoryError(error.message || "Unable to save team.");
         return;
       }
 
       if (data) {
-        setCategories((previous) => [data as CategoryRow, ...previous]);
+        setTeams((previous) => [data as TeamRow, ...previous]);
       }
 
-      setCategorySuccess("Category has been added.");
+      setCategorySuccess("Team has been added.");
     } else {
       const { data, error } = await supabase
-        .from("group_category")
+        .from("team")
         .update({
           name: categoryName.trim(),
         })
@@ -1303,19 +4170,19 @@ export default function AdminDashboard() {
       setIsSavingCategory(false);
 
       if (error) {
-        setCategoryError(error.message || "Unable to update category.");
+        setCategoryError(error.message || "Unable to update team.");
         return;
       }
 
       if (data) {
-        setCategories((previous) =>
-          previous.map((category) =>
-            category.id === data.id ? (data as CategoryRow) : category,
+        setTeams((previous) =>
+          previous.map((team) =>
+            team.id === data.id ? (data as TeamRow) : team,
           ),
         );
       }
 
-      setCategorySuccess("Category has been updated.");
+      setCategorySuccess("Team has been updated.");
     }
 
     setCategoryName("");
@@ -1339,7 +4206,7 @@ export default function AdminDashboard() {
     const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
     const { data, error } = await supabase
-      .from("group_category")
+      .from("team")
       .delete()
       .eq("id", id)
       .select("id");
@@ -1347,20 +4214,18 @@ export default function AdminDashboard() {
     setIsDeletingCategoryId(null);
 
     if (error) {
-      setCategoryError(error.message || "Unable to delete category.");
+      setCategoryError(error.message || "Unable to delete team.");
       return;
     }
 
     if (!data || data.length === 0) {
       setCategoryError(
-        "Unable to delete category. Check your database row-level security policies.",
+        "Unable to delete team. Check your database row-level security policies.",
       );
       return;
     }
 
-    setCategories((previous) =>
-      previous.filter((category) => category.id !== id),
-    );
+    setTeams((previous) => previous.filter((team) => team.id !== id));
   };
 
   const handleSaveParticipant = async () => {
@@ -1378,12 +4243,45 @@ export default function AdminDashboard() {
     }
 
     if (selectedCategoryIdForParticipant === null) {
-      setParticipantError("Please select a category.");
+      setParticipantError("Please select a division.");
+      return;
+    }
+
+    if (selectedTeamIdForParticipant === null) {
+      setParticipantError("Please select a team.");
       return;
     }
 
     if (!participantFullName.trim() || !participantNumber.trim()) {
       setParticipantError("Please fill in all fields.");
+      return;
+    }
+
+    const normalizedNumber = participantNumber.trim();
+
+    const hasDuplicateNumber = participants.some((participant) => {
+      if (participant.contest_id !== selectedContestIdForParticipant) {
+        return false;
+      }
+
+      if (participant.division_id !== selectedCategoryIdForParticipant) {
+        return false;
+      }
+
+      if (
+        editingParticipantId !== null &&
+        participant.id === editingParticipantId
+      ) {
+        return false;
+      }
+
+      return participant.contestant_number.trim() === normalizedNumber;
+    });
+
+    if (hasDuplicateNumber) {
+      setParticipantError(
+        "This contestant number is already used for this contest and division.",
+      );
       return;
     }
 
@@ -1404,18 +4302,29 @@ export default function AdminDashboard() {
         .from("participant")
         .insert({
           contest_id: selectedContestIdForParticipant,
-          group_id: selectedCategoryIdForParticipant,
+          division_id: selectedCategoryIdForParticipant,
+          team_id: selectedTeamIdForParticipant,
           full_name: participantFullName.trim(),
-          contestant_number: participantNumber.trim(),
+          contestant_number: normalizedNumber,
+          avatar_url: participantAvatarUrl.trim() || null,
         })
         .select(
-          "id, contest_id, group_id, full_name, contestant_number, created_at",
+          "id, contest_id, division_id, team_id, full_name, contestant_number, created_at, avatar_url",
         );
 
       setIsSavingParticipant(false);
 
       if (error) {
-        setParticipantError(error.message || "Unable to save participant.");
+        if (
+          typeof error.message === "string" &&
+          error.message.includes("contestant_unique")
+        ) {
+          setParticipantError(
+            "This contestant number is already used for this contest and division.",
+          );
+        } else {
+          setParticipantError(error.message || "Unable to save participant.");
+        }
         return;
       }
 
@@ -1430,19 +4339,30 @@ export default function AdminDashboard() {
         .from("participant")
         .update({
           contest_id: selectedContestIdForParticipant,
-          group_id: selectedCategoryIdForParticipant,
+          division_id: selectedCategoryIdForParticipant,
+          team_id: selectedTeamIdForParticipant,
           full_name: participantFullName.trim(),
-          contestant_number: participantNumber.trim(),
+          contestant_number: normalizedNumber,
+          avatar_url: participantAvatarUrl.trim() || null,
         })
         .eq("id", editingParticipantId)
         .select(
-          "id, contest_id, group_id, full_name, contestant_number, created_at",
+          "id, contest_id, division_id, team_id, full_name, contestant_number, created_at, avatar_url",
         );
 
       setIsSavingParticipant(false);
 
       if (error) {
-        setParticipantError(error.message || "Unable to update participant.");
+        if (
+          typeof error.message === "string" &&
+          error.message.includes("contestant_unique")
+        ) {
+          setParticipantError(
+            "This contestant number is already used for this contest and division.",
+          );
+        } else {
+          setParticipantError(error.message || "Unable to update participant.");
+        }
         return;
       }
 
@@ -1460,8 +4380,10 @@ export default function AdminDashboard() {
 
     setSelectedContestIdForParticipant(null);
     setSelectedCategoryIdForParticipant(null);
+    setSelectedTeamIdForParticipant(null);
     setParticipantFullName("");
     setParticipantNumber("");
+    setParticipantAvatarUrl("");
     setEditingParticipantId(null);
     setIsParticipantModalOpen(false);
   };
@@ -1481,23 +4403,12 @@ export default function AdminDashboard() {
 
     const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
-    const { data, error } = await supabase
-      .from("participant")
-      .delete()
-      .eq("id", id)
-      .select("id");
+    const { error } = await supabase.from("participant").delete().eq("id", id);
 
     setIsDeletingParticipantId(null);
 
     if (error) {
       setParticipantError(error.message || "Unable to delete participant.");
-      return;
-    }
-
-    if (!data || data.length === 0) {
-      setParticipantError(
-        "Unable to delete participant. Check your database row-level security policies.",
-      );
       return;
     }
 
@@ -2084,48 +4995,375 @@ export default function AdminDashboard() {
                 <div className="flex flex-wrap gap-2 text-[11px]">
                   <div className="flex items-center gap-1.5">
                     <span className="text-[10px] text-slate-500">Event</span>
-                    <select className="rounded-full border border-[#D0D7E2] bg-white px-3 py-1.5 text-[11px] outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]">
-                      <option>All events</option>
+                    <select
+                      className="rounded-full border border-[#D0D7E2] bg-white px-3 py-1.5 text-[11px] outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                      value={
+                        tabulationEventFilterId === "all"
+                          ? "all"
+                          : String(tabulationEventFilterId)
+                      }
+                      onChange={(event) => {
+                        const value = event.target.value;
+                        const next =
+                          value === "all" ? "all" : Number.parseInt(value, 10);
+                        setTabulationEventFilterId(next);
+                        setTabulationContestFilterId("all");
+                      }}
+                    >
+                      <option value="all">All events</option>
+                      {events
+                        .slice()
+                        .sort((a, b) => a.name.localeCompare(b.name))
+                        .map((event) => (
+                          <option key={event.id} value={event.id}>
+                            {event.name}
+                          </option>
+                        ))}
                     </select>
                   </div>
                   <div className="flex items-center gap-1.5">
                     <span className="text-[10px] text-slate-500">Contest</span>
-                    <select className="rounded-full border border-[#D0D7E2] bg-white px-3 py-1.5 text-[11px] outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]">
-                      <option>All contests</option>
+                    <select
+                      className="rounded-full border border-[#D0D7E2] bg-white px-3 py-1.5 text-[11px] outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                      value={
+                        tabulationContestFilterId === "all"
+                          ? "all"
+                          : String(tabulationContestFilterId)
+                      }
+                      onChange={(event) => {
+                        const value = event.target.value;
+                        const next =
+                          value === "all" ? "all" : Number.parseInt(value, 10);
+                        setTabulationContestFilterId(next);
+                      }}
+                    >
+                      <option value="all">All contests</option>
+                      {contests
+                        .filter((contest) =>
+                          tabulationEventFilterId === "all"
+                            ? true
+                            : contest.event_id === tabulationEventFilterId,
+                        )
+                        .slice()
+                        .sort((a, b) => a.name.localeCompare(b.name))
+                        .map((contest) => (
+                          <option key={contest.id} value={contest.id}>
+                            {contest.name}
+                          </option>
+                        ))}
                     </select>
                   </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[10px] text-slate-500">Division</span>
+                  <select
+                    className="rounded-full border border-[#D0D7E2] bg-white px-3 py-1.5 text-[11px] outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                    value={
+                      tabulationDivisionFilterId === "all"
+                        ? "all"
+                        : String(tabulationDivisionFilterId)
+                    }
+                    onChange={(event) => {
+                      const value = event.target.value;
+                      const next =
+                        value === "all" ? "all" : Number.parseInt(value, 10);
+                      setTabulationDivisionFilterId(next);
+                    }}
+                  >
+                    <option value="all">All divisions</option>
+                    {(tabulationEventFilterId === "all"
+                      ? categories
+                      : categories.filter(
+                          (category) => category.event_id === tabulationEventFilterId,
+                        )
+                    )
+                      .slice()
+                      .sort((a, b) => a.name.localeCompare(b.name))
+                      .map((category) => (
+                        <option key={category.id} value={category.id}>
+                          {category.name}
+                        </option>
+                      ))}
+                  </select>
+                </div>
                 </div>
                 <span className="text-[10px] text-slate-400">
-                  No tabulation data yet
+                  {events.length === 0 || contests.length === 0
+                    ? "No tabulation data yet"
+                    : "Showing current tabulation from judges' submissions"}
                 </span>
               </div>
 
-              <div className="overflow-x-auto">
-                <table className="min-w-full border-collapse text-left text-[11px]">
-                  <thead>
-                    <tr className="border-b border-[#E2E8F0] bg-[#F5F7FF] text-[10px] uppercase tracking-wide text-slate-500">
-                      <th className="px-3 py-2 font-medium">Contest</th>
-                      <th className="px-3 py-2 font-medium">Category</th>
-                      <th className="px-3 py-2 font-medium">Contestant</th>
-                      <th className="px-3 py-2 font-medium">Total score</th>
-                      <th className="px-3 py-2 font-medium">Rank</th>
-                      <th className="px-3 py-2 font-medium">Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr className="border-b border-[#F1F5F9]">
-                      <td
-                        className="px-3 py-2 text-slate-400"
-                        colSpan={6}
-                      >
-                        Once you start tabulating, scores and rankings will
-                        appear here.
-                      </td>
-                    </tr>
-                  </tbody>
-                </table>
+              <div className="mb-2 flex items-center justify-between gap-3">
+                <div className="inline-flex rounded-full bg-[#F5F7FF] p-1 text-[10px] text-slate-600">
+                  <button
+                    type="button"
+                    onClick={() => setAdminTabulationView("overall")}
+                    className={`rounded-full px-3 py-1 font-medium transition ${
+                      adminTabulationView === "overall"
+                        ? "bg-white text-[#1F4D3A] shadow-sm"
+                        : "text-slate-600 hover:text-[#1F4D3A]"
+                    }`}
+                  >
+                    Overall
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAdminTabulationView("awards")}
+                    className={`rounded-full px-3 py-1 font-medium transition ${
+                      adminTabulationView === "awards"
+                        ? "bg-white text-[#1F4D3A] shadow-sm"
+                        : "text-slate-600 hover:text-[#1F4D3A]"
+                    }`}
+                  >
+                    Awards
+                  </button>
+                </div>
               </div>
+
+              {adminTabulationView === "overall" && (
+                <div className="overflow-x-auto">
+                  <table className="min-w-full border-collapse text-left text-[11px]">
+                    <thead>
+                      <tr className="border-b border-[#E2E8F0] bg-[#F5F7FF] text-[10px] uppercase tracking-wide text-slate-500">
+                        <th className="px-3 py-2 font-medium">Contest</th>
+                        <th className="px-3 py-2 font-medium">Category</th>
+                        <th className="px-3 py-2 font-medium">Contestant</th>
+                        <th className="px-3 py-2 font-medium">Total score</th>
+                        <th className="px-3 py-2 font-medium">Rank</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {tabulationRows.length === 0 ? (
+                        <tr className="border-b border-[#F1F5F9]">
+                          <td
+                            className="px-3 py-2 text-slate-400"
+                            colSpan={5}
+                          >
+                            Once judges submit totals for contests, scores and
+                            rankings will appear here.
+                          </td>
+                        </tr>
+                      ) : (
+                        tabulationRows.map((row, index) => (
+                          <tr
+                            key={`${row.contestName}-${row.contestantNumber}-${index}`}
+                            className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC]"
+                          >
+                            <td className="px-3 py-2 text-slate-700">
+                              {row.contestName}
+                            </td>
+                            <td className="px-3 py-2 text-slate-700">
+                              {row.categoryName}
+                            </td>
+                            <td className="px-3 py-2">
+                              <div className="font-medium text-slate-800">
+                                {row.participantName}
+                              </div>
+                              <div className="text-[10px] text-slate-500">
+                                Contestant #{row.contestantNumber}
+                              </div>
+                            </td>
+                            <td className="px-3 py-2 font-semibold text-[#1F4D3A]">
+                              {row.totalScore.toFixed(2)}
+                            </td>
+                            <td className="px-3 py-2 font-semibold text-slate-800">
+                              {row.rank}
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
+
+            {adminTabulationView === "awards" && (
+              <div className="mt-4 rounded-2xl border border-[#1F4D3A1F] bg-white p-4">
+                <div className="mb-3 flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
+                  <div>
+                    <div className="text-sm font-semibold text-[#1F4D3A]">
+                      Awards ranking
+                    </div>
+                    <div className="text-[11px] text-slate-500">
+                      Select an award to view its winners based on current tabulation.
+                    </div>
+                  </div>
+                  <div className="w-full max-w-xs text-xs">
+                    <span className="mb-1 block text-[11px] text-slate-500">
+                      Award
+                    </span>
+                    <select
+                      className="w-full rounded-full border border-[#E2E8F0] bg-white px-4 py-2.5 text-xs font-medium text-slate-800 outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                      value={
+                        tabulationAwardFilterId === "all"
+                          ? ""
+                          : String(tabulationAwardFilterId)
+                      }
+                      onChange={(event) => {
+                        const value = event.target.value;
+                        if (!value) {
+                          setTabulationAwardFilterId("all");
+                        } else {
+                          setTabulationAwardFilterId(
+                            Number.parseInt(value, 10),
+                          );
+                        }
+                        setAwardsTabulationError(null);
+                        setAwardsTabulationSuccess(null);
+                      }}
+                    >
+                      <option value="">Select award</option>
+                      {awardsResults.map((award) => (
+                        <option key={award.awardId} value={award.awardId}>
+                          {award.awardName}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                {(awardsTabulationError || awardsTabulationSuccess) && (
+                  <div
+                    className={`mb-2 text-[10px] ${
+                      awardsTabulationError
+                        ? "text-red-500"
+                        : "text-emerald-600"
+                    }`}
+                  >
+                    {awardsTabulationError ?? awardsTabulationSuccess}
+                  </div>
+                )}
+
+                {awardsResults.length === 0 ? (
+                  <div className="text-[11px] text-slate-400">
+                    No awards configured for this event.
+                  </div>
+                ) : !selectedTabulationAwardResult ? (
+                  <div className="text-[11px] text-slate-400">
+                    Select an award above to view its winners.
+                  </div>
+                ) : selectedTabulationAwardResult.awardType !== "criteria" ? (
+                  <div className="text-[11px] text-slate-400">
+                    This is a special award. Confirm recipients manually in the Awards
+                    tab.
+                  </div>
+                ) : selectedTabulationAwardResult.winners.length === 0 ? (
+                  <div className="text-[11px] text-slate-400">
+                    No winners available yet for this award.
+                  </div>
+                ) : (
+                  <div className="space-y-3 text-[11px]">
+                    {(() => {
+                      const award = selectedTabulationAwardResult;
+                      const existingRecipients = awardRecipients.filter(
+                        (row) => row.award_id === award.awardId,
+                      );
+                      const existingRecipientIds = new Set(
+                        existingRecipients.map((row) => row.participant_id),
+                      );
+                      const allWinnersSaved =
+                        award.winners.length > 0 &&
+                        award.winners.every((winner) =>
+                          existingRecipientIds.has(winner.participantId),
+                        );
+
+                      return (
+                        <div className="space-y-3">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="space-y-0.5">
+                              <div className="flex items-center gap-2">
+                                <span className="font-medium text-slate-800">
+                                  {award.awardName}
+                                </span>
+                                <span className="rounded-full bg-[#DCFCE7] px-2 py-0.5 text-[9px] font-medium text-[#166534]">
+                                  Criteria-based
+                                </span>
+                              </div>
+                              <div className="text-[10px] text-slate-500">
+                                {award.criteriaName
+                                  ? `${award.contestName} • ${award.criteriaName}`
+                                  : award.contestName}
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                handleConfirmAwardWinners(award.awardId)
+                              }
+                              disabled={
+                                isConfirmingAwardId === award.awardId ||
+                                allWinnersSaved
+                              }
+                              className={`rounded-full border px-3 py-1 text-[10px] ${
+                                allWinnersSaved
+                                  ? "border-[#BBF7D0] bg-[#DCFCE7] text-[#166534]"
+                                  : "border-[#1F4D3A] bg-[#1F4D3A] text-white hover:bg-[#163528]"
+                              } ${
+                                isConfirmingAwardId === award.awardId
+                                  ? "cursor-not-allowed opacity-70"
+                                  : ""
+                              }`}
+                            >
+                              {allWinnersSaved
+                                ? "Recipients saved"
+                                : isConfirmingAwardId === award.awardId
+                                ? "Saving..."
+                                : "Confirm winners"}
+                            </button>
+                          </div>
+
+                          <div className="overflow-hidden rounded-2xl border border-[#E2E8F0] bg-white">
+                            <table className="min-w-full border-collapse text-left text-[11px]">
+                              <thead>
+                                <tr className="border-b border-[#E2E8F0] bg-[#F5F7FF] text-[10px] uppercase tracking-wide text-slate-500">
+                                  <th className="px-3 py-2 font-medium">Rank</th>
+                                  <th className="px-3 py-2 font-medium">
+                                    Contestant
+                                  </th>
+                                  <th className="px-3 py-2 font-medium">
+                                    Contest
+                                  </th>
+                                  <th className="px-3 py-2 font-medium text-right">
+                                    Total score
+                                  </th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {award.winners.map((winner, index) => (
+                                  <tr
+                                    key={`${winner.contestantNumber}-${index}`}
+                                    className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC]"
+                                  >
+                                    <td className="px-3 py-2 font-semibold text-slate-800">
+                                      {winner.rank}
+                                    </td>
+                                    <td className="px-3 py-2">
+                                      <div className="font-medium text-slate-800">
+                                        {winner.participantName}
+                                      </div>
+                                      <div className="text-[10px] text-slate-500">
+                                        Contestant #{winner.contestantNumber}
+                                      </div>
+                                    </td>
+                                    <td className="px-3 py-2 text-slate-700">
+                                      {award.contestName}
+                                    </td>
+                                    <td className="px-3 py-2 text-right font-semibold text-[#1F4D3A]">
+                                      {winner.totalScore.toFixed(2)}
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                )}
+              </div>
+            )}
           </section>
         )}
 
@@ -2183,6 +5421,28 @@ export default function AdminDashboard() {
                 }`}
               >
                 Criteria
+              </button>
+              <button
+                type="button"
+                onClick={() => setEventTab("awards")}
+                className={`rounded-full border px-3 py-1.5 transition ${
+                  eventTab === "awards"
+                    ? "border-[#1F4D3A] bg-[#1F4D3A] text-white shadow-sm"
+                    : "border-transparent bg-[#F5F7FF] text-[#1F4D3A] hover:bg-[#E3F2EA]"
+                }`}
+              >
+                Awards
+              </button>
+              <button
+                type="button"
+                onClick={() => setEventTab("template")}
+                className={`rounded-full border px-3 py-1.5 transition ${
+                  eventTab === "template"
+                    ? "border-[#1F4D3A] bg-[#1F4D3A] text-white shadow-sm"
+                    : "border-transparent bg-[#F5F7FF] text-[#1F4D3A] hover:bg-[#E3F2EA]"
+                }`}
+              >
+                Template
               </button>
             </div>
 
@@ -2400,10 +5660,10 @@ export default function AdminDashboard() {
                         Contest list
                       </div>
                       <span className="text-[10px] text-slate-400">
-                        {contests.length === 0
+                        {contestsForActiveEvent.length === 0
                           ? "No contests yet"
-                          : `${contests.length} contest${
-                              contests.length > 1 ? "s" : ""
+                          : `${contestsForActiveEvent.length} contest${
+                              contestsForActiveEvent.length > 1 ? "s" : ""
                             }`}
                       </span>
                     </div>
@@ -2423,22 +5683,23 @@ export default function AdminDashboard() {
                             <th className="px-3 py-2 font-medium">Contest</th>
                             <th className="px-3 py-2 font-medium">Code</th>
                             <th className="px-3 py-2 font-medium">Event</th>
+                            <th className="px-3 py-2 font-medium">Divisions</th>
                             <th className="px-3 py-2 font-medium">Actions</th>
                           </tr>
                         </thead>
                         <tbody>
-                          {contests.length === 0 ? (
+                          {contestsForActiveEvent.length === 0 ? (
                             <tr className="border-b border-[#F1F5F9]">
                               <td
                                 className="px-3 py-2 text-slate-400"
-                                colSpan={4}
+                                colSpan={5}
                               >
                                 Once you add contests, you can edit or delete
                                 them here.
                               </td>
                             </tr>
                           ) : (
-                            contests.map((contest) => (
+                            contestsForActiveEvent.map((contest) => (
                               <tr
                                 key={contest.id}
                                 className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC]"
@@ -2455,6 +5716,26 @@ export default function AdminDashboard() {
                                   )?.name ?? "Unknown event"}
                                 </td>
                                 <td className="px-3 py-2">
+                                  {categoriesForActiveEvent.length === 0 ? (
+                                    <span className="text-[10px] text-slate-400">
+                                      No divisions yet
+                                    </span>
+                                  ) : (
+                                    <div className="flex flex-wrap gap-1.5">
+                                      {categoriesForActiveEvent.map(
+                                        (division) => (
+                                          <span
+                                            key={division.id}
+                                            className="inline-flex items-center rounded-full bg-[#E3F2EA] px-2 py-0.5 text-[10px] text-[#1F4D3A]"
+                                          >
+                                            {division.name}
+                                          </span>
+                                        ),
+                                      )}
+                                    </div>
+                                  )}
+                                </td>
+                                <td className="px-3 py-2">
                                   <div className="flex gap-1.5 text-[10px]">
                                     <button
                                       type="button"
@@ -2465,7 +5746,9 @@ export default function AdminDashboard() {
                                     </button>
                                     <button
                                       type="button"
-                                      onClick={() => handleDeleteContest(contest.id)}
+                                      onClick={() =>
+                                        handleDeleteContest(contest.id)
+                                      }
                                       disabled={isDeletingContestId === contest.id}
                                       className={`rounded-full border border-[#FCA5A5] px-2 py-0.5 text-red-500 hover:bg-[#FEF2F2] ${
                                         isDeletingContestId === contest.id
@@ -2510,9 +5793,9 @@ export default function AdminDashboard() {
                         Criteria list
                       </div>
                       <span className="text-[10px] text-slate-400">
-                        {criteriaList.length === 0
+                        {criteriaForActiveEvent.length === 0
                           ? "No criteria yet"
-                          : `${criteriaList.length} criteria`}
+                          : `${criteriaForActiveEvent.length} criteria`}
                       </span>
                     </div>
                     {(criteriaError || criteriaSuccess) && (
@@ -2528,30 +5811,36 @@ export default function AdminDashboard() {
                       <table className="min-w-full border-collapse text-left text-[11px]">
                         <thead>
                           <tr className="border-b border-[#E2E8F0] bg-[#F5F7FF] text-[10px] uppercase tracking-wide text-slate-500">
+                            <th className="px-3 py-2 font-medium">Category</th>
                             <th className="px-3 py-2 font-medium">Criteria</th>
                             <th className="px-3 py-2 font-medium">Code</th>
                             <th className="px-3 py-2 font-medium">Contest</th>
-                            <th className="px-3 py-2 font-medium">Weight (%)</th>
+                            <th className="px-3 py-2 font-medium">
+                              {criteriaValueHeader}
+                            </th>
                             <th className="px-3 py-2 font-medium">Actions</th>
                           </tr>
                         </thead>
                         <tbody>
-                          {criteriaList.length === 0 ? (
+                          {criteriaForActiveEvent.length === 0 ? (
                             <tr className="border-b border-[#F1F5F9]">
                               <td
                                 className="px-3 py-2 text-slate-400"
-                                colSpan={5}
+                                colSpan={6}
                               >
                                 Once you add criteria, you can edit or delete them
                                 here.
                               </td>
                             </tr>
                           ) : (
-                            criteriaList.map((criteria) => (
+                            criteriaForActiveEvent.map((criteria) => (
                               <tr
                                 key={criteria.id}
                                 className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC]"
                               >
+                                <td className="px-3 py-2 text-slate-600">
+                                  {criteria.category ?? "—"}
+                                </td>
                                 <td className="px-3 py-2 font-medium text-slate-700">
                                   {criteria.name}
                                 </td>
@@ -2600,7 +5889,2456 @@ export default function AdminDashboard() {
                   </div>
                 </div>
               )}
+
+              {eventTab === "awards" && (
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div className="text-[11px] font-medium text-slate-600">
+                      Awards
+                    </div>
+                    <button
+                      type="button"
+                      onClick={openCreateAwardModal}
+                      className="inline-flex items-center rounded-full bg-[#1F4D3A] px-3 py-1.5 text-[11px] font-medium text-white shadow-sm transition hover:bg-[#163528]"
+                    >
+                      Add award
+                    </button>
+                  </div>
+
+                  <div className="rounded-2xl border border-[#1F4D3A1F] bg-white p-4">
+                    <div className="mb-2 flex items-center justify-between">
+                      <div className="text-[11px] font-medium text-slate-600">
+                        Awards list
+                      </div>
+                      <span className="text-[10px] text-slate-400">
+                        {awardsForActiveEvent.length === 0
+                          ? "No awards yet"
+                          : `${awardsForActiveEvent.length} award${
+                              awardsForActiveEvent.length > 1 ? "s" : ""
+                            }`}
+                      </span>
+                    </div>
+                    {(awardError || awardSuccess) && (
+                      <div
+                        className={`mb-2 text-[10px] ${
+                          awardError ? "text-red-500" : "text-emerald-600"
+                        }`}
+                      >
+                        {awardError ?? awardSuccess}
+                      </div>
+                    )}
+                    <div className="overflow-x-auto">
+                      <table className="min-w-full border-collapse text-left text-[11px]">
+                        <thead>
+                          <tr className="border-b border-[#E2E8F0] bg-[#F5F7FF] text-[10px] uppercase tracking-wide text-slate-500">
+                            <th className="px-3 py-2 font-medium">Name</th>
+                            <th className="px-3 py-2 font-medium">Type</th>
+                            <th className="px-3 py-2 font-medium">Contest</th>
+                            <th className="px-3 py-2 font-medium">Criteria</th>
+                            <th className="px-3 py-2 font-medium">Active</th>
+                            <th className="px-3 py-2 font-medium">Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {awardsForActiveEvent.length === 0 ? (
+                            <tr className="border-b border-[#F1F5F9]">
+                              <td
+                                className="px-3 py-2 text-slate-400"
+                                colSpan={6}
+                              >
+                                Once you add awards, you can edit or delete them
+                                here.
+                              </td>
+                            </tr>
+                          ) : (
+                            awardsForActiveEvent.map((award) => (
+                              <tr
+                                key={award.id}
+                                className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC]"
+                              >
+                                <td className="px-3 py-2 font-medium text-slate-700">
+                                  {award.name}
+                                </td>
+                                <td className="px-3 py-2 text-slate-600">
+                                  {award.award_type === "criteria"
+                                    ? "Criteria-based"
+                                    : "Special"}
+                                </td>
+                                <td className="px-3 py-2 text-slate-600">
+                                  {award.contest_id === null
+                                    ? "All contests"
+                                    : contests.find(
+                                        (contest) =>
+                                          contest.id === award.contest_id,
+                                      )?.name ?? "Unknown contest"}
+                                </td>
+                                <td className="px-3 py-2 text-slate-600">
+                                  {award.award_type === "criteria" &&
+                                  award.criteria_id !== null
+                                    ? criteriaList.find(
+                                        (criteria) =>
+                                          criteria.id === award.criteria_id,
+                                      )?.name ?? "Unknown criteria"
+                                    : "—"}
+                                </td>
+                                <td className="px-3 py-2 text-slate-600">
+                                  {award.is_active ? "Yes" : "No"}
+                                </td>
+                                <td className="px-3 py-2">
+                                  <div className="flex gap-1.5 text-[10px]">
+                                    <button
+                                      type="button"
+                                      onClick={() => openEditAwardModal(award)}
+                                      className="rounded-full border border-[#E2E8F0] px-2 py-0.5 text-slate-600 hover:bg-[#F8FAFC]"
+                                    >
+                                      Edit
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleDeleteAward(award.id)}
+                                      disabled={isDeletingAwardId === award.id}
+                                      className={`rounded-full border border-[#FCA5A5] px-2 py-0.5 text-red-500 hover:bg-[#FEF2F2] ${
+                                        isDeletingAwardId === award.id
+                                          ? "cursor-not-allowed opacity-70"
+                                          : ""
+                                      }`}
+                                    >
+                                      {isDeletingAwardId === award.id
+                                        ? "Deleting..."
+                                        : "Delete"}
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            ))
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {eventTab === "template" && (
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div className="text-[11px] font-medium text-slate-600">
+                      Templates
+                    </div>
+                    <div className="text-[10px] text-slate-500">
+                      Choose how the judge scoring layout should look.
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl border border-[#1F4D3A1F] bg-white p-4">
+                    <div className="mb-3 grid gap-3 text-[10px] sm:grid-cols-2">
+                      <div>
+                        <div className="mb-1 text-slate-500">Contest</div>
+                        <select
+                          value={selectedContestIdForTemplate ?? ""}
+                          onChange={(event) => {
+                            const value = event.target.value;
+                            setSelectedContestIdForTemplate(
+                              value ? Number.parseInt(value, 10) : null,
+                            );
+                          }}
+                          className="w-full rounded-full border border-[#D0D7E2] bg-white px-3 py-1.5 text-[10px] outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                        >
+                          <option value="">Select contest</option>
+                          {contestsForActiveEvent.map((contest) => (
+                            <option key={contest.id} value={contest.id}>
+                              {contest.name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <div className="mb-1 text-slate-500">Template</div>
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedTemplateKey("standard");
+                              setSelectedTemplateId(null);
+                            }}
+                            className={`rounded-full border px-3 py-1.5 text-[10px] ${
+                              selectedTemplateKey === "standard"
+                                ? "border-[#1F4D3A] bg-[#1F4D3A] text-white"
+                                : "border-[#D0D7E2] bg-[#F5F7FF] text-[#1F4D3A]"
+                            }`}
+                          >
+                            Standard
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedTemplateKey("pageant");
+                              setSelectedTemplateId(null);
+                            }}
+                            className={`rounded-full border px-3 py-1.5 text-[10px] ${
+                              selectedTemplateKey === "pageant"
+                                ? "border-[#1F4D3A] bg-[#1F4D3A] text-white"
+                                : "border-[#D0D7E2] bg-[#F5F7FF] text-[#1F4D3A]"
+                            }`}
+                          >
+                            Pageant
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+
+                    {selectedTemplateKey === "pageant" && (
+                      <div className="mb-3 space-y-3 text-[10px]">
+                        <PageantSection
+                          title="Groups and badges"
+                          sectionKey="groupsAndBadges"
+                          isOpen={openPageantSections.groupsAndBadges}
+                          onToggle={handleTogglePageantSection}
+                        >
+                          <div className="grid gap-3 sm:grid-cols-4">
+                            <div className="space-y-1">
+                              <div className="text-slate-500">Workspace background</div>
+                              <input
+                                type="color"
+                                className="h-8 w-full cursor-pointer rounded-full border border-[#D0D7E2] bg-white px-2"
+                                value={templateTheme.workspaceBg ?? "#F8FAFC"}
+                                onChange={(event) =>
+                                  updateTemplateTheme({
+                                    workspaceBg: event.target.value,
+                                  })
+                                }
+                              />
+                              <div className="text-[9px] text-slate-400">Opacity (%)</div>
+                              <input
+                                type="range"
+                                min={0}
+                                max={100}
+                                className="w-full rounded-full border border-[#D0D7E2] bg-white px-3 py-1 text-[10px] outline-none"
+                                value={templateTheme.workspaceBgOpacity ?? 100}
+                                onChange={(event) =>
+                                  updateTemplateTheme({
+                                    workspaceBgOpacity: Number(event.target.value) || 0,
+                                  })
+                                }
+                              />
+                            </div>
+                            <div className="space-y-1">
+                              <div className="text-slate-500">Female group background</div>
+                              <input
+                                type="color"
+                                className="h-8 w-full cursor-pointer rounded-full border border-[#D0D7E2] bg-white px-2"
+                                value={templateTheme.femaleGroupBg ?? "#ffe4e6"}
+                                onChange={(event) =>
+                                  updateTemplateTheme({
+                                    femaleGroupBg: event.target.value,
+                                  })
+                                }
+                              />
+                              <div className="text-[9px] text-slate-400">Opacity (%)</div>
+                              <input
+                                type="range"
+                                min={0}
+                                max={100}
+                                className="w-full rounded-full border border-[#D0D7E2] bg-white px-3 py-1 text-[10px] outline-none"
+                                value={templateTheme.femaleGroupBgOpacity ?? 100}
+                                onChange={(event) =>
+                                  updateTemplateTheme({
+                                    femaleGroupBgOpacity:
+                                      Number(event.target.value) || 0,
+                                  })
+                                }
+                              />
+                            </div>
+                            <div className="space-y-1">
+                              <div className="text-slate-500">Female badge color</div>
+                              <input
+                                type="color"
+                                className="h-8 w-full cursor-pointer rounded-full border border-[#D0D7E2] bg-white px-2"
+                                value={templateTheme.femaleBadgeBg ?? "#ec4899"}
+                                onChange={(event) =>
+                                  updateTemplateTheme({
+                                    femaleBadgeBg: event.target.value,
+                                  })
+                                }
+                              />
+                              <div className="text-[9px] text-slate-400">Opacity (%)</div>
+                              <input
+                                type="range"
+                                min={0}
+                                max={100}
+                                className="w-full rounded-full border border-[#D0D7E2] bg-white px-3 py-1 text-[10px] outline-none"
+                                value={templateTheme.femaleBadgeBgOpacity ?? 100}
+                                onChange={(event) =>
+                                  updateTemplateTheme({
+                                    femaleBadgeBgOpacity:
+                                      Number(event.target.value) || 0,
+                                  })
+                                }
+                              />
+                            </div>
+                            <div className="space-y-1">
+                              <div className="text-slate-500">Male group background</div>
+                              <input
+                                type="color"
+                                className="h-8 w-full cursor-pointer rounded-full border border-[#D0D7E2] bg-white px-2"
+                                value={templateTheme.maleGroupBg ?? "#e0f2fe"}
+                                onChange={(event) =>
+                                  updateTemplateTheme({
+                                    maleGroupBg: event.target.value,
+                                  })
+                                }
+                              />
+                              <div className="text-[9px] text-slate-400">Opacity (%)</div>
+                              <input
+                                type="range"
+                                min={0}
+                                max={100}
+                                className="w-full rounded-full border border-[#D0D7E2] bg-white px-3 py-1 text-[10px] outline-none"
+                                value={templateTheme.maleGroupBgOpacity ?? 100}
+                                onChange={(event) =>
+                                  updateTemplateTheme({
+                                    maleGroupBgOpacity:
+                                      Number(event.target.value) || 0,
+                                  })
+                                }
+                              />
+                            </div>
+                            <div className="space-y-1">
+                              <div className="text-slate-500">Male badge color</div>
+                              <input
+                                type="color"
+                                className="h-8 w-full cursor-pointer rounded-full border border-[#D0D7E2] bg-white px-2"
+                                value={templateTheme.maleBadgeBg ?? "#0ea5e9"}
+                                onChange={(event) =>
+                                  updateTemplateTheme({
+                                    maleBadgeBg: event.target.value,
+                                  })
+                                }
+                              />
+                              <div className="text-[9px] text-slate-400">Opacity (%)</div>
+                              <input
+                                type="range"
+                                min={0}
+                                max={100}
+                                className="w-full rounded-full border border-[#D0D7E2] bg-white px-3 py-1 text-[10px] outline-none"
+                                value={templateTheme.maleBadgeBgOpacity ?? 100}
+                                onChange={(event) =>
+                                  updateTemplateTheme({
+                                    maleBadgeBgOpacity:
+                                      Number(event.target.value) || 0,
+                                  })
+                                }
+                              />
+                            </div>
+                          </div>
+                        </PageantSection>
+
+                        <PageantSection
+                          title="Card and number badge"
+                          sectionKey="cardsAndNames"
+                          isOpen={openPageantSections.cardsAndNames}
+                          onToggle={handleTogglePageantSection}
+                        >
+                          <div className="grid gap-3 sm:grid-cols-4">
+                            <div className="space-y-1">
+                              <div className="text-slate-500">Card background</div>
+                              <input
+                                type="color"
+                                className="h-8 w-full cursor-pointer rounded-full border border-[#D0D7E2] bg-white px-2"
+                                value={templateTheme.cardBg ?? "#ffffff"}
+                                onChange={(event) =>
+                                  updateTemplateTheme({
+                                    cardBg: event.target.value,
+                                  })
+                                }
+                              />
+                              <div className="text-[9px] text-slate-400">Opacity (%)</div>
+                              <input
+                                type="range"
+                                min={0}
+                                max={100}
+                                className="w-full rounded-full border border-[#D0D7E2] bg-white px-3 py-1 text-[10px] outline-none"
+                                value={templateTheme.cardBgOpacity ?? 100}
+                                onChange={(event) =>
+                                  updateTemplateTheme({
+                                    cardBgOpacity: Number(event.target.value) || 0,
+                                  })
+                                }
+                              />
+                            </div>
+                            <div className="space-y-1">
+                              <div className="text-slate-500">Number text color</div>
+                              <input
+                                type="color"
+                                className="h-8 w-full cursor-pointer rounded-full border border-[#D0D7E2] bg-white px-2"
+                                value={templateTheme.numberTextColor ?? "#ffffff"}
+                                onChange={(event) =>
+                                  updateTemplateTheme({
+                                    numberTextColor: event.target.value,
+                                  })
+                                }
+                              />
+                              <div className="text-[9px] text-slate-400">Opacity (%)</div>
+                              <input
+                                type="range"
+                                min={0}
+                                max={100}
+                                className="w-full rounded-full border border-[#D0D7E2] bg-white px-3 py-1 text-[10px] outline-none"
+                                value={templateTheme.numberTextColorOpacity ?? 100}
+                                onChange={(event) =>
+                                  updateTemplateTheme({
+                                    numberTextColorOpacity:
+                                      Number(event.target.value) || 0,
+                                  })
+                                }
+                              />
+                            </div>
+                            <div className="space-y-1">
+                              <div className="text-slate-500">Number font size (px)</div>
+                              <input
+                                type="number"
+                                min={8}
+                                max={32}
+                                className="w-full rounded-full border border-[#D0D7E2] bg-white px-3 py-1 text-[10px] outline-none"
+                                value={templateTheme.numberFontSize ?? 10}
+                                onChange={(event) =>
+                                  setTemplateTheme((previous) => ({
+                                    ...previous,
+                                    numberFontSize: Number(event.target.value) || 10,
+                                  }))
+                                }
+                              />
+                            </div>
+                            <div className="space-y-1">
+                              <div className="text-slate-500">Number font family</div>
+                              <select
+                                className="w-full rounded-full border border-[#D0D7E2] bg-white px-3 py-1 text-[10px] outline-none"
+                                value={templateTheme.numberFontFamily ?? "system"}
+                                onChange={(event) =>
+                                  setTemplateTheme((previous) => ({
+                                    ...previous,
+                                    numberFontFamily: event.target.value,
+                                  }))
+                                }
+                              >
+                                <option value="system">Default</option>
+                                <option value="sans">Sans-serif</option>
+                                <option value="serif">Serif</option>
+                                <option value="mono">Monospace</option>
+                              </select>
+                            </div>
+                            <div className="space-y-1">
+                              <div className="text-slate-500">Number badge background</div>
+                              <input
+                                type="color"
+                                className="h-8 w-full cursor-pointer rounded-full border border-[#D0D7E2] bg-white px-2"
+                                value={templateTheme.numberBadgeBg ?? "#000000"}
+                                onChange={(event) =>
+                                  updateTemplateTheme({
+                                    numberBadgeBg: event.target.value,
+                                  })
+                                }
+                              />
+                              <div className="text-[9px] text-slate-400">Opacity (%)</div>
+                              <input
+                                type="range"
+                                min={0}
+                                max={100}
+                                className="w-full rounded-full border border-[#D0D7E2] bg-white px-3 py-1 text-[10px] outline-none"
+                                value={templateTheme.numberBadgeBgOpacity ?? 100}
+                                onChange={(event) =>
+                                  updateTemplateTheme({
+                                    numberBadgeBgOpacity:
+                                      Number(event.target.value) || 0,
+                                  })
+                                }
+                              />
+                            </div>
+                          </div>
+                        </PageantSection>
+
+                        <PageantSection
+                          title="Participant name text"
+                          sectionKey="participantName"
+                          isOpen={openPageantSections.participantName}
+                          onToggle={handleTogglePageantSection}
+                        >
+                          <div className="grid gap-3 sm:grid-cols-3">
+                            <div className="space-y-1">
+                              <div className="text-slate-500">Name text color</div>
+                              <input
+                                type="color"
+                                className="h-8 w-full cursor-pointer rounded-full border border-[#D0D7E2] bg-white px-2"
+                                value={templateTheme.nameTextColor ?? "#111827"}
+                                onChange={(event) =>
+                                  updateTemplateTheme({
+                                    nameTextColor: event.target.value,
+                                  })
+                                }
+                              />
+                              <div className="text-[9px] text-slate-400">Opacity (%)</div>
+                              <input
+                                type="range"
+                                min={0}
+                                max={100}
+                                className="w-full rounded-full border border-[#D0D7E2] bg-white px-3 py-1 text-[10px] outline-none"
+                                value={templateTheme.nameTextColorOpacity ?? 100}
+                                onChange={(event) =>
+                                  updateTemplateTheme({
+                                    nameTextColorOpacity:
+                                      Number(event.target.value) || 0,
+                                  })
+                                }
+                              />
+                            </div>
+                            <div className="space-y-1">
+                              <div className="text-slate-500">Name font size (px)</div>
+                              <input
+                                type="number"
+                                min={8}
+                                max={32}
+                                className="w-full rounded-full border border-[#D0D7E2] bg-white px-3 py-1 text-[10px] outline-none"
+                                value={templateTheme.nameFontSize ?? 10}
+                                onChange={(event) =>
+                                  setTemplateTheme((previous) => ({
+                                    ...previous,
+                                    nameFontSize: Number(event.target.value) || 10,
+                                  }))
+                                }
+                              />
+                            </div>
+                            <div className="space-y-1">
+                              <div className="text-slate-500">Name font family</div>
+                              <select
+                                className="w-full rounded-full border border-[#D0D7E2] bg-white px-3 py-1 text-[10px] outline-none"
+                                value={templateTheme.nameFontFamily ?? "system"}
+                                onChange={(event) =>
+                                  setTemplateTheme((previous) => ({
+                                    ...previous,
+                                    nameFontFamily: event.target.value,
+                                  }))
+                                }
+                              >
+                                <option value="system">Default</option>
+                                <option value="sans">Sans-serif</option>
+                                <option value="serif">Serif</option>
+                                <option value="mono">Monospace</option>
+                              </select>
+                            </div>
+                          </div>
+                        </PageantSection>
+
+                        <PageantSection
+                          title="Scoring header and criteria rows"
+                          sectionKey="criteriaHeaderAndRows"
+                          isOpen={openPageantSections.criteriaHeaderAndRows}
+                          onToggle={handleTogglePageantSection}
+                        >
+                          <div className="grid gap-3 sm:grid-cols-4">
+                            <div className="space-y-1">
+                              <div className="text-slate-500">Header background</div>
+                              <input
+                                type="color"
+                                className="h-8 w-full cursor-pointer rounded-full border border-[#D0D7E2] bg-white px-2"
+                                value={templateTheme.criteriaHeaderBg ?? "#f5f7ff"}
+                                onChange={(event) =>
+                                  updateTemplateTheme({
+                                    criteriaHeaderBg: event.target.value,
+                                  })
+                                }
+                              />
+                              <div className="text-[9px] text-slate-400">Opacity (%)</div>
+                              <input
+                                type="range"
+                                min={0}
+                                max={100}
+                                className="w-full rounded-full border border-[#D0D7E2] bg-white px-3 py-1 text-[10px] outline-none"
+                                value={templateTheme.criteriaHeaderBgOpacity ?? 100}
+                                onChange={(event) =>
+                                  updateTemplateTheme({
+                                    criteriaHeaderBgOpacity:
+                                      Number(event.target.value) || 0,
+                                  })
+                                }
+                              />
+                            </div>
+                            <div className="space-y-1">
+                              <div className="text-slate-500">Header text color</div>
+                              <input
+                                type="color"
+                                className="h-8 w-full cursor-pointer rounded-full border border-[#D0D7E2] bg-white px-2"
+                                value={templateTheme.criteriaHeaderTextColor ?? "#1f2937"}
+                                onChange={(event) =>
+                                  updateTemplateTheme({
+                                    criteriaHeaderTextColor: event.target.value,
+                                  })
+                                }
+                              />
+                              <div className="text-[9px] text-slate-400">Opacity (%)</div>
+                              <input
+                                type="number"
+                                min={0}
+                                max={100}
+                                className="w-full rounded-full border border-[#D0D7E2] bg-white px-3 py-1 text-[10px] outline-none"
+                                value={templateTheme.criteriaHeaderTextColorOpacity ?? 100}
+                                onChange={(event) =>
+                                  updateTemplateTheme({
+                                    criteriaHeaderTextColorOpacity:
+                                      Number(event.target.value) || 0,
+                                  })
+                                }
+                              />
+                            </div>
+                            <div className="space-y-1">
+                              <div className="text-slate-500">Header font size (px)</div>
+                              <input
+                                type="number"
+                                min={8}
+                                max={20}
+                                className="w-full rounded-full border border-[#D0D7E2] bg-white px-3 py-1 text-[10px] outline-none"
+                                value={templateTheme.criteriaHeaderFontSize ?? 11}
+                                onChange={(event) =>
+                                  setTemplateTheme((previous) => ({
+                                    ...previous,
+                                    criteriaHeaderFontSize:
+                                      Number(event.target.value) || 11,
+                                  }))
+                                }
+                              />
+                            </div>
+                            <div className="space-y-1">
+                              <div className="text-slate-500">Header font family</div>
+                              <select
+                                className="w-full rounded-full border border-[#D0D7E2] bg-white px-3 py-1 text-[10px] outline-none"
+                                value={templateTheme.criteriaHeaderFontFamily ?? "system"}
+                                onChange={(event) =>
+                                  setTemplateTheme((previous) => ({
+                                    ...previous,
+                                    criteriaHeaderFontFamily: event.target.value,
+                                  }))
+                                }
+                              >
+                                <option value="system">Default</option>
+                                <option value="sans">Sans-serif</option>
+                                <option value="serif">Serif</option>
+                                <option value="mono">Monospace</option>
+                              </select>
+                            </div>
+                          </div>
+                          <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                            <div className="space-y-1">
+                              <div className="text-slate-500">Criteria text color</div>
+                              <input
+                                type="color"
+                                className="h-8 w-full cursor-pointer rounded-full border border-[#D0D7E2] bg-white px-2"
+                                value={templateTheme.criteriaTextColor ?? "#111827"}
+                                onChange={(event) =>
+                                  updateTemplateTheme({
+                                    criteriaTextColor: event.target.value,
+                                  })
+                                }
+                              />
+                              <div className="text-[9px] text-slate-400">Opacity (%)</div>
+                              <input
+                                type="number"
+                                min={0}
+                                max={100}
+                                className="w-full rounded-full border border-[#D0D7E2] bg-white px-3 py-1 text-[10px] outline-none"
+                                value={templateTheme.criteriaTextColorOpacity ?? 100}
+                                onChange={(event) =>
+                                  updateTemplateTheme({
+                                    criteriaTextColorOpacity:
+                                      Number(event.target.value) || 0,
+                                  })
+                                }
+                              />
+                            </div>
+                            <div className="space-y-1">
+                              <div className="text-slate-500">Criteria font size (px)</div>
+                              <input
+                                type="number"
+                                min={8}
+                                max={20}
+                                className="w-full rounded-full border border-[#D0D7E2] bg-white px-3 py-1 text-[10px] outline-none"
+                                value={templateTheme.criteriaTextFontSize ?? 14}
+                                onChange={(event) =>
+                                  setTemplateTheme((previous) => ({
+                                    ...previous,
+                                    criteriaTextFontSize:
+                                      Number(event.target.value) || 14,
+                                  }))
+                                }
+                              />
+                            </div>
+                            <div className="space-y-1">
+                              <div className="text-slate-500">Criteria font family</div>
+                              <select
+                                className="w-full rounded-full border border-[#D0D7E2] bg-white px-3 py-1 text-[10px] outline-none"
+                                value={templateTheme.criteriaTextFontFamily ?? "system"}
+                                onChange={(event) =>
+                                  setTemplateTheme((previous) => ({
+                                    ...previous,
+                                    criteriaTextFontFamily: event.target.value,
+                                  }))
+                                }
+                              >
+                                <option value="system">Default</option>
+                                <option value="sans">Sans-serif</option>
+                                <option value="serif">Serif</option>
+                                <option value="mono">Monospace</option>
+                              </select>
+                            </div>
+                          </div>
+                        </PageantSection>
+
+                        <PageantSection
+                          title="Scoring table and inputs"
+                          sectionKey="scoringTable"
+                          isOpen={openPageantSections.scoringTable}
+                          onToggle={handleTogglePageantSection}
+                        >
+                          <div className="grid gap-3 sm:grid-cols-3">
+                            <div className="space-y-1">
+                              <div className="text-slate-500">Table background</div>
+                              <input
+                                type="color"
+                                className="h-8 w-full cursor-pointer rounded-full border border-[#D0D7E2] bg-white px-2"
+                                value={templateTheme.scoringTableBg ?? "#ffffff"}
+                                onChange={(event) =>
+                                  updateTemplateTheme({
+                                    scoringTableBg: event.target.value,
+                                  })
+                                }
+                              />
+                              <div className="text-[9px] text-slate-400">Opacity (%)</div>
+                              <input
+                                type="range"
+                                min={0}
+                                max={100}
+                                className="w-full cursor-pointer"
+                                value={templateTheme.scoringTableBgOpacity ?? 100}
+                                onChange={(event) =>
+                                  updateTemplateTheme({
+                                    scoringTableBgOpacity:
+                                      Number(event.target.value) || 0,
+                                  })
+                                }
+                              />
+                            </div>
+                            <div className="space-y-1">
+                              <div className="text-slate-500">Category row background</div>
+                              <input
+                                type="color"
+                                className="h-8 w-full cursor-pointer rounded-full border border-[#D0D7E2] bg-white px-2"
+                                value={templateTheme.scoringCategoryRowBg ?? "#f9fafb"}
+                                onChange={(event) =>
+                                  updateTemplateTheme({
+                                    scoringCategoryRowBg: event.target.value,
+                                  })
+                                }
+                              />
+                              <div className="text-[9px] text-slate-400">Opacity (%)</div>
+                              <input
+                                type="range"
+                                min={0}
+                                max={100}
+                                className="w-full cursor-pointer"
+                                value={templateTheme.scoringCategoryRowBgOpacity ?? 100}
+                                onChange={(event) =>
+                                  updateTemplateTheme({
+                                    scoringCategoryRowBgOpacity:
+                                      Number(event.target.value) || 0,
+                                  })
+                                }
+                              />
+                            </div>
+                            <div className="space-y-1">
+                              <div className="text-slate-500">Total row background</div>
+                              <input
+                                type="color"
+                                className="h-8 w-full cursor-pointer rounded-full border border-[#D0D7E2] bg-white px-2"
+                                value={templateTheme.scoringTotalRowBg ?? "#f5f7ff"}
+                                onChange={(event) =>
+                                  updateTemplateTheme({
+                                    scoringTotalRowBg: event.target.value,
+                                  })
+                                }
+                              />
+                              <div className="text-[9px] text-slate-400">Opacity (%)</div>
+                              <input
+                                type="range"
+                                min={0}
+                                max={100}
+                                className="w-full cursor-pointer"
+                                value={templateTheme.scoringTotalRowBgOpacity ?? 100}
+                                onChange={(event) =>
+                                  updateTemplateTheme({
+                                    scoringTotalRowBgOpacity:
+                                      Number(event.target.value) || 0,
+                                  })
+                                }
+                              />
+                            </div>
+                            <div className="space-y-1">
+                              <div className="text-slate-500">Score input background</div>
+                              <input
+                                type="color"
+                                className="h-8 w-full cursor-pointer rounded-full border border-[#D0D7E2] bg-white px-2"
+                                value={templateTheme.scoreInputBg ?? "#ffffff"}
+                                onChange={(event) =>
+                                  updateTemplateTheme({
+                                    scoreInputBg: event.target.value,
+                                  })
+                                }
+                              />
+                              <div className="text-[9px] text-slate-400">Opacity (%)</div>
+                              <input
+                                type="range"
+                                min={0}
+                                max={100}
+                                className="w-full cursor-pointer"
+                                value={templateTheme.scoreInputBgOpacity ?? 100}
+                                onChange={(event) =>
+                                  updateTemplateTheme({
+                                    scoreInputBgOpacity:
+                                      Number(event.target.value) || 0,
+                                  })
+                                }
+                              />
+                            </div>
+                            <div className="space-y-1">
+                              <div className="text-slate-500">Score input border</div>
+                              <input
+                                type="color"
+                                className="h-8 w-full cursor-pointer rounded-full border border-[#D0D7E2] bg-white px-2"
+                                value={
+                                  templateTheme.scoreInputBorderColor ?? "#cbd5e1"
+                                }
+                                onChange={(event) =>
+                                  updateTemplateTheme({
+                                    scoreInputBorderColor: event.target.value,
+                                  })
+                                }
+                              />
+                              <div className="text-[9px] text-slate-400">Opacity (%)</div>
+                              <input
+                                type="range"
+                                min={0}
+                                max={100}
+                                className="w-full cursor-pointer"
+                                value={
+                                  templateTheme.scoreInputBorderColorOpacity ?? 100
+                                }
+                                onChange={(event) =>
+                                  updateTemplateTheme({
+                                    scoreInputBorderColorOpacity:
+                                      Number(event.target.value) || 0,
+                                  })
+                                }
+                              />
+                            </div>
+                            <div className="space-y-1">
+                              <div className="text-slate-500">Score input text color</div>
+                              <input
+                                type="color"
+                                className="h-8 w-full cursor-pointer rounded-full border border-[#D0D7E2] bg-white px-2"
+                                value={
+                                  templateTheme.scoreInputTextColor ?? "#0f172a"
+                                }
+                                onChange={(event) =>
+                                  updateTemplateTheme({
+                                    scoreInputTextColor: event.target.value,
+                                  })
+                                }
+                              />
+                              <div className="text-[9px] text-slate-400">Opacity (%)</div>
+                              <input
+                                type="range"
+                                min={0}
+                                max={100}
+                                className="w-full cursor-pointer"
+                                value={
+                                  templateTheme.scoreInputTextColorOpacity ?? 100
+                                }
+                                onChange={(event) =>
+                                  updateTemplateTheme({
+                                    scoreInputTextColorOpacity:
+                                      Number(event.target.value) || 0,
+                                  })
+                                }
+                              />
+                            </div>
+                          </div>
+                        </PageantSection>
+
+                        <PageantSection
+                          title="Scoring modal header and buttons"
+                          sectionKey="scoringModal"
+                          isOpen={openPageantSections.scoringModal}
+                          onToggle={handleTogglePageantSection}
+                        >
+                          <div className="grid gap-3 sm:grid-cols-4">
+                            <div className="space-y-1">
+                              <div className="text-slate-500">Header background</div>
+                              <input
+                                type="color"
+                                className="h-8 w-full cursor-pointer rounded-full border border-[#D0D7E2] bg-white px-2"
+                                value={templateTheme.modalHeaderBg ?? "#f8fafc"}
+                                onChange={(event) =>
+                                  updateTemplateTheme({
+                                    modalHeaderBg: event.target.value,
+                                  })
+                                }
+                              />
+                              <div className="text-[9px] text-slate-400">Opacity (%)</div>
+                              <input
+                                type="range"
+                                min={0}
+                                max={100}
+                                className="w-full cursor-pointer"
+                                value={templateTheme.modalHeaderBgOpacity ?? 100}
+                                onChange={(event) =>
+                                  updateTemplateTheme({
+                                    modalHeaderBgOpacity:
+                                      Number(event.target.value) || 0,
+                                  })
+                                }
+                              />
+                            </div>
+                            <div className="space-y-1">
+                              <div className="text-slate-500">Header main text color</div>
+                              <input
+                                type="color"
+                                className="h-8 w-full cursor-pointer rounded-full border border-[#D0D7E2] bg-white px-2"
+                                value={templateTheme.modalHeaderPrimaryTextColor ?? "#0f172a"}
+                                onChange={(event) =>
+                                  updateTemplateTheme({
+                                    modalHeaderPrimaryTextColor: event.target.value,
+                                  })
+                                }
+                              />
+                              <div className="text-[9px] text-slate-400">Opacity (%)</div>
+                              <input
+                                type="range"
+                                min={0}
+                                max={100}
+                                className="w-full cursor-pointer"
+                                value={
+                                  templateTheme.modalHeaderPrimaryTextColorOpacity ?? 100
+                                }
+                                onChange={(event) =>
+                                  updateTemplateTheme({
+                                    modalHeaderPrimaryTextColorOpacity:
+                                      Number(event.target.value) || 0,
+                                  })
+                                }
+                              />
+                            </div>
+                            <div className="space-y-1">
+                              <div className="text-slate-500">
+                                Header label text color
+                              </div>
+                              <input
+                                type="color"
+                                className="h-8 w-full cursor-pointer rounded-full border border-[#D0D7E2] bg-white px-2"
+                                value={
+                                  templateTheme.modalHeaderSecondaryTextColor ??
+                                  "#64748b"
+                                }
+                                onChange={(event) =>
+                                  updateTemplateTheme({
+                                    modalHeaderSecondaryTextColor: event.target.value,
+                                  })
+                                }
+                              />
+                              <div className="text-[9px] text-slate-400">Opacity (%)</div>
+                              <input
+                                type="range"
+                                min={0}
+                                max={100}
+                                className="w-full cursor-pointer"
+                                value={
+                                  templateTheme.modalHeaderSecondaryTextColorOpacity ??
+                                  100
+                                }
+                                onChange={(event) =>
+                                  updateTemplateTheme({
+                                    modalHeaderSecondaryTextColorOpacity:
+                                      Number(event.target.value) || 0,
+                                  })
+                                }
+                              />
+                            </div>
+                            <div className="space-y-1">
+                              <div className="text-slate-500">
+                                Contestant badge background
+                              </div>
+                              <input
+                                type="color"
+                                className="h-8 w-full cursor-pointer rounded-full border border-[#D0D7E2] bg-white px-2"
+                                value={templateTheme.modalContestantBadgeBg ?? "#ffffff"}
+                                onChange={(event) =>
+                                  updateTemplateTheme({
+                                    modalContestantBadgeBg: event.target.value,
+                                  })
+                                }
+                              />
+                              <div className="text-[9px] text-slate-400">Opacity (%)</div>
+                              <input
+                                type="range"
+                                min={0}
+                                max={100}
+                                className="w-full cursor-pointer"
+                                value={
+                                  templateTheme.modalContestantBadgeBgOpacity ?? 100
+                                }
+                                onChange={(event) =>
+                                  updateTemplateTheme({
+                                    modalContestantBadgeBgOpacity:
+                                      Number(event.target.value) || 0,
+                                  })
+                                }
+                              />
+                            </div>
+                            <div className="space-y-1">
+                              <div className="text-slate-500">
+                                Contestant badge text color
+                              </div>
+                              <input
+                                type="color"
+                                className="h-8 w-full cursor-pointer rounded-full border border-[#D0D7E2] bg-white px-2"
+                                value={
+                                  templateTheme.modalContestantBadgeTextColor ??
+                                  "#14532d"
+                                }
+                                onChange={(event) =>
+                                  updateTemplateTheme({
+                                    modalContestantBadgeTextColor: event.target.value,
+                                  })
+                                }
+                              />
+                              <div className="text-[9px] text-slate-400">Opacity (%)</div>
+                              <input
+                                type="range"
+                                min={0}
+                                max={100}
+                                className="w-full cursor-pointer"
+                                value={
+                                  templateTheme.modalContestantBadgeTextColorOpacity ??
+                                  100
+                                }
+                                onChange={(event) =>
+                                  updateTemplateTheme({
+                                    modalContestantBadgeTextColorOpacity:
+                                      Number(event.target.value) || 0,
+                                  })
+                                }
+                              />
+                            </div>
+                            <div className="space-y-1">
+                              <div className="text-slate-500">
+                                Primary button background
+                              </div>
+                              <input
+                                type="color"
+                                className="h-8 w-full cursor-pointer rounded-full border border-[#D0D7E2] bg-white px-2"
+                                value={templateTheme.modalPrimaryButtonBg ?? "#14532d"}
+                                onChange={(event) =>
+                                  updateTemplateTheme({
+                                    modalPrimaryButtonBg: event.target.value,
+                                  })
+                                }
+                              />
+                              <div className="text-[9px] text-slate-400">Opacity (%)</div>
+                              <input
+                                type="range"
+                                min={0}
+                                max={100}
+                                className="w-full cursor-pointer"
+                                value={
+                                  templateTheme.modalPrimaryButtonBgOpacity ?? 100
+                                }
+                                onChange={(event) =>
+                                  updateTemplateTheme({
+                                    modalPrimaryButtonBgOpacity:
+                                      Number(event.target.value) || 0,
+                                  })
+                                }
+                              />
+                            </div>
+                            <div className="space-y-1">
+                              <div className="text-slate-500">
+                                Primary button text color
+                              </div>
+                              <input
+                                type="color"
+                                className="h-8 w-full cursor-pointer rounded-full border border-[#D0D7E2] bg-white px-2"
+                                value={
+                                  templateTheme.modalPrimaryButtonTextColor ?? "#ffffff"
+                                }
+                                onChange={(event) =>
+                                  updateTemplateTheme({
+                                    modalPrimaryButtonTextColor: event.target.value,
+                                  })
+                                }
+                              />
+                              <div className="text-[9px] text-slate-400">Opacity (%)</div>
+                              <input
+                                type="range"
+                                min={0}
+                                max={100}
+                                className="w-full cursor-pointer"
+                                value={
+                                  templateTheme.modalPrimaryButtonTextColorOpacity ??
+                                  100
+                                }
+                                onChange={(event) =>
+                                  updateTemplateTheme({
+                                    modalPrimaryButtonTextColorOpacity:
+                                      Number(event.target.value) || 0,
+                                  })
+                                }
+                              />
+                            </div>
+                            <div className="space-y-1">
+                              <div className="text-slate-500">
+                                Secondary button background
+                              </div>
+                              <input
+                                type="color"
+                                className="h-8 w-full cursor-pointer rounded-full border border-[#D0D7E2] bg-white px-2"
+                                value={
+                                  templateTheme.modalSecondaryButtonBg ?? "#ffffff"
+                                }
+                                onChange={(event) =>
+                                  updateTemplateTheme({
+                                    modalSecondaryButtonBg: event.target.value,
+                                  })
+                                }
+                              />
+                              <div className="text-[9px] text-slate-400">Opacity (%)</div>
+                              <input
+                                type="range"
+                                min={0}
+                                max={100}
+                                className="w-full cursor-pointer"
+                                value={
+                                  templateTheme.modalSecondaryButtonBgOpacity ?? 100
+                                }
+                                onChange={(event) =>
+                                  updateTemplateTheme({
+                                    modalSecondaryButtonBgOpacity:
+                                      Number(event.target.value) || 0,
+                                  })
+                                }
+                              />
+                            </div>
+                            <div className="space-y-1">
+                              <div className="text-slate-500">
+                                Secondary button text color
+                              </div>
+                              <input
+                                type="color"
+                                className="h-8 w-full cursor-pointer rounded-full border border-[#D0D7E2] bg-white px-2"
+                                value={
+                                  templateTheme.modalSecondaryButtonTextColor ?? "#1f2937"
+                                }
+                                onChange={(event) =>
+                                  updateTemplateTheme({
+                                    modalSecondaryButtonTextColor: event.target.value,
+                                  })
+                                }
+                              />
+                              <div className="text-[9px] text-slate-400">Opacity (%)</div>
+                              <input
+                                type="range"
+                                min={0}
+                                max={100}
+                                className="w-full cursor-pointer"
+                                value={
+                                  templateTheme.modalSecondaryButtonTextColorOpacity ??
+                                  100
+                                }
+                                onChange={(event) =>
+                                  updateTemplateTheme({
+                                    modalSecondaryButtonTextColorOpacity:
+                                      Number(event.target.value) || 0,
+                                  })
+                                }
+                              />
+                            </div>
+                            <div className="space-y-1">
+                              <div className="text-slate-500">Modal body background</div>
+                              <input
+                                type="color"
+                                className="h-8 w-full cursor-pointer rounded-full border border-[#D0D7E2] bg-white px-2"
+                                value={templateTheme.modalBodyBg ?? "#ffffff"}
+                                onChange={(event) =>
+                                  updateTemplateTheme({
+                                    modalBodyBg: event.target.value,
+                                  })
+                                }
+                              />
+                              <div className="text-[9px] text-slate-400">Opacity (%)</div>
+                              <input
+                                type="range"
+                                min={0}
+                                max={100}
+                                className="w-full cursor-pointer"
+                                value={templateTheme.modalBodyBgOpacity ?? 100}
+                                onChange={(event) =>
+                                  updateTemplateTheme({
+                                    modalBodyBgOpacity:
+                                      Number(event.target.value) || 0,
+                                  })
+                                }
+                              />
+                            </div>
+                            <div className="space-y-1">
+                              <div className="text-slate-500">Modal footer background</div>
+                              <input
+                                type="color"
+                                className="h-8 w-full cursor-pointer rounded-full border border-[#D0D7E2] bg-white px-2"
+                                value={templateTheme.modalFooterBg ?? "#ffffff"}
+                                onChange={(event) =>
+                                  updateTemplateTheme({
+                                    modalFooterBg: event.target.value,
+                                  })
+                                }
+                              />
+                              <div className="text-[9px] text-slate-400">Opacity (%)</div>
+                              <input
+                                type="range"
+                                min={0}
+                                max={100}
+                                className="w-full cursor-pointer"
+                                value={templateTheme.modalFooterBgOpacity ?? 100}
+                                onChange={(event) =>
+                                  updateTemplateTheme({
+                                    modalFooterBgOpacity:
+                                      Number(event.target.value) || 0,
+                                  })
+                                }
+                              />
+                            </div>
+                          </div>
+                        </PageantSection>
+                      </div>
+                    )}
+
+                    {(templateError || templateSuccess) && (
+                      <div
+                        className={`mb-2 text-[10px] ${
+                          templateError ? "text-red-500" : "text-emerald-600"
+                        }`}
+                      >
+                        {templateError ?? templateSuccess}
+                      </div>
+                    )}
+
+                    <div className="mb-4 grid gap-3 text-[10px] sm:grid-cols-2">
+                      <div className="rounded-2xl border border-[#E2E8F0] bg-white p-3">
+                        <div className="mb-2 flex items-center justify-between">
+                          <div className="text-[10px] font-medium text-slate-600">
+                            Template name
+                          </div>
+                          <div className="text-[9px] text-slate-400">
+                            Shown only to admins
+                          </div>
+                        </div>
+                        <input
+                          type="text"
+                          value={templateName}
+                          onChange={(event) => setTemplateName(event.target.value)}
+                          placeholder="e.g. Pageant – Imperial Topaz"
+                          className="w-full rounded-full border border-[#D0D7E2] bg-[#F8FAFC] px-3 py-1.5 text-[10px] outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                        />
+                        <div className="mt-2 flex items-center justify-between gap-2">
+                          <div className="text-[9px] text-slate-400">
+                            Save this style to reuse across events and contests.
+                          </div>
+                          <button
+                            type="button"
+                            onClick={handleSaveTemplateToLibrary}
+                            disabled={isSavingTemplateToLibrary}
+                            className="inline-flex items-center rounded-full bg-[#0F172A] px-3 py-1.5 text-[10px] font-medium text-white shadow-sm disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            {isSavingTemplateToLibrary ? "Saving..." : "Save as new template"}
+                          </button>
+                        </div>
+                      </div>
+                      <div className="rounded-2xl border border-[#E2E8F0] bg-white p-3">
+                        <div className="mb-2 flex items-center justify-between">
+                          <div className="text-[10px] font-medium text-slate-600">
+                            Saved templates
+                          </div>
+                          {layoutTemplates.length > 0 && (
+                            <div className="text-[9px] text-slate-400">
+                              Load to edit, apply to use for this contest
+                            </div>
+                          )}
+                        </div>
+                            <div className="max-h-40 space-y-1 overflow-y-auto rounded-xl bg-[#F8FAFC] p-2">
+                          {layoutTemplates.length === 0 ? (
+                            <div className="py-4 text-center text-[9px] text-slate-400">
+                              No templates saved yet.
+                            </div>
+                          ) : (
+                            layoutTemplates.map((template) => {
+                            const isBuiltIn =
+                                template.layout_json.templateKey === "pageant" &&
+                                (template.name === "Pageant \u2013 Default" ||
+                                  template.name === "Platinum Mist" ||
+                                  template.name === "Imperial Topaz" ||
+                                  template.name === "Royal");
+
+                              return (
+                                <div
+                                  key={template.id}
+                                  className="flex items-center justify-between gap-2 rounded-lg bg-white px-2 py-1.5 text-[10px]"
+                                >
+                                  <div className="min-w-0">
+                                    <div className="truncate font-medium text-slate-700">
+                                      {template.name}
+                                    </div>
+                                    <div className="text-[9px] text-slate-400">
+                                      {(template.layout_json.templateKey === "pageant"
+                                        ? "Pageant"
+                                        : "Standard") +
+                                        " \u00b7 " +
+                                        new Date(
+                                          template.created_at,
+                                        ).toLocaleDateString()}
+                                    </div>
+                                  </div>
+                                  <div className="flex flex-shrink-0 items-center gap-1.5">
+                                    {!isBuiltIn && (
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          handleDeleteTemplateFromLibrary(template.id)
+                                        }
+                                        disabled={isDeletingTemplateId === template.id}
+                                        className="rounded-full border border-transparent px-2 py-0.5 text-[9px] text-red-500 hover:border-red-100 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
+                                      >
+                                        {isDeletingTemplateId === template.id
+                                          ? "Deleting..."
+                                          : "Delete"}
+                                      </button>
+                                    )}
+                                    <button
+                                      type="button"
+                                      onClick={() => handleLoadTemplateFromLibrary(template)}
+                                      className="rounded-full border border-[#D0D7E2] px-2 py-0.5 text-[9px] text-slate-700 hover:bg-[#F8FAFC]"
+                                    >
+                                      Load
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleApplyTemplateToContest(template)}
+                                      disabled={
+                                        isSavingTemplate ||
+                                        selectedContestIdForTemplate === null
+                                      }
+                                      className="rounded-full bg-[#1F4D3A] px-2 py-0.5 text-[9px] font-medium text-white shadow-sm disabled:cursor-not-allowed disabled:opacity-60"
+                                    >
+                                      {isSavingTemplate ? "Applying..." : "Apply"}
+                                    </button>
+                                  </div>
+                                </div>
+                              );
+                            })
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="mb-4 space-y-3 text-[10px]">
+                      <div className="flex items-center justify-between">
+                        <div className="text-[10px] font-medium text-slate-600">
+                          Preview
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleSaveTemplate}
+                          disabled={
+                            isSavingTemplate || selectedContestIdForTemplate === null
+                          }
+                          className="rounded-full bg-[#1F4D3A] px-4 py-1.5 text-[11px] font-medium text-white shadow-sm disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {isSavingTemplate ? "Saving..." : "Save template"}
+                        </button>
+                      </div>
+                      <div className="flex justify-center">
+                        <div className="w-full max-w-5xl">
+                          {selectedTemplateKey === "standard" && (
+                            <div className="rounded-2xl border border-[#E2E8F0] bg-[#F8FAFC] p-3">
+                            {selectedContestIdForTemplate === null ? (
+                              <div className="flex h-32 items-center justify-center text-[10px] text-slate-500">
+                                Select a contest to see the standard judge view.
+                              </div>
+                            ) : templatePreviewParticipants.length === 0 ? (
+                              <div className="flex h-32 items-center justify-center text-[10px] text-slate-500">
+                                Add participants to this contest to see them here.
+                              </div>
+                            ) : (
+                              <>
+                                <div className="mb-3 flex items-center justify-between gap-3 border-b border-[#E2E8F0] pb-2">
+                                  <div className="flex items-center gap-2">
+                                    <div className="flex h-10 w-10 items-center justify-center overflow-hidden rounded-full bg-[#E3F2EA] text-[11px] font-semibold text-[#1F4D3A]">
+                                      {templatePreviewParticipants[0].avatar_url ? (
+                                        <img
+                                          src={templatePreviewParticipants[0].avatar_url}
+                                          alt={templatePreviewParticipants[0].full_name}
+                                          className="h-full w-full object-cover"
+                                        />
+                                      ) : (
+                                        participantInitials(
+                                          templatePreviewParticipants[0].full_name,
+                                        )
+                                      )}
+                                    </div>
+                                    <div className="text-[11px] font-semibold text-slate-700">
+                                      Participant: {templatePreviewParticipants[0].full_name}
+                                    </div>
+                                  </div>
+                                  <div className="text-right">
+                                    <div className="text-[9px] uppercase tracking-wide text-slate-500">
+                                      Contest
+                                    </div>
+                                    <div className="text-[11px] font-semibold text-[#1F4D3A]">
+                                      {contests.find(
+                                        (contest) =>
+                                          contest.id === selectedContestIdForTemplate,
+                                      )?.name ?? "Selected contest"}
+                                    </div>
+                                  </div>
+                                </div>
+                                <div className="overflow-hidden rounded-xl border border-[#E2E8F0] bg-white">
+                                  <table className="min-w-full border-collapse text-left text-[11px]">
+                                    <thead
+                                      className="bg-[#F5F7FF] text-[10px] font-semibold uppercase tracking-wide text-[#1F4D3A]"
+                                      style={{
+                                        ...(templateTheme.criteriaHeaderBg
+                                          ? {
+                                              backgroundColor: hexWithOpacity(
+                                                templateTheme.criteriaHeaderBg,
+                                                (templateTheme.criteriaHeaderBgOpacity ??
+                                                  100) /
+                                                  100,
+                                              ),
+                                            }
+                                          : {}),
+                                        ...(templateTheme.criteriaHeaderTextColor
+                                          ? {
+                                              color: hexWithOpacity(
+                                                templateTheme.criteriaHeaderTextColor,
+                                                (templateTheme.criteriaHeaderTextColorOpacity ??
+                                                  100) /
+                                                  100,
+                                              ),
+                                            }
+                                          : {}),
+                                        ...(templateTheme.criteriaHeaderFontSize
+                                          ? {
+                                              fontSize: `${templateTheme.criteriaHeaderFontSize}px`,
+                                            }
+                                          : {}),
+                                        ...(templateTheme.criteriaHeaderFontFamily &&
+                                        templateTheme.criteriaHeaderFontFamily !== "system"
+                                          ? {
+                                              fontFamily:
+                                                templateTheme.criteriaHeaderFontFamily ===
+                                                "sans"
+                                                  ? "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
+                                                  : templateTheme.criteriaHeaderFontFamily ===
+                                                      "serif"
+                                                    ? "Georgia, 'Times New Roman', serif"
+                                                    : templateTheme
+                                                          .criteriaHeaderFontFamily === "mono"
+                                                      ? "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace"
+                                                      : undefined,
+                                            }
+                                          : {}),
+                                      }}
+                                    >
+                                      <tr>
+                                        <th className="px-3 py-2 font-medium">Criteria</th>
+                                        <th className="px-3 py-2 text-right font-medium">
+                                          Score
+                                        </th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {templatePreviewCriteria.length === 0 ? (
+                                        <>
+                                          <tr className="border-t border-[#E2E8F0]">
+                                            <td className="px-3 py-2">Sample criteria</td>
+                                            <td className="px-3 py-2 text-right text-[10px] text-slate-500">
+                                              /20 pts
+                                            </td>
+                                          </tr>
+                                          <tr className="border-t border-[#E2E8F0]">
+                                            <td className="px-3 py-2">Another criteria</td>
+                                            <td className="px-3 py-2 text-right text-[10px] text-slate-500">
+                                              /10 pts
+                                            </td>
+                                          </tr>
+                                        </>
+                                      ) : (
+                                        templatePreviewCriteria.map((criteria) => (
+                                          <tr
+                                            key={criteria.id}
+                                            className="border-t border-[#E2E8F0]"
+                                          >
+                                            <td className="px-3 py-2">{criteria.name}</td>
+                                            <td className="px-3 py-2 text-right text-[10px] text-slate-500">
+                                              /{criteria.percentage} pts
+                                            </td>
+                                          </tr>
+                                        ))
+                                      )}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              </>
+                            )}
+                            </div>
+                          )}
+                          {selectedTemplateKey === "pageant" && (
+                            <div
+                              className="space-y-4 rounded-3xl border border-[#CBD5E1] bg-[#F8FAFC] p-4"
+                              style={
+                                templateTheme.workspaceBg
+                                  ? {
+                                      backgroundColor: hexWithOpacity(
+                                        templateTheme.workspaceBg,
+                                        (templateTheme.workspaceBgOpacity ?? 100) /
+                                          100,
+                                      ),
+                                    }
+                                  : undefined
+                              }
+                            >
+                              {selectedContestIdForTemplate === null ? (
+                                <div className="flex h-40 items-center justify-center text-[10px] text-slate-500">
+                                  Select a contest to see the pageant judge view.
+                                </div>
+                              ) : templatePreviewPageantGroups.length === 0 ? (
+                                <div className="flex h-40 items-center justify-center text-[10px] text-slate-500">
+                                  Add participants and categories to see Female and Male groups.
+                                </div>
+                              ) : (
+                                <div className="space-y-8">
+                                  {templatePreviewPageantGroups.map((group) => {
+                                    const labelLower = group.groupLabel.toLowerCase();
+
+                                  const baseContainerVariant =
+                                    labelLower === "female"
+                                      ? "border-rose-100 bg-rose-50/60"
+                                      : labelLower === "male"
+                                        ? "border-sky-100 bg-sky-50/60"
+                                        : "border-slate-100 bg-white/60";
+
+                                  const baseBadgeVariant =
+                                    labelLower === "female"
+                                      ? "bg-gradient-to-r from-rose-500 to-pink-500 text-white shadow-sm"
+                                      : labelLower === "male"
+                                        ? "bg-gradient-to-r from-sky-500 to-teal-500 text-white shadow-sm"
+                                        : "bg-slate-100 text-slate-700";
+
+                                  const femaleBg = templateTheme.femaleGroupBg;
+                                  const femaleBadgeBg = templateTheme.femaleBadgeBg;
+                                  const maleBg = templateTheme.maleGroupBg;
+                                  const maleBadgeBg = templateTheme.maleBadgeBg;
+                                  const cardBg = templateTheme.cardBg;
+                                  const numberTextColor = templateTheme.numberTextColor;
+                                    const numberFontSize = templateTheme.numberFontSize;
+                                    const numberFontFamily =
+                                      templateTheme.numberFontFamily ?? "system";
+                                  const nameTextColor = templateTheme.nameTextColor;
+                                    const nameFontSize = templateTheme.nameFontSize;
+                                    const nameFontFamily =
+                                      templateTheme.nameFontFamily ?? "system";
+                                    const numberBadgeBg = templateTheme.numberBadgeBg;
+
+                                  const containerStyle =
+                                    labelLower === "female" && femaleBg
+                                      ? {
+                                          backgroundColor: hexWithOpacity(
+                                            femaleBg,
+                                            (templateTheme.femaleGroupBgOpacity ??
+                                              100) / 100,
+                                          ),
+                                        }
+                                      : labelLower === "male" && maleBg
+                                        ? {
+                                            backgroundColor: hexWithOpacity(
+                                              maleBg,
+                                              (templateTheme.maleGroupBgOpacity ??
+                                                100) / 100,
+                                            ),
+                                          }
+                                        : undefined;
+
+                                  const badgeStyle =
+                                    labelLower === "female" && femaleBadgeBg
+                                      ? {
+                                          backgroundColor: hexWithOpacity(
+                                            femaleBadgeBg,
+                                            (templateTheme.femaleBadgeBgOpacity ??
+                                              100) / 100,
+                                          ),
+                                          backgroundImage: "none",
+                                        }
+                                      : labelLower === "male" && maleBadgeBg
+                                        ? {
+                                            backgroundColor: hexWithOpacity(
+                                              maleBadgeBg,
+                                              (templateTheme.maleBadgeBgOpacity ??
+                                                100) / 100,
+                                            ),
+                                            backgroundImage: "none",
+                                          }
+                                        : undefined;
+
+                                    return (
+                                      <div
+                                        key={group.groupLabel || "all"}
+                                        className={`space-y-3 rounded-2xl border p-3 shadow-[0_10px_30px_rgba(15,23,42,0.04)] ${baseContainerVariant}`}
+                                        style={containerStyle}
+                                      >
+                                        {group.groupLabel && (
+                                          <div className="flex items-center justify-center">
+                                            <div
+                                              className={`inline-flex items-center gap-2 rounded-full px-4 py-1 text-[10px] font-semibold ${baseBadgeVariant}`}
+                                              style={badgeStyle}
+                                            >
+                                              <span className="h-1.5 w-1.5 rounded-full bg-white/80" />
+                                              <span>{group.groupLabel}</span>
+                                            </div>
+                                          </div>
+                                        )}
+                                        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
+                                          {group.items.map((participant) => (
+                                            <button
+                                              key={participant.id}
+                                              type="button"
+                                              onClick={() => setTemplateModalParticipant(participant)}
+                                              className="group flex flex-col items-center gap-3 rounded-2xl border border-[#E2E8F0] bg-white/95 p-3 text-[11px] text-slate-700 shadow-[0_8px_22px_rgba(15,23,42,0.06)] transition hover:-translate-y-1 hover:border-[#1F4D3A] hover:shadow-[0_18px_45px_rgba(15,23,42,0.18)]"
+                                              style={
+                                                cardBg
+                                                  ? {
+                                                      backgroundColor: hexWithOpacity(
+                                                        cardBg,
+                                                        (templateTheme.cardBgOpacity ??
+                                                          100) / 100,
+                                                      ),
+                                                    }
+                                                  : undefined
+                                              }
+                                            >
+                                              <div
+                                                className="relative flex aspect-square w-full items-center justify-center overflow-hidden rounded-xl bg-gradient-to-br from-[#E3F2EA] via-white to-[#FDE68A] text-lg font-semibold text-[#1F4D3A]"
+                                                style={
+                                                  cardBg
+                                                    ? {
+                                                        backgroundColor: hexWithOpacity(
+                                                          cardBg,
+                                                          (templateTheme.cardBgOpacity ??
+                                                            100) / 100,
+                                                        ),
+                                                        backgroundImage: "none",
+                                                      }
+                                                    : undefined
+                                                }
+                                              >
+                                                {participant.avatar_url ? (
+                                                  <img
+                                                    src={participant.avatar_url}
+                                                    alt={participant.full_name}
+                                                    className="h-full w-full object-cover transition duration-200 group-hover:scale-105"
+                                                  />
+                                                ) : (
+                                                  participantInitials(participant.full_name)
+                                                )}
+                                                <div
+                                                  className="pointer-events-none absolute left-1.5 top-1.5 inline-flex items-center rounded-full bg-black/40 px-2 py-0.5 text-[9px] font-medium text-white backdrop-blur"
+                                                  style={{
+                                                    backgroundColor: numberBadgeBg
+                                                      ? hexWithOpacity(
+                                                          numberBadgeBg,
+                                                          (templateTheme
+                                                            .numberBadgeBgOpacity ??
+                                                            100) / 100,
+                                                        )
+                                                      : undefined,
+                                                    color: numberTextColor
+                                                      ? hexWithOpacity(
+                                                          numberTextColor,
+                                                          (templateTheme
+                                                            .numberTextColorOpacity ??
+                                                            100) / 100,
+                                                        )
+                                                      : undefined,
+                                                    fontSize: numberFontSize
+                                                      ? `${numberFontSize}px`
+                                                      : undefined,
+                                                    fontFamily:
+                                                      numberFontFamily === "sans"
+                                                        ? "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
+                                                        : numberFontFamily === "serif"
+                                                          ? "Georgia, 'Times New Roman', serif"
+                                                          : numberFontFamily === "mono"
+                                                            ? "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace"
+                                                            : undefined,
+                                                  }}
+                                                >
+                                                  #{participant.contestant_number}
+                                                </div>
+                                              </div>
+                                              <div className="w-full text-center">
+                                                <div
+                                                  className="truncate text-[10px] font-semibold tracking-tight text-slate-800"
+                                                  style={{
+                                                    color: nameTextColor
+                                                      ? hexWithOpacity(
+                                                          nameTextColor,
+                                                          (templateTheme
+                                                            .nameTextColorOpacity ??
+                                                            100) / 100,
+                                                        )
+                                                      : undefined,
+                                                    fontSize: nameFontSize
+                                                      ? `${nameFontSize}px`
+                                                      : undefined,
+                                                    fontFamily:
+                                                      nameFontFamily === "sans"
+                                                        ? "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
+                                                        : nameFontFamily === "serif"
+                                                          ? "Georgia, 'Times New Roman', serif"
+                                                          : nameFontFamily === "mono"
+                                                            ? "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace"
+                                                            : undefined,
+                                                  }}
+                                                >
+                                                  {participant.full_name}
+                                                </div>
+                                              </div>
+                                            </button>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                                  </div>
+                </div>
+              )}
             </div>
+            {templateModalParticipant && (
+              <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 px-4">
+                <div
+                  className="flex w-full max-w-3xl max-h-[calc(100vh-3rem)] flex-col overflow-hidden rounded-3xl border border-[#E2E8F0] bg-white shadow-2xl"
+                  style={
+                    templateTheme.modalBodyBg
+                      ? {
+                          backgroundColor: hexWithOpacity(
+                            templateTheme.modalBodyBg,
+                            (templateTheme.modalBodyBgOpacity ?? 100) / 100,
+                          ),
+                        }
+                      : undefined
+                  }
+                >
+                  <div
+                    className="flex items-center justify-between gap-4 border-b border-[#E2E8F0] bg-[#F8FAFC] px-6 py-4"
+                    style={
+                      templateTheme.modalHeaderBg
+                        ? {
+                            backgroundColor: hexWithOpacity(
+                              templateTheme.modalHeaderBg,
+                              (templateTheme.modalHeaderBgOpacity ?? 100) / 100,
+                            ),
+                          }
+                        : undefined
+                    }
+                  >
+                    <div className="flex items-center gap-3 md:gap-4">
+                      <div className="flex h-20 w-20 items-center justify-center overflow-hidden rounded-full bg-[#E2F3EC] text-lg font-semibold text-[#1F4D3A] shadow-sm md:h-24 md:w-24 md:text-xl">
+                        {templateModalParticipant.avatar_url ? (
+                          <img
+                            src={templateModalParticipant.avatar_url}
+                            alt={templateModalParticipant.full_name}
+                            className="h-full w-full object-cover"
+                          />
+                        ) : (
+                          participantInitials(templateModalParticipant.full_name)
+                        )}
+                      </div>
+                      <div className="flex flex-col gap-1 text-sm font-semibold text-slate-800 md:text-base">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span
+                            className="text-[11px] font-medium uppercase tracking-wide text-slate-400"
+                            style={
+                              templateTheme.modalHeaderSecondaryTextColor
+                                ? {
+                                    color: hexWithOpacity(
+                                      templateTheme.modalHeaderSecondaryTextColor,
+                                      (templateTheme
+                                        .modalHeaderSecondaryTextColorOpacity ?? 100) /
+                                        100,
+                                    ),
+                                  }
+                                : undefined
+                            }
+                          >
+                            Participant
+                          </span>
+                          <span
+                            className="text-sm md:text-base"
+                            style={
+                              templateTheme.modalHeaderPrimaryTextColor
+                                ? {
+                                    color: hexWithOpacity(
+                                      templateTheme.modalHeaderPrimaryTextColor,
+                                      (templateTheme
+                                        .modalHeaderPrimaryTextColorOpacity ?? 100) /
+                                        100,
+                                    ),
+                                  }
+                                : undefined
+                            }
+                          >
+                            {templateModalParticipant.full_name}
+                          </span>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2 text-xs font-normal md:text-sm text-slate-500">
+                          <span
+                            style={
+                              templateTheme.modalHeaderSecondaryTextColor
+                                ? {
+                                    color: hexWithOpacity(
+                                      templateTheme.modalHeaderSecondaryTextColor,
+                                      (templateTheme
+                                        .modalHeaderSecondaryTextColorOpacity ?? 100) /
+                                        100,
+                                    ),
+                                  }
+                                : undefined
+                            }
+                          >
+                            Contest:
+                          </span>
+                          <span
+                            style={
+                              templateTheme.modalHeaderPrimaryTextColor
+                                ? {
+                                    color: hexWithOpacity(
+                                      templateTheme.modalHeaderPrimaryTextColor,
+                                      (templateTheme
+                                        .modalHeaderPrimaryTextColorOpacity ?? 100) /
+                                        100,
+                                    ),
+                                  }
+                                : undefined
+                            }
+                          >
+                            Pageant
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-4">
+                      <div className="text-right text-xs text-slate-500 md:text-sm">
+                        <div
+                          className="text-[10px] font-semibold uppercase tracking-wide text-slate-400"
+                          style={
+                            templateTheme.modalHeaderSecondaryTextColor
+                              ? {
+                                  color: hexWithOpacity(
+                                    templateTheme.modalHeaderSecondaryTextColor,
+                                    (templateTheme
+                                      .modalHeaderSecondaryTextColorOpacity ?? 100) /
+                                      100,
+                                  ),
+                                }
+                              : undefined
+                          }
+                        >
+                          Contestant No.
+                        </div>
+                        <div
+                          className="mt-1 inline-flex items-center justify-center rounded-full bg-white px-4 py-1 text-lg font-semibold tracking-[0.16em] shadow-sm md:text-2xl"
+                          style={{
+                            ...(templateTheme.modalContestantBadgeBg
+                              ? {
+                                  backgroundColor: hexWithOpacity(
+                                    templateTheme.modalContestantBadgeBg,
+                                    (templateTheme
+                                      .modalContestantBadgeBgOpacity ?? 100) / 100,
+                                  ),
+                                }
+                              : {}),
+                            ...(templateTheme.modalContestantBadgeTextColor
+                              ? {
+                                  color: hexWithOpacity(
+                                    templateTheme.modalContestantBadgeTextColor,
+                                    (templateTheme
+                                      .modalContestantBadgeTextColorOpacity ?? 100) /
+                                      100,
+                                  ),
+                                }
+                              : {}),
+                          }}
+                        >
+                          {templateModalParticipant.contestant_number}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setTemplateModalParticipant(null)}
+                        className="ml-2 rounded-full border border-[#E2E8F0] px-3 py-1.5 text-[11px] shadow-sm"
+                        style={{
+                          ...(templateTheme.modalSecondaryButtonBg
+                            ? {
+                                backgroundColor: hexWithOpacity(
+                                  templateTheme.modalSecondaryButtonBg,
+                                  (templateTheme.modalSecondaryButtonBgOpacity ??
+                                    100) / 100,
+                                ),
+                              }
+                            : { backgroundColor: "#ffffff" }),
+                          ...(templateTheme.modalSecondaryButtonTextColor
+                            ? {
+                                color: hexWithOpacity(
+                                  templateTheme.modalSecondaryButtonTextColor,
+                                  (templateTheme
+                                    .modalSecondaryButtonTextColorOpacity ?? 100) /
+                                    100,
+                                ),
+                              }
+                            : { color: "#475569" }),
+                        }}
+                      >
+                        Close
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="flex-1 overflow-y-auto px-6 pb-5 pt-4">
+                    <div
+                      className="overflow-hidden rounded-2xl border border-[#E2E8F0] bg-white"
+                      style={
+                        templateTheme.scoringTableBg
+                          ? {
+                              backgroundColor: hexWithOpacity(
+                                templateTheme.scoringTableBg,
+                                (templateTheme.scoringTableBgOpacity ?? 100) / 100,
+                              ),
+                            }
+                          : undefined
+                      }
+                    >
+                      <table className="min-w-full border-collapse text-left text-sm text-slate-800">
+                        <thead
+                          className="bg-[#F5F7FF] text-xs font-semibold uppercase tracking-wide text-slate-500 md:text-sm"
+                          style={{
+                            ...(templateTheme.criteriaHeaderBg
+                              ? {
+                                  backgroundColor: hexWithOpacity(
+                                    templateTheme.criteriaHeaderBg,
+                                    (templateTheme.criteriaHeaderBgOpacity ?? 100) / 100,
+                                  ),
+                                }
+                              : {}),
+                            ...(templateTheme.criteriaHeaderTextColor
+                              ? {
+                                  color: hexWithOpacity(
+                                    templateTheme.criteriaHeaderTextColor,
+                                    (templateTheme.criteriaHeaderTextColorOpacity ??
+                                      100) /
+                                      100,
+                                  ),
+                                }
+                              : {}),
+                            ...(templateTheme.criteriaHeaderFontSize
+                              ? {
+                                  fontSize: `${templateTheme.criteriaHeaderFontSize}px`,
+                                }
+                              : {}),
+                            ...(templateTheme.criteriaHeaderFontFamily &&
+                            templateTheme.criteriaHeaderFontFamily !== "system"
+                              ? {
+                                  fontFamily:
+                                    templateTheme.criteriaHeaderFontFamily === "sans"
+                                      ? "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
+                                      : templateTheme.criteriaHeaderFontFamily === "serif"
+                                        ? "Georgia, 'Times New Roman', serif"
+                                        : templateTheme.criteriaHeaderFontFamily === "mono"
+                                          ? "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace"
+                                          : undefined,
+                                }
+                              : {}),
+                          }}
+                        >
+                          <tr>
+                            <th className="px-4 py-3 font-medium">Criteria</th>
+                            <th className="px-4 py-3 text-right font-medium">Score</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {templatePreviewCriteria.length === 0 ? (
+                            <>
+                              <tr className="border-t border-[#E2E8F0]">
+                                <td className="px-4 py-3 align-middle">
+                                  <div
+                                    className="text-sm text-slate-800"
+                                    style={{
+                                      ...(templateTheme.criteriaTextColor
+                                        ? {
+                                            color: hexWithOpacity(
+                                              templateTheme.criteriaTextColor,
+                                              (templateTheme.criteriaTextColorOpacity ??
+                                                100) /
+                                                100,
+                                            ),
+                                          }
+                                        : {}),
+                                      ...(templateTheme.criteriaTextFontSize
+                                        ? {
+                                            fontSize: `${templateTheme.criteriaTextFontSize}px`,
+                                          }
+                                        : {}),
+                                      ...(templateTheme.criteriaTextFontFamily &&
+                                      templateTheme.criteriaTextFontFamily !== "system"
+                                        ? {
+                                            fontFamily:
+                                              templateTheme.criteriaTextFontFamily ===
+                                              "sans"
+                                                ? "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
+                                                : templateTheme.criteriaTextFontFamily ===
+                                                    "serif"
+                                                  ? "Georgia, 'Times New Roman', serif"
+                                                  : templateTheme.criteriaTextFontFamily ===
+                                                      "mono"
+                                                    ? "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace"
+                                                    : undefined,
+                                          }
+                                        : {}),
+                                    }}
+                                  >
+                                    <div className="font-medium">
+                                      Face
+                                    </div>
+                                    <div className="text-xs text-slate-500">
+                                      20 pts
+                                    </div>
+                                  </div>
+                                </td>
+                                <td className="px-4 py-3 align-middle">
+                                  <div className="flex items-center justify-end gap-2">
+                                    <div
+                                      className="w-28 rounded-lg border border-[#CBD5E1] bg-white px-3 py-2 text-sm text-slate-400"
+                                      style={{
+                                        ...(templateTheme.scoreInputBg
+                                          ? {
+                                              backgroundColor: hexWithOpacity(
+                                                templateTheme.scoreInputBg,
+                                                (templateTheme.scoreInputBgOpacity ??
+                                                  100) / 100,
+                                              ),
+                                            }
+                                          : {}),
+                                        ...(templateTheme.scoreInputBorderColor
+                                          ? {
+                                              borderColor: hexWithOpacity(
+                                                templateTheme.scoreInputBorderColor,
+                                                (templateTheme
+                                                  .scoreInputBorderColorOpacity ??
+                                                  100) / 100,
+                                              ),
+                                            }
+                                          : {}),
+                                        ...(templateTheme.scoreInputTextColor
+                                          ? {
+                                              color: hexWithOpacity(
+                                                templateTheme.scoreInputTextColor,
+                                                (templateTheme
+                                                  .scoreInputTextColorOpacity ?? 100) /
+                                                  100,
+                                              ),
+                                            }
+                                          : {}),
+                                      }}
+                                    >
+                                      —
+                                    </div>
+                                    <span className="text-xs text-slate-400">
+                                      /20
+                                    </span>
+                                  </div>
+                                </td>
+                              </tr>
+                              <tr className="border-t border-[#E2E8F0]">
+                                <td className="px-4 py-3 align-middle">
+                                  <div
+                                    className="text-sm text-slate-800"
+                                    style={{
+                                      ...(templateTheme.criteriaTextColor
+                                        ? {
+                                            color: hexWithOpacity(
+                                              templateTheme.criteriaTextColor,
+                                              (templateTheme.criteriaTextColorOpacity ??
+                                                100) /
+                                                100,
+                                            ),
+                                          }
+                                        : {}),
+                                      ...(templateTheme.criteriaTextFontSize
+                                        ? {
+                                            fontSize: `${templateTheme.criteriaTextFontSize}px`,
+                                          }
+                                        : {}),
+                                      ...(templateTheme.criteriaTextFontFamily &&
+                                      templateTheme.criteriaTextFontFamily !== "system"
+                                        ? {
+                                            fontFamily:
+                                              templateTheme.criteriaTextFontFamily ===
+                                              "sans"
+                                                ? "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
+                                                : templateTheme.criteriaTextFontFamily ===
+                                                    "serif"
+                                                  ? "Georgia, 'Times New Roman', serif"
+                                                  : templateTheme.criteriaTextFontFamily ===
+                                                      "mono"
+                                                    ? "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace"
+                                                    : undefined,
+                                          }
+                                        : {}),
+                                    }}
+                                  >
+                                    <div className="font-medium">
+                                      Body
+                                    </div>
+                                    <div className="text-xs text-slate-500">
+                                      20 pts
+                                    </div>
+                                  </div>
+                                </td>
+                                <td className="px-4 py-3 align-middle">
+                                  <div className="flex items-center justify-end gap-2">
+                                    <div
+                                      className="w-28 rounded-lg border border-[#CBD5E1] bg-white px-3 py-2 text-sm text-slate-400"
+                                      style={{
+                                        ...(templateTheme.scoreInputBg
+                                          ? {
+                                              backgroundColor: hexWithOpacity(
+                                                templateTheme.scoreInputBg,
+                                                (templateTheme.scoreInputBgOpacity ??
+                                                  100) / 100,
+                                              ),
+                                            }
+                                          : {}),
+                                        ...(templateTheme.scoreInputBorderColor
+                                          ? {
+                                              borderColor: hexWithOpacity(
+                                                templateTheme.scoreInputBorderColor,
+                                                (templateTheme
+                                                  .scoreInputBorderColorOpacity ??
+                                                  100) / 100,
+                                              ),
+                                            }
+                                          : {}),
+                                        ...(templateTheme.scoreInputTextColor
+                                          ? {
+                                              color: hexWithOpacity(
+                                                templateTheme.scoreInputTextColor,
+                                                (templateTheme
+                                                  .scoreInputTextColorOpacity ?? 100) /
+                                                  100,
+                                              ),
+                                            }
+                                          : {}),
+                                      }}
+                                    >
+                                      —
+                                    </div>
+                                    <span className="text-xs text-slate-400">
+                                      /20
+                                    </span>
+                                  </div>
+                                </td>
+                              </tr>
+                            </>
+                          ) : (
+                            templatePreviewCriteria.map((criteria, index) => {
+                              const previous =
+                                index > 0 ? templatePreviewCriteria[index - 1] : null;
+                              const currentCategory = (criteria.category ?? "").trim();
+                              const previousCategory = previous
+                                ? (previous.category ?? "").trim()
+                                : null;
+                              const showHeader =
+                                index === 0 || currentCategory !== previousCategory;
+                              return [
+                                showHeader && (
+                                  <tr
+                                    key={"header-" + (currentCategory || "uncategorized")}
+                                    className="bg-[#F9FAFB]"
+                                    style={
+                                      templateTheme.scoringCategoryRowBg
+                                        ? {
+                                            backgroundColor: hexWithOpacity(
+                                              templateTheme.scoringCategoryRowBg,
+                                              (templateTheme
+                                                .scoringCategoryRowBgOpacity ?? 100) /
+                                                100,
+                                            ),
+                                          }
+                                        : undefined
+                                    }
+                                  >
+                                    <td
+                                      colSpan={2}
+                                      className="px-4 py-2 text-xs font-semibold uppercase tracking-wide text-slate-500 md:text-sm"
+                                    >
+                                      {currentCategory || "\u00A0"}
+                                    </td>
+                                  </tr>
+                                ),
+                                <tr
+                                  key={criteria.id}
+                                  className="border-t border-[#E2E8F0] hover:bg-[#F8FAFC]"
+                                >
+                                <td className="px-4 py-3 align-middle">
+                                  <div
+                                    className="text-sm text-slate-800"
+                                    style={{
+                                      ...(templateTheme.criteriaTextColor
+                                        ? {
+                                            color: hexWithOpacity(
+                                              templateTheme.criteriaTextColor,
+                                              (templateTheme.criteriaTextColorOpacity ??
+                                                100) /
+                                                100,
+                                            ),
+                                          }
+                                        : {}),
+                                      ...(templateTheme.criteriaTextFontSize
+                                        ? {
+                                            fontSize: `${templateTheme.criteriaTextFontSize}px`,
+                                          }
+                                        : {}),
+                                      ...(templateTheme.criteriaTextFontFamily &&
+                                      templateTheme.criteriaTextFontFamily !== "system"
+                                        ? {
+                                            fontFamily:
+                                              templateTheme.criteriaTextFontFamily ===
+                                              "sans"
+                                                ? "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
+                                                : templateTheme.criteriaTextFontFamily ===
+                                                    "serif"
+                                                  ? "Georgia, 'Times New Roman', serif"
+                                                  : templateTheme.criteriaTextFontFamily ===
+                                                      "mono"
+                                                    ? "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace"
+                                                    : undefined,
+                                          }
+                                        : {}),
+                                    }}
+                                  >
+                                    <div className="font-medium">
+                                      {criteria.name}
+                                    </div>
+                                    <div className="text-xs text-slate-500">
+                                      {criteria.percentage} pts
+                                    </div>
+                                  </div>
+                                </td>
+                                <td className="px-4 py-3 align-middle">
+                                  <div className="flex items-center justify-end gap-2">
+                                    <div
+                                      className="w-28 rounded-lg border border-[#CBD5E1] bg-white px-3 py-2 text-sm text-slate-400"
+                                      style={{
+                                        ...(templateTheme.scoreInputBg
+                                          ? {
+                                              backgroundColor: hexWithOpacity(
+                                                templateTheme.scoreInputBg,
+                                                (templateTheme.scoreInputBgOpacity ??
+                                                  100) / 100,
+                                              ),
+                                            }
+                                          : {}),
+                                        ...(templateTheme.scoreInputBorderColor
+                                          ? {
+                                              borderColor: hexWithOpacity(
+                                                templateTheme.scoreInputBorderColor,
+                                                (templateTheme
+                                                  .scoreInputBorderColorOpacity ??
+                                                  100) / 100,
+                                              ),
+                                            }
+                                          : {}),
+                                        ...(templateTheme.scoreInputTextColor
+                                          ? {
+                                              color: hexWithOpacity(
+                                                templateTheme.scoreInputTextColor,
+                                                (templateTheme
+                                                  .scoreInputTextColorOpacity ?? 100) /
+                                                  100,
+                                              ),
+                                            }
+                                          : {}),
+                                      }}
+                                    >
+                                      —
+                                    </div>
+                                    <span className="text-xs text-slate-400">
+                                      /
+                                      {criteria.percentage}
+                                    </span>
+                                  </div>
+                                </td>
+                              </tr>,
+                              ];
+                          })
+                          )}
+                        </tbody>
+                        <tfoot
+                          className="bg-[#F5F7FF]"
+                          style={
+                            templateTheme.scoringTotalRowBg
+                              ? {
+                                  backgroundColor: hexWithOpacity(
+                                    templateTheme.scoringTotalRowBg,
+                                    (templateTheme.scoringTotalRowBgOpacity ?? 100) /
+                                      100,
+                                  ),
+                                }
+                              : undefined
+                          }
+                        >
+                          <tr>
+                            <td
+                              className="px-4 py-3 text-right text-sm font-semibold text-slate-700"
+                              style={
+                                templateTheme.scoringTotalRowLabelTextColor
+                                  ? {
+                                      color: hexWithOpacity(
+                                        templateTheme.scoringTotalRowLabelTextColor,
+                                        (templateTheme
+                                          .scoringTotalRowLabelTextColorOpacity ??
+                                          100) / 100,
+                                      ),
+                                    }
+                                  : undefined
+                              }
+                            >
+                              Total points
+                            </td>
+                            <td
+                              className="px-4 py-3 text-right text-sm font-semibold text-[#1F4D3A]"
+                              style={
+                                templateTheme.scoringTotalRowScoreTextColor
+                                  ? {
+                                      color: hexWithOpacity(
+                                        templateTheme.scoringTotalRowScoreTextColor,
+                                        (templateTheme
+                                          .scoringTotalRowScoreTextColorOpacity ??
+                                          100) / 100,
+                                      ),
+                                    }
+                                  : undefined
+                              }
+                            >
+                              —
+                            </td>
+                          </tr>
+                        </tfoot>
+                      </table>
+                    </div>
+
+                    <div
+                      className="sticky bottom-0 mt-5 flex items-center justify-end gap-3 bg-white pt-3 pb-4"
+                      style={
+                        templateTheme.modalFooterBg
+                          ? {
+                              backgroundColor: hexWithOpacity(
+                                templateTheme.modalFooterBg,
+                                (templateTheme.modalFooterBgOpacity ?? 100) / 100,
+                              ),
+                            }
+                          : undefined
+                      }
+                    >
+                      <button
+                        type="button"
+                        onClick={() => setTemplateModalParticipant(null)}
+                        className="rounded-full border px-5 py-2 text-sm font-medium"
+                        style={{
+                          ...(templateTheme.modalSecondaryButtonBg
+                            ? {
+                                backgroundColor: hexWithOpacity(
+                                  templateTheme.modalSecondaryButtonBg,
+                                  (templateTheme.modalSecondaryButtonBgOpacity ??
+                                    100) / 100,
+                                ),
+                              }
+                            : { backgroundColor: "#ffffff" }),
+                          ...(templateTheme.modalSecondaryButtonTextColor
+                            ? {
+                                color: hexWithOpacity(
+                                  templateTheme.modalSecondaryButtonTextColor,
+                                  (templateTheme
+                                    .modalSecondaryButtonTextColorOpacity ?? 100) /
+                                    100,
+                                ),
+                              }
+                            : { color: "#14532d" }),
+                          borderColor: "#1F4D3A33",
+                        }}
+                      >
+                        Save
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded-full px-5 py-2 text-sm font-medium shadow-sm"
+                        style={{
+                          ...(templateTheme.modalPrimaryButtonBg
+                            ? {
+                                backgroundColor: hexWithOpacity(
+                                  templateTheme.modalPrimaryButtonBg,
+                                  (templateTheme.modalPrimaryButtonBgOpacity ?? 100) /
+                                    100,
+                                ),
+                              }
+                            : { backgroundColor: "#14532d" }),
+                          ...(templateTheme.modalPrimaryButtonTextColor
+                            ? {
+                                color: hexWithOpacity(
+                                  templateTheme.modalPrimaryButtonTextColor,
+                                  (templateTheme
+                                    .modalPrimaryButtonTextColorOpacity ?? 100) /
+                                    100,
+                                ),
+                              }
+                            : { color: "#ffffff" }),
+                        }}
+                      >
+                        Submit all
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
             {isEventModalOpen && (
               <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 px-4">
                 <div className="w-full max-w-md rounded-2xl border border-[#1F4D3A1F] bg-white shadow-xl">
@@ -2731,6 +8469,120 @@ export default function AdminDashboard() {
                         placeholder="Enter contest name"
                       />
                     </div>
+                    <div className="space-y-1">
+                      <div className="text-[10px] text-slate-500">
+                        Scoring system *
+                      </div>
+                      <div className="inline-flex rounded-full bg-[#F1F5F9] p-0.5 text-[11px]">
+                        <button
+                          type="button"
+                          onClick={() => setContestScoringType("percentage")}
+                          className={`flex-1 rounded-full px-3 py-1 text-xs ${
+                            contestScoringType === "percentage"
+                              ? "bg-white text-[#1F4D3A] shadow-sm"
+                              : "text-slate-500"
+                          }`}
+                        >
+                          Percentage
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setContestScoringType("points")}
+                          className={`flex-1 rounded-full px-3 py-1 text-xs ${
+                            contestScoringType === "points"
+                              ? "bg-white text-[#1F4D3A] shadow-sm"
+                              : "text-slate-500"
+                          }`}
+                        >
+                          Points
+                        </button>
+                      </div>
+                      <div className="text-[10px] text-slate-400">
+                        Percentage: scores are 0–100 with weighted criteria.
+                        Points: scores are raw points per criteria.
+                      </div>
+                    </div>
+                    <div className="space-y-1">
+                      <div className="text-[10px] text-slate-500">Divisions (optional)</div>
+                      <div className="flex gap-2">
+                        <input
+                          value={contestCategoryText}
+                          onChange={(event) =>
+                            setContestCategoryText(event.target.value)
+                          }
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter") {
+                              event.preventDefault();
+                              const value = contestCategoryText.trim();
+                              if (!value) {
+                                return;
+                              }
+                              const lower = value.toLowerCase();
+                              const exists = contestDivisionNames.some(
+                                (name) => name.toLowerCase() === lower,
+                              );
+                              if (!exists) {
+                                setContestDivisionNames((previous) => [
+                                  ...previous,
+                                  value,
+                                ]);
+                              }
+                              setContestCategoryText("");
+                            }
+                          }}
+                          className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                          placeholder="Add a division, e.g., Male"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const value = contestCategoryText.trim();
+                            if (!value) {
+                              return;
+                            }
+                            const lower = value.toLowerCase();
+                            const exists = contestDivisionNames.some(
+                              (name) => name.toLowerCase() === lower,
+                            );
+                            if (!exists) {
+                              setContestDivisionNames((previous) => [
+                                ...previous,
+                                value,
+                              ]);
+                            }
+                            setContestCategoryText("");
+                          }}
+                          className="flex h-8 w-8 items-center justify-center rounded-full bg-[#1F4D3A] text-xs font-semibold text-white shadow-sm transition hover:bg-[#163528]"
+                        >
+                          +
+                        </button>
+                      </div>
+                      {contestDivisionNames.length > 0 && (
+                        <div className="flex flex-wrap gap-1.5 pt-1">
+                          {contestDivisionNames.map((name) => (
+                            <button
+                              key={name}
+                              type="button"
+                              onClick={() =>
+                                setContestDivisionNames((previous) =>
+                                  previous.filter((item) => item !== name),
+                                )
+                              }
+                              className="flex items-center gap-1 rounded-full bg-[#F1F5F9] px-2 py-0.5 text-[10px] text-slate-700"
+                            >
+                              <span>{name}</span>
+                              <span className="rounded-full bg-[#E2E8F0] px-1 text-[9px] text-slate-500">
+                                ×
+                              </span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                      <div className="text-[10px] text-slate-400">
+                        Add one division at a time and click +. They appear in
+                        the participant division dropdown.
+                      </div>
+                    </div>
                     {(contestError || contestSuccess) && (
                       <div
                         className={`text-[10px] ${
@@ -2757,7 +8609,13 @@ export default function AdminDashboard() {
                         isSavingContest ? "cursor-not-allowed opacity-70" : ""
                       }`}
                     >
-                      {isSavingContest ? "Creating..." : "Create contest"}
+                      {isSavingContest
+                        ? editingContestId === null
+                          ? "Creating..."
+                          : "Updating..."
+                        : editingContestId === null
+                        ? "Create contest"
+                        : "Update contest"}
                     </button>
                   </div>
                 </div>
@@ -2787,70 +8645,177 @@ export default function AdminDashboard() {
                     </button>
                   </div>
                   <div className="space-y-3 px-5 py-4 text-[11px]">
-                    <div className="space-y-1">
-                      <div className="text-[10px] text-slate-500">
-                        Select contest *
-                      </div>
-                      <select
-                        value={selectedContestIdForCriteria ?? ""}
-                        onChange={(event) => {
-                          const value = event.target.value;
-                          setSelectedContestIdForCriteria(
-                            value ? Number(value) : null,
-                          );
-                        }}
-                        className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
-                      >
-                        <option value="">-- Select Contest --</option>
-                        {contests
-                          .filter(
-                            (contest) =>
-                              activeEventId === null ||
-                              contest.event_id === activeEventId,
-                          )
-                          .map((contest) => (
-                            <option key={contest.id} value={contest.id}>
-                              {contest.name}
-                            </option>
-                          ))}
-                      </select>
-                    </div>
-                    <div className="space-y-1">
-                      <div className="text-[10px] text-slate-500">
-                        Criteria Name *
-                      </div>
-                      <input
-                        value={criteriaName}
-                        onChange={(event) => setCriteriaName(event.target.value)}
-                        className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
-                        placeholder="e.g., Technique, Presentation, etc."
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <div className="text-[10px] text-slate-500">
-                        Weight (%) *
-                      </div>
-                      <input
-                        type="number"
-                        value={criteriaWeight}
-                        onChange={(event) => setCriteriaWeight(event.target.value)}
-                        className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
-                        placeholder="Enter percentage (0-100)"
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <div className="text-[10px] text-slate-500">
-                        Description
-                      </div>
-                      <textarea
-                        value={criteriaDescription}
-                        onChange={(event) =>
-                          setCriteriaDescription(event.target.value)
-                        }
-                        className="min-h-[70px] w-full resize-none rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
-                        placeholder="Enter criteria description"
-                      />
-                    </div>
+                    {editingCriteriaId === null ? (
+                      <>
+                        <div className="space-y-1">
+                          <div className="text-[10px] text-slate-500">
+                            Select contest *
+                          </div>
+                          <select
+                            value={selectedContestIdForCriteria ?? ""}
+                            onChange={(event) => {
+                              const value = event.target.value;
+                              setSelectedContestIdForCriteria(
+                                value ? Number(value) : null,
+                              );
+                            }}
+                            className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                          >
+                            <option value="">-- Select Contest --</option>
+                            {contests
+                              .filter(
+                                (contest) =>
+                                  activeEventId === null ||
+                                  contest.event_id === activeEventId,
+                              )
+                              .map((contest) => (
+                                <option key={contest.id} value={contest.id}>
+                                  {contest.name}
+                                </option>
+                              ))}
+                          </select>
+                        </div>
+                        <div className="space-y-1">
+                          <div className="text-[10px] text-slate-500">
+                            Criteria Category Name *
+                          </div>
+                          <input
+                            value={criteriaCategory}
+                            onChange={(event) =>
+                              setCriteriaCategory(event.target.value)
+                            }
+                            className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                            placeholder="e.g., Beauty"
+                          />
+                        </div>
+                        <div className="flex items-center justify-between pt-1">
+                          <div className="text-[10px] text-slate-500">
+                            Criteria list
+                          </div>
+                          <button
+                            type="button"
+                            onClick={handleAddCriteriaItem}
+                            className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-[#D0D7E2] text-xs font-semibold text-[#1F4D3A] hover:bg-[#F5F7FF]"
+                          >
+                            +
+                          </button>
+                        </div>
+                        {criteriaItems.map((item, index) => (
+                          <div
+                            key={index}
+                            className="grid grid-cols-1 gap-2 sm:grid-cols-2"
+                          >
+                            <div className="space-y-1">
+                              <div className="text-[10px] text-slate-500">
+                                Criteria
+                              </div>
+                              <input
+                                value={item.name}
+                                onChange={(event) =>
+                                  handleChangeCriteriaItem(
+                                    index,
+                                    "name",
+                                    event.target.value,
+                                  )
+                                }
+                                className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                                placeholder="Enter criteria name"
+                              />
+                            </div>
+                            <div className="space-y-1">
+                              <div className="text-[10px] text-slate-500">
+                                Points
+                              </div>
+                              <input
+                                type="number"
+                                value={item.weight}
+                                onChange={(event) =>
+                                  handleChangeCriteriaItem(
+                                    index,
+                                    "weight",
+                                    event.target.value,
+                                  )
+                                }
+                                className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                                placeholder="Enter points (0-100)"
+                              />
+                            </div>
+                          </div>
+                        ))}
+                      </>
+                    ) : (
+                      <>
+                        <div className="space-y-1">
+                          <div className="text-[10px] text-slate-500">
+                            Select contest *
+                          </div>
+                          <select
+                            value={selectedContestIdForCriteria ?? ""}
+                            onChange={(event) => {
+                              const value = event.target.value;
+                              setSelectedContestIdForCriteria(
+                                value ? Number(value) : null,
+                              );
+                            }}
+                            className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                          >
+                            <option value="">-- Select Contest --</option>
+                            {contests
+                              .filter(
+                                (contest) =>
+                                  activeEventId === null ||
+                                  contest.event_id === activeEventId,
+                              )
+                              .map((contest) => (
+                                <option key={contest.id} value={contest.id}>
+                                  {contest.name}
+                                </option>
+                              ))}
+                          </select>
+                        </div>
+                        
+                        <div className="space-y-1">
+                          <div className="text-[10px] text-slate-500">
+                            Criteria Name *
+                          </div>
+                          <input
+                            value={criteriaName}
+                            onChange={(event) =>
+                              setCriteriaName(event.target.value)
+                            }
+                            className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                            placeholder="e.g., Technique, Presentation, etc."
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <div className="text-[10px] text-slate-500">
+                            Points *
+                          </div>
+                          <input
+                            type="number"
+                            value={criteriaWeight}
+                            onChange={(event) =>
+                              setCriteriaWeight(event.target.value)
+                            }
+                            className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                            placeholder="Enter points (0-100)"
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <div className="text-[10px] text-slate-500">
+                            Description
+                          </div>
+                          <textarea
+                            value={criteriaDescription}
+                            onChange={(event) =>
+                              setCriteriaDescription(event.target.value)
+                            }
+                            className="min-h-[70px] w-full resize-none rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                            placeholder="Enter criteria description"
+                          />
+                        </div>
+                      </>
+                    )}
                     {(criteriaError || criteriaSuccess) && (
                       <div
                         className={`text-[10px] ${
@@ -2887,6 +8852,168 @@ export default function AdminDashboard() {
                 </div>
               </div>
             )}
+
+            {isAwardModalOpen && (
+              <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 px-4">
+                <div className="w-full max-w-md rounded-2xl border border-[#1F4D3A1F] bg-white shadow-xl">
+                  <div className="flex items-center justify-between border-b border-[#E2E8F0] px-5 py-3">
+                    <div>
+                      <div className="text-sm font-semibold text-[#1F4D3A]">
+                        {editingAwardId === null ? "Add award" : "Edit award"}
+                      </div>
+                      <div className="text-[11px] text-slate-500">
+                        Configure awards for this event.
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setIsAwardModalOpen(false)}
+                      className="rounded-full bg-[#F1F5F9] px-2 py-1 text-[11px] text-slate-500 hover:bg-[#E2E8F0]"
+                    >
+                      Close
+                    </button>
+                  </div>
+                  <div className="space-y-3 px-5 py-4 text-[11px]">
+                    <div className="space-y-1">
+                      <div className="text-[10px] text-slate-500">
+                        Award name *
+                      </div>
+                      <input
+                        value={awardName}
+                        onChange={(event) => setAwardName(event.target.value)}
+                        className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                        placeholder="e.g., Best in Talent"
+                      />
+                    </div>
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                      <div className="space-y-1">
+                        <div className="text-[10px] text-slate-500">
+                          Award type *
+                        </div>
+                        <select
+                          value={awardType}
+                          onChange={(event) =>
+                            setAwardType(event.target.value as AwardType)
+                          }
+                          className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                        >
+                          <option value="criteria">Criteria-based</option>
+                          <option value="special">Special</option>
+                        </select>
+                      </div>
+                      <div className="space-y-1">
+                        <div className="text-[10px] text-slate-500">
+                          Limit to contest
+                        </div>
+                        <select
+                          value={awardContestId ?? ""}
+                          onChange={(event) => {
+                            const value = event.target.value;
+                            setAwardContestId(
+                              value ? Number.parseInt(value, 10) : null,
+                            );
+                          }}
+                          className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                        >
+                          <option value="">All contests</option>
+                          {contestsForActiveEvent.map((contest) => (
+                            <option key={contest.id} value={contest.id}>
+                              {contest.name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                    {awardType === "criteria" && (
+                      <div className="space-y-1">
+                        <div className="text-[10px] text-slate-500">
+                          Linked criteria *
+                        </div>
+                        <select
+                          value={awardCriteriaId ?? ""}
+                          onChange={(event) => {
+                            const value = event.target.value;
+                            setAwardCriteriaId(
+                              value ? Number.parseInt(value, 10) : null,
+                            );
+                          }}
+                          className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                        >
+                          <option value="">Select criteria</option>
+                          {criteriaForActiveEvent.map((criteria) => (
+                            <option key={criteria.id} value={criteria.id}>
+                              {criteria.name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+                    <div className="space-y-1">
+                      <div className="text-[10px] text-slate-500">
+                        Description
+                      </div>
+                      <textarea
+                        value={awardDescription}
+                        onChange={(event) =>
+                          setAwardDescription(event.target.value)
+                        }
+                        className="min-h-[70px] w-full resize-none rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                        placeholder="Describe this award"
+                      />
+                    </div>
+                    <div className="flex items-center gap-2 pt-1">
+                      <input
+                        id="award-active"
+                        type="checkbox"
+                        checked={awardIsActive}
+                        onChange={(event) =>
+                          setAwardIsActive(event.target.checked)
+                        }
+                        className="h-3 w-3 rounded border-[#D0D7E2] text-[#1F4D3A] focus:ring-[#1F4D3A]"
+                      />
+                      <label
+                        htmlFor="award-active"
+                        className="text-[10px] text-slate-600"
+                      >
+                        Award is active
+                      </label>
+                    </div>
+                    {(awardError || awardSuccess) && (
+                      <div
+                        className={`text-[10px] ${
+                          awardError ? "text-red-500" : "text-emerald-600"
+                        }`}
+                      >
+                        {awardError ?? awardSuccess}
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex items-center justify-end gap-2 border-t border-[#E2E8F0] px-5 py-3">
+                    <button
+                      type="button"
+                      onClick={() => setIsAwardModalOpen(false)}
+                      className="rounded-full border border-[#E2E8F0] px-3 py-1.5 text-[11px] text-slate-600 hover:bg-[#F8FAFC]"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleSaveAward}
+                      disabled={isSavingAward}
+                      className={`rounded-full bg-[#1F4D3A] px-4 py-1.5 text-[11px] font-medium text-white shadow-sm hover:bg-[#163528] ${
+                        isSavingAward ? "cursor-not-allowed opacity-70" : ""
+                      }`}
+                    >
+                      {isSavingAward
+                        ? "Saving..."
+                        : editingAwardId === null
+                        ? "Add award"
+                        : "Update award"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
           </section>
         )}
 
@@ -2898,7 +9025,7 @@ export default function AdminDashboard() {
                   Participants
                 </h2>
                 <p className="text-[11px] text-slate-500">
-                  Add categories and participants for each contest.
+                  Add teams and participants for each contest.
                 </p>
               </div>
             </div>
@@ -2913,7 +9040,7 @@ export default function AdminDashboard() {
                     : "border-transparent bg-[#F5F7FF] text-[#1F4D3A] hover:bg-[#E3F2EA]"
                 }`}
               >
-                Category
+                Team
               </button>
               <button
                 type="button"
@@ -2926,6 +9053,17 @@ export default function AdminDashboard() {
               >
                 Participant
               </button>
+              <button
+                type="button"
+                onClick={() => setParticipantTab("judge")}
+                className={`rounded-full border px-3 py-1.5 transition ${
+                  participantTab === "judge"
+                    ? "border-[#1F4D3A] bg-[#1F4D3A] text-white shadow-sm"
+                    : "border-transparent bg-[#F5F7FF] text-[#1F4D3A] hover:bg-[#E3F2EA]"
+                }`}
+              >
+                Judge
+              </button>
             </div>
 
             <div>
@@ -2933,29 +9071,31 @@ export default function AdminDashboard() {
                 <div className="space-y-4">
                   <div className="flex items-center justify-between">
                     <div className="text-[11px] font-medium text-slate-600">
-                      Categories
+                      Teams
                     </div>
                     <button
                       type="button"
                       onClick={openCreateCategoryModal}
                       className="inline-flex items-center rounded-full bg-[#1F4D3A] px-3 py-1.5 text-[11px] font-medium text-white shadow-sm transition hover:bg-[#163528]"
                     >
-                      Add category
+                      Add team
                     </button>
                   </div>
 
                   <div className="rounded-2xl border border-[#1F4D3A1F] bg-white p-4">
-                    <div className="mb-2 flex items-center justify-between">
-                      <div className="text-[11px] font-medium text-slate-600">
-                        Category list
+                    <div className="mb-3 flex items-center justify-between gap-4">
+                      <div className="space-y-0.5">
+                        <div className="text-[11px] font-medium text-slate-600">
+                          Team list
+                        </div>
+                        <div className="text-[10px] text-slate-400">
+                          {teamsForActiveEvent.length === 0
+                            ? "No teams yet"
+                            : `${teamsForActiveEvent.length} team${
+                                teamsForActiveEvent.length > 1 ? "s" : ""
+                              }`}
+                        </div>
                       </div>
-                      <span className="text-[10px] text-slate-400">
-                        {categories.length === 0
-                          ? "No categories yet"
-                          : `${categories.length} categor${
-                              categories.length > 1 ? "ies" : "y"
-                            }`}
-                      </span>
                     </div>
                     {(categoryError || categorySuccess) && (
                       <div
@@ -2971,43 +9111,41 @@ export default function AdminDashboard() {
                         <thead>
                           <tr className="border-b border-[#E2E8F0] bg-[#F5F7FF] text-[10px] uppercase tracking-wide text-slate-500">
                             <th className="px-3 py-2 font-medium">Event</th>
-                            <th className="px-3 py-2 font-medium">
-                              Category name
-                            </th>
+                            <th className="px-3 py-2 font-medium">Team name</th>
                             <th className="px-3 py-2 font-medium">Actions</th>
                           </tr>
                         </thead>
                         <tbody>
-                          {categories.length === 0 ? (
+                          {teamsForActiveEvent.length === 0 ? (
                             <tr className="border-b border-[#F1F5F9]">
                               <td
                                 className="px-3 py-2 text-slate-400"
                                 colSpan={3}
                               >
-                                Once you add categories, you can edit or delete
-                                them here.
+                                Once you add teams, you can edit or delete them
+                                here.
                               </td>
                             </tr>
                           ) : (
-                            categories.map((category) => (
+                            teamsForActiveEvent.map((team) => (
                               <tr
-                                key={category.id}
+                                key={team.id}
                                 className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC]"
                               >
                                 <td className="px-3 py-2 text-slate-600">
                                   {events.find(
-                                    (event) => event.id === category.event_id,
+                                    (event) => event.id === team.event_id,
                                   )?.name ?? "Unknown event"}
                                 </td>
                                 <td className="px-3 py-2 font-medium text-slate-700">
-                                  {category.name}
+                                  {team.name}
                                 </td>
                                 <td className="px-3 py-2">
                                   <div className="flex gap-1.5 text-[10px] text-slate-500">
                                     <button
                                       type="button"
                                       onClick={() =>
-                                        openEditCategoryModal(category)
+                                        openEditCategoryModal(team)
                                       }
                                       className="rounded-full border border-[#E2E8F0] px-2 py-0.5 text-[10px] hover:bg-[#F8FAFC]"
                                     >
@@ -3016,14 +9154,12 @@ export default function AdminDashboard() {
                                     <button
                                       type="button"
                                       onClick={() =>
-                                        handleDeleteCategory(category.id)
+                                        handleDeleteCategory(team.id)
                                       }
-                                      disabled={
-                                        isDeletingCategoryId === category.id
-                                      }
+                                      disabled={isDeletingCategoryId === team.id}
                                       className="rounded-full border border-[#FEE2E2] px-2 py-0.5 text-[10px] text-red-500 hover:bg-[#FEF2F2] disabled:opacity-60"
                                     >
-                                      {isDeletingCategoryId === category.id
+                                      {isDeletingCategoryId === team.id
                                         ? "Deleting..."
                                         : "Delete"}
                                     </button>
@@ -3060,10 +9196,10 @@ export default function AdminDashboard() {
                         Participant list
                       </div>
                       <span className="text-[10px] text-slate-400">
-                        {participants.length === 0
+                        {participantsForActiveEvent.length === 0
                           ? "No participants yet"
-                          : `${participants.length} participant${
-                              participants.length > 1 ? "s" : ""
+                          : `${participantsForActiveEvent.length} participant${
+                              participantsForActiveEvent.length > 1 ? "s" : ""
                             }`}
                       </span>
                     </div>
@@ -3090,7 +9226,7 @@ export default function AdminDashboard() {
                           </tr>
                         </thead>
                         <tbody>
-                          {participants.length === 0 ? (
+                          {participantsForActiveEvent.length === 0 ? (
                             <tr className="border-b border-[#F1F5F9]">
                               <td
                                 className="px-3 py-2 text-slate-400"
@@ -3101,7 +9237,7 @@ export default function AdminDashboard() {
                               </td>
                             </tr>
                           ) : (
-                            participants.map((participant) => (
+                            participantsForActiveEvent.map((participant) => (
                               <tr
                                 key={participant.id}
                                 className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC]"
@@ -3115,7 +9251,7 @@ export default function AdminDashboard() {
                                 <td className="px-3 py-2 text-slate-600">
                                   {categories.find(
                                     (category) =>
-                                      category.id === participant.group_id,
+                                      category.id === participant.division_id,
                                   )?.name ?? "Unknown category"}
                                 </td>
                                 <td className="px-3 py-2 font-medium text-slate-700">
@@ -3162,6 +9298,544 @@ export default function AdminDashboard() {
                   </div>
                 </div>
               )}
+
+              {participantTab === "judge" && (
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div className="text-[11px] font-medium text-slate-600">
+                      Judge scoring access
+                    </div>
+                  </div>
+
+                  <div className="grid gap-4 md:grid-cols-[minmax(0,1.2fr)_minmax(0,1.5fr)]">
+                    <div className="space-y-3 rounded-2xl border border-[#1F4D3A1F] bg-white p-4">
+                      <div className="space-y-2">
+                        <div className="text-[11px] font-medium text-slate-600">
+                          Select judge
+                        </div>
+                        <MultiSelectDropdown
+                          placeholder="Select judge(s)"
+                          disabled={judgesForActiveEvent.length === 0}
+                          options={judgesForActiveEvent.map((judge) => ({
+                            id: judge.id,
+                            label: judge.full_name,
+                          }))}
+                          selectedIds={selectedJudgeIdsForPermissions}
+                          onChange={(ids) => {
+                            setSelectedJudgeIdsForPermissions(ids);
+                            setJudgePermissionsError(null);
+                            setJudgePermissionsSuccess(null);
+                          }}
+                        />
+                        <div className="text-[10px] text-slate-500">
+                          Leave empty to select all judges.
+                        </div>
+                      </div>
+
+                      <div className="space-y-2">
+                        <div className="text-[11px] font-medium text-slate-600">
+                          Select contest
+                        </div>
+                        <select
+                          value={selectedContestIdForPermissions ?? ""}
+                          onChange={(event) => {
+                            const value = event.target.value;
+                            const parsed = value ? Number(value) : null;
+                            setSelectedContestIdForPermissions(parsed);
+                            setJudgePermissionsError(null);
+                            setJudgePermissionsSuccess(null);
+                          }}
+                          className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                        >
+                          <option value="">Select contest</option>
+                          {contestsForActiveEvent.map((contest) => (
+                            <option key={contest.id} value={contest.id}>
+                              {contest.name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div className="space-y-2">
+                        <div className="text-[11px] font-medium text-slate-600">
+                          Divisions that judge can edit
+                        </div>
+                        <MultiSelectDropdown
+                          placeholder="Select division(s)"
+                          disabled={selectedContestIdForPermissions === null}
+                          options={
+                            selectedContestIdForPermissions === null
+                              ? []
+                              : categories
+                                  .filter((category) =>
+                                    participants.some(
+                                      (participant) =>
+                                        participant.contest_id ===
+                                          selectedContestIdForPermissions &&
+                                        participant.division_id === category.id,
+                                    ),
+                                  )
+                                  .map((category) => ({
+                                    id: category.id,
+                                    label: category.name,
+                                  }))
+                          }
+                          selectedIds={judgeDivisionIds}
+                          onChange={(ids) => {
+                            setJudgeDivisionIds(ids);
+                            setJudgeDivisionMode(
+                              ids.length === 0 ? "all" : "custom",
+                            );
+                          }}
+                        />
+                        <div className="text-[10px] text-slate-500">
+                          Leave empty to allow judge to edit all divisions.
+                        </div>
+                      </div>
+
+                      <div className="space-y-2">
+                        <div className="text-[11px] font-medium text-slate-600">
+                          Participants that judge can edit
+                        </div>
+                        <MultiSelectDropdown
+                          placeholder="Select participant(s)"
+                          disabled={selectedContestIdForPermissions === null}
+                          options={
+                            selectedContestIdForPermissions === null
+                              ? []
+                              : participants
+                                  .filter(
+                                    (participant) =>
+                                      participant.contest_id ===
+                                      selectedContestIdForPermissions,
+                                  )
+                                  .map((participant) => ({
+                                    id: participant.id,
+                                    label: participant.full_name,
+                                  }))
+                          }
+                          selectedIds={judgeParticipantIds}
+                          onChange={(ids) => {
+                            setJudgeParticipantIds(ids);
+                            setJudgeParticipantMode(
+                              ids.length === 0 ? "all" : "custom",
+                            );
+                          }}
+                        />
+                        <div className="text-[10px] text-slate-500">
+                          Leave empty to allow judge to edit all participants.
+                        </div>
+                      </div>
+
+                      <div className="space-y-2">
+                        <div className="text-[11px] font-medium text-slate-600">
+                          Access mode
+                        </div>
+                        <div className="space-y-1 text-[11px] text-slate-600">
+                          <label className="flex items-center gap-2">
+                            <input
+                              type="radio"
+                              className="h-3 w-3"
+                              checked={judgePermissionsMode === "all"}
+                              onChange={() => setJudgePermissionsMode("all")}
+                            />
+                            <span>Allow judge to edit all criteria</span>
+                          </label>
+                          <label className="flex items-center gap-2">
+                            <input
+                              type="radio"
+                              className="h-3 w-3"
+                              checked={judgePermissionsMode === "none"}
+                              onChange={() => setJudgePermissionsMode("none")}
+                            />
+                            <span>Do not allow judge to edit any criteria</span>
+                          </label>
+                          <label className="flex items-center gap-2">
+                            <input
+                              type="radio"
+                              className="h-3 w-3"
+                              checked={judgePermissionsMode === "custom"}
+                              onChange={() => setJudgePermissionsMode("custom")}
+                            />
+                            <span>
+                              Allow judge to edit only selected criteria
+                            </span>
+                          </label>
+                        </div>
+                      </div>
+
+                      {(judgePermissionsError || judgePermissionsSuccess) && (
+                        <div
+                          className={`text-[10px] ${
+                            judgePermissionsError
+                              ? "text-red-500"
+                              : "text-emerald-600"
+                          }`}
+                        >
+                          {judgePermissionsError ?? judgePermissionsSuccess}
+                        </div>
+                      )}
+
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          if (
+                            selectedContestIdForPermissions === null
+                          ) {
+                            setJudgePermissionsError(
+                              "Select a contest first.",
+                            );
+                            setJudgePermissionsSuccess(null);
+                            return;
+                          }
+
+                          setIsSavingJudgePermissions(true);
+                          setJudgePermissionsError(null);
+                          setJudgePermissionsSuccess(null);
+
+                          const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+                          const supabaseAnonKey =
+                            process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+                          if (!supabaseUrl || !supabaseAnonKey) {
+                            setJudgePermissionsError(
+                              "Supabase configuration is missing.",
+                            );
+                            setIsSavingJudgePermissions(false);
+                            return;
+                          }
+
+                          const supabase = createClient(
+                            supabaseUrl,
+                            supabaseAnonKey,
+                          );
+
+                          const judgeIds =
+                            selectedJudgeIdsForPermissions.length === 0
+                              ? judgesForActiveEvent.map((judge) => judge.id)
+                              : selectedJudgeIdsForPermissions;
+
+                          if (judgeIds.length === 0) {
+                            setJudgePermissionsError(
+                              "There are no judges for this event.",
+                            );
+                            setIsSavingJudgePermissions(false);
+                            return;
+                          }
+
+                          const { error: deleteScoringError } = await supabase
+                            .from("judge_scoring_permission")
+                            .delete()
+                            .in("judge_id", judgeIds)
+                            .eq("contest_id", selectedContestIdForPermissions);
+
+                          if (deleteScoringError) {
+                            setJudgePermissionsError(
+                              deleteScoringError.message ||
+                                "Unable to update judge permissions.",
+                            );
+                            setIsSavingJudgePermissions(false);
+                            return;
+                          }
+
+                          const scoringInserts: {
+                            judge_id: number;
+                            contest_id: number;
+                            criteria_id: number | null;
+                            can_edit: boolean;
+                          }[] = [];
+
+                          if (judgePermissionsMode === "all") {
+                            judgeIds.forEach((judgeId) => {
+                              scoringInserts.push({
+                                judge_id: judgeId,
+                                contest_id: selectedContestIdForPermissions,
+                                criteria_id: null,
+                                can_edit: true,
+                              });
+                            });
+                          } else if (judgePermissionsMode === "none") {
+                            judgeIds.forEach((judgeId) => {
+                              scoringInserts.push({
+                                judge_id: judgeId,
+                                contest_id: selectedContestIdForPermissions,
+                                criteria_id: null,
+                                can_edit: false,
+                              });
+                            });
+                          } else if (judgePermissionsMode === "custom") {
+                            judgePermissionsCriteriaIds.forEach((criteriaId) => {
+                              judgeIds.forEach((judgeId) => {
+                                scoringInserts.push({
+                                  judge_id: judgeId,
+                                  contest_id: selectedContestIdForPermissions,
+                                  criteria_id: criteriaId,
+                                  can_edit: true,
+                                });
+                              });
+                            });
+                          }
+
+                          if (scoringInserts.length > 0) {
+                            const { data, error } = await supabase
+                              .from("judge_scoring_permission")
+                              .insert(scoringInserts)
+                              .select(
+                                "judge_id, contest_id, criteria_id, can_edit, created_at",
+                              );
+
+                            if (error) {
+                              setJudgePermissionsError(
+                                error.message ||
+                                  "Unable to update judge permissions.",
+                              );
+                              setIsSavingJudgePermissions(false);
+                              return;
+                            }
+
+                            if (data && Array.isArray(data)) {
+                              setJudgeScoringPermissions((previous) => [
+                                ...previous.filter(
+                                  (permission) =>
+                                    !(
+                                      judgeIds.includes(permission.judge_id) &&
+                                      permission.contest_id ===
+                                        selectedContestIdForPermissions
+                                    ),
+                                ),
+                                ...(data as JudgeScoringPermissionRow[]),
+                              ]);
+                            }
+                          } else {
+                            setJudgeScoringPermissions((previous) =>
+                              previous.filter(
+                                (permission) =>
+                                  !(
+                                    judgeIds.includes(permission.judge_id) &&
+                                    permission.contest_id ===
+                                      selectedContestIdForPermissions
+                                  ),
+                              ),
+                            );
+                          }
+
+                          const { error: deleteDivisionError } = await supabase
+                            .from("judge_division_permission")
+                            .delete()
+                            .in("judge_id", judgeIds)
+                            .eq("contest_id", selectedContestIdForPermissions);
+
+                          if (deleteDivisionError) {
+                            setJudgePermissionsError(
+                              deleteDivisionError.message ||
+                                "Unable to update judge division access.",
+                            );
+                            setIsSavingJudgePermissions(false);
+                            return;
+                          }
+
+                          if (
+                            judgeDivisionMode === "custom" &&
+                            judgeDivisionIds.length > 0
+                          ) {
+                            const { error: insertDivisionError } = await supabase
+                              .from("judge_division_permission")
+                              .insert(
+                                judgeDivisionIds.flatMap((divisionId) =>
+                                  judgeIds.map((judgeId) => ({
+                                    judge_id: judgeId,
+                                    contest_id: selectedContestIdForPermissions,
+                                    division_id: divisionId,
+                                  })),
+                                ),
+                              );
+
+                            if (insertDivisionError) {
+                              setJudgePermissionsError(
+                                insertDivisionError.message ||
+                                  "Unable to update judge division access.",
+                              );
+                              setIsSavingJudgePermissions(false);
+                              return;
+                            }
+                          }
+
+                          const { error: deleteParticipantError } = await supabase
+                            .from("judge_participant_permission")
+                            .delete()
+                            .in("judge_id", judgeIds)
+                            .eq("contest_id", selectedContestIdForPermissions);
+
+                          if (deleteParticipantError) {
+                            setJudgePermissionsError(
+                              deleteParticipantError.message ||
+                                "Unable to update judge participant access.",
+                            );
+                            setIsSavingJudgePermissions(false);
+                            return;
+                          }
+
+                          if (
+                            judgeParticipantMode === "custom" &&
+                            judgeParticipantIds.length > 0
+                          ) {
+                            const { error: insertParticipantError } =
+                              await supabase.from("judge_participant_permission").insert(
+                                judgeParticipantIds.flatMap((participantId) =>
+                                  judgeIds.map((judgeId) => ({
+                                    judge_id: judgeId,
+                                    contest_id: selectedContestIdForPermissions,
+                                    participant_id: participantId,
+                                  })),
+                                ),
+                              );
+
+                            if (insertParticipantError) {
+                              setJudgePermissionsError(
+                                insertParticipantError.message ||
+                                  "Unable to update judge participant access.",
+                              );
+                              setIsSavingJudgePermissions(false);
+                              return;
+                            }
+                          }
+
+                        if (
+                          judgePermissionsMode === "all" ||
+                          judgePermissionsMode === "custom"
+                        ) {
+                          const { error: resetSubmissionError } = await supabase
+                            .from("judge_contest_submission")
+                            .delete()
+                            .in("judge_id", judgeIds)
+                            .eq("contest_id", selectedContestIdForPermissions);
+
+                          if (resetSubmissionError) {
+                            setJudgePermissionsError(
+                              resetSubmissionError.message ||
+                                "Unable to reset judge submission status.",
+                            );
+                            setIsSavingJudgePermissions(false);
+                            return;
+                          }
+
+                          setJudgeContestSubmissions((previous) =>
+                            previous.filter(
+                              (submission) =>
+                                !(
+                                  judgeIds.includes(submission.judge_id) &&
+                                  submission.contest_id ===
+                                    selectedContestIdForPermissions
+                                ),
+                            ),
+                          );
+                        }
+
+                          setJudgePermissionsSuccess(
+                            "Judge scoring access has been updated.",
+                          );
+                          setIsSavingJudgePermissions(false);
+                        }}
+                        disabled={
+                          isSavingJudgePermissions ||
+                          selectedContestIdForPermissions === null
+                        }
+                        className="mt-1 inline-flex items-center rounded-full bg-[#1F4D3A] px-4 py-1.5 text-[11px] font-medium text-white shadow-sm transition hover:bg-[#163528] disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {isSavingJudgePermissions ? "Saving..." : "Save access"}
+                      </button>
+                    </div>
+
+                    <div className="rounded-2xl border border-[#1F4D3A1F] bg-white p-4">
+                      <div className="mb-2 flex items-center justify-between">
+                        <div className="text-[11px] font-medium text-slate-600">
+                          Criteria that judge can edit
+                        </div>
+                      </div>
+                      <div className="max-h-80 overflow-y-auto text-[11px]">
+                        {selectedContestIdForPermissions === null ? (
+                          <div className="text-[10px] text-slate-400">
+                            Select a contest to manage criteria access.
+                          </div>
+                        ) : (
+                          <table className="min-w-full border-collapse text-left text-[11px]">
+                            <thead>
+                              <tr className="border-b border-[#E2E8F0] bg-[#F5F7FF] text-[10px] uppercase tracking-wide text-slate-500">
+                                <th className="px-3 py-2 font-medium">
+                                  Criteria
+                                </th>
+                                <th className="px-3 py-2 font-medium text-right">
+                                  Can edit
+                                </th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {criteriaList
+                                .filter(
+                                  (criteria) =>
+                                    criteria.contest_id ===
+                                    selectedContestIdForPermissions,
+                                )
+                                .map((criteria) => {
+                                  const checked =
+                                    judgePermissionsMode === "all"
+                                      ? true
+                                      : judgePermissionsMode === "none"
+                                      ? false
+                                      : judgePermissionsCriteriaIds.includes(
+                                          criteria.id,
+                                        );
+
+                                  return (
+                                    <tr
+                                      key={criteria.id}
+                                      className="border-b border-[#F1F5F9]"
+                                    >
+                                      <td className="px-3 py-2 text-slate-700">
+                                        {criteria.name}
+                                      </td>
+                                      <td className="px-3 py-2 text-right">
+                                        <input
+                                          type="checkbox"
+                                          className="h-3 w-3"
+                                          checked={checked}
+                                          disabled={judgePermissionsMode !== "custom"}
+                                          onChange={(event) => {
+                                            const isChecked =
+                                              event.target.checked;
+                                            setJudgePermissionsCriteriaIds(
+                                              (previous) => {
+                                                if (isChecked) {
+                                                  if (
+                                                    previous.includes(criteria.id)
+                                                  ) {
+                                                    return previous;
+                                                  }
+                                                  return [
+                                                    ...previous,
+                                                    criteria.id,
+                                                  ];
+                                                }
+                                                return previous.filter(
+                                                  (id) => id !== criteria.id,
+                                                );
+                                              },
+                                            );
+                                          }}
+                                        />
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                            </tbody>
+                          </table>
+                        )}
+                      </div>
+                    </div>
+
+                  </div>
+                </div>
+              )}
             </div>
           </section>
         )}
@@ -3172,10 +9846,10 @@ export default function AdminDashboard() {
               <div className="flex items-center justify-between border-b border-[#E2E8F0] px-5 py-3">
                 <div>
                   <div className="text-sm font-semibold text-[#1F4D3A]">
-                    Add category
+                    Add team
                   </div>
                   <div className="text-[11px] text-slate-500">
-                    Create a category for an event.
+                    Create a team for an event.
                   </div>
                 </div>
                 <button
@@ -3195,15 +9869,15 @@ export default function AdminDashboard() {
                     {activeEvent ? activeEvent.name : "No active event selected"}
                   </div>
                 </div>
-                <div className="space-y-1">
+                  <div className="space-y-1">
                   <div className="text-[10px] text-slate-500">
-                    Category name
+                    Team name
                   </div>
                   <input
                     value={categoryName}
                     onChange={(event) => setCategoryName(event.target.value)}
                     className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
-                    placeholder="Category name"
+                    placeholder="Team name"
                   />
                 </div>
                 {(categoryError || categorySuccess) && (
@@ -3232,7 +9906,7 @@ export default function AdminDashboard() {
                     isSavingCategory ? "cursor-not-allowed opacity-70" : ""
                   }`}
                 >
-                  {isSavingCategory ? "Saving..." : "Save category"}
+                  {isSavingCategory ? "Saving..." : "Save team"}
                 </button>
               </div>
             </div>
@@ -3241,8 +9915,8 @@ export default function AdminDashboard() {
 
         {isParticipantModalOpen && (
           <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 px-4">
-            <div className="w-full max-w-md rounded-2xl border border-[#1F4D3A1F] bg-white shadow-xl">
-              <div className="flex items-center justify-between border-b border-[#E2E8F0] px-5 py-3">
+            <div className="w-full max-w-3xl rounded-2xl border border-[#1F4D3A1F] bg-white shadow-xl">
+              <div className="flex items-center justify-between border-b border-[#E2E8F0] px-6 py-4">
                 <div>
                   <div className="text-sm font-semibold text-[#1F4D3A]">
                     Add participant
@@ -3259,88 +9933,261 @@ export default function AdminDashboard() {
                   Close
                 </button>
               </div>
-              <div className="space-y-3 px-5 py-4 text-[11px]">
-                <div className="space-y-1">
-                  <div className="text-[10px] text-slate-500">Select contest</div>
-                  <select
-                    value={selectedContestIdForParticipant ?? ""}
-                    onChange={(event) => {
-                      const value = event.target.value;
-                      setSelectedContestIdForParticipant(
-                        value ? Number(value) : null,
-                      );
-                    }}
-                    className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
-                  >
-                    <option value="">Select contest</option>
-                    {contests
-                      .filter(
-                        (contest) =>
-                          activeEventId === null ||
-                          contest.event_id === activeEventId,
-                      )
-                      .map((contest) => (
-                        <option key={contest.id} value={contest.id}>
-                          {contest.name}
-                        </option>
-                      ))}
-                  </select>
-                </div>
-                <div className="space-y-1">
-                  <div className="text-[10px] text-slate-500">
-                    Select category
+              <div className="px-6 py-4 text-[11px]">
+                <div className="grid items-start gap-6 md:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
+                  <div className="space-y-3">
+                    <div className="space-y-1">
+                      <div className="text-[10px] text-slate-500">
+                        Select contest
+                      </div>
+                      <select
+                        value={selectedContestIdForParticipant ?? ""}
+                        onChange={(event) => {
+                          const value = event.target.value;
+                          setSelectedContestIdForParticipant(
+                            value ? Number(value) : null,
+                          );
+                        }}
+                        className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                      >
+                        <option value="">Select contest</option>
+                        {contests
+                          .filter(
+                            (contest) =>
+                              activeEventId === null ||
+                              contest.event_id === activeEventId,
+                          )
+                          .map((contest) => (
+                            <option key={contest.id} value={contest.id}>
+                              {contest.name}
+                            </option>
+                          ))}
+                      </select>
+                    </div>
+                    <div className="space-y-1">
+                      <div className="text-[10px] text-slate-500">
+                        Select division
+                      </div>
+                      <select
+                        value={selectedCategoryIdForParticipant ?? ""}
+                        onChange={(event) => {
+                          const value = event.target.value;
+                          const parsed = value ? Number(value) : null;
+                          setSelectedCategoryIdForParticipant(parsed);
+                          setSelectedTeamIdForParticipant(null);
+                        }}
+                        className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                      >
+                        <option value="">Select division</option>
+                        {categoriesForActiveEvent.map((division) => (
+                          <option key={division.id} value={division.id}>
+                            {division.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="space-y-1">
+                      <div className="text-[10px] text-slate-500">
+                        Select team
+                      </div>
+                      <select
+                        value={selectedTeamIdForParticipant ?? ""}
+                        onChange={(event) => {
+                          const value = event.target.value;
+                          setSelectedTeamIdForParticipant(
+                            value ? Number(value) : null,
+                          );
+                        }}
+                        className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                      >
+                        <option value="">Select team</option>
+                        {teamsForActiveEvent.map((team) => (
+                          <option key={team.id} value={team.id}>
+                            {team.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="space-y-1">
+                      <div className="text-[10px] text-slate-500">
+                        Full name
+                      </div>
+                      <input
+                        value={participantFullName}
+                        onChange={(event) =>
+                          setParticipantFullName(event.target.value)
+                        }
+                        className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                        placeholder="Full name"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <div className="text-[10px] text-slate-500">
+                        Contestant number
+                      </div>
+                      <input
+                        value={participantNumber}
+                        onChange={(event) =>
+                          setParticipantNumber(event.target.value)
+                        }
+                        className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                        placeholder="Contestant number"
+                      />
+                    </div>
                   </div>
-                  <select
-                    value={selectedCategoryIdForParticipant ?? ""}
-                    onChange={(event) => {
-                      const value = event.target.value;
-                      setSelectedCategoryIdForParticipant(
-                        value ? Number(value) : null,
-                      );
-                    }}
-                    className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
-                  >
-                    <option value="">Select category</option>
-                    {categories
-                      .filter(
-                        (category) =>
-                          activeEventId === null ||
-                          category.event_id === activeEventId,
-                      )
-                      .map((category) => (
-                        <option key={category.id} value={category.id}>
-                          {category.name}
-                        </option>
-                      ))}
-                  </select>
-                </div>
-                <div className="space-y-1">
-                  <div className="text-[10px] text-slate-500">Full name</div>
-                  <input
-                    value={participantFullName}
-                    onChange={(event) =>
-                      setParticipantFullName(event.target.value)
-                    }
-                    className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
-                    placeholder="Full name"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <div className="text-[10px] text-slate-500">
-                    Contestant number
+                  <div className="space-y-2">
+                    <div className="text-[10px] text-slate-500">Avatar</div>
+                    <div className="flex flex-col items-center gap-3 rounded-2xl border border-[#E2E8F0] bg-[#F8FAFC] px-4 py-3">
+                      <div className="flex h-32 w-32 items-center justify-center overflow-hidden rounded-full bg-[#E3F2EA] text-[11px] font-semibold text-[#1F4D3A] shadow-sm">
+                        {participantAvatarUrl ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            src={participantAvatarUrl}
+                            alt={
+                              participantFullName ||
+                              "Participant avatar preview"
+                            }
+                            className="h-full w-full object-cover"
+                            style={{
+                              transform: `scale(${participantAvatarZoom})`,
+                            }}
+                          />
+                        ) : (
+                          "Preview"
+                        )}
+                      </div>
+                      <div className="flex w-full flex-col gap-1 text-left">
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setParticipantAvatarZoom((previous) =>
+                                Math.max(
+                                  1,
+                                  Number((previous - 0.1).toFixed(2)),
+                                ),
+                              )
+                            }
+                            className="flex h-6 w-6 items-center justify-center rounded-full border border-[#CBD5E1] text-[11px] text-slate-600 hover:bg-white"
+                          >
+                            -
+                          </button>
+                          <input
+                            type="range"
+                            min={1}
+                            max={2.5}
+                            step={0.05}
+                            value={participantAvatarZoom}
+                            onChange={(event) =>
+                              setParticipantAvatarZoom(
+                                Number(event.target.value),
+                              )
+                            }
+                            className="flex-1"
+                          />
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setParticipantAvatarZoom((previous) =>
+                                Math.min(
+                                  2.5,
+                                  Number((previous + 0.1).toFixed(2)),
+                                ),
+                              )
+                            }
+                            className="flex h-6 w-6 items-center justify-center rounded-full border border-[#CBD5E1] text-[11px] text-slate-600 hover:bg-white"
+                          >
+                            +
+                          </button>
+                        </div>
+                        <input
+                          type="file"
+                          accept="image/*"
+                          disabled={isUploadingParticipantAvatar}
+                          onChange={async (event) => {
+                            const file = event.target.files?.[0];
+
+                            if (!file) {
+                              return;
+                            }
+
+                            const cloudName =
+                              process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME;
+                            const uploadPreset =
+                              process.env.NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET;
+
+                            if (!cloudName || !uploadPreset) {
+                              setParticipantError(
+                                "Cloudinary is not configured for uploads.",
+                              );
+                              return;
+                            }
+
+                            setParticipantError(null);
+                            setIsUploadingParticipantAvatar(true);
+
+                            try {
+                              const formData = new FormData();
+                              formData.append("file", file);
+                              formData.append("upload_preset", uploadPreset);
+
+                              const response = await fetch(
+                                `https://api.cloudinary.com/v1_1/${cloudName}/image/upload`,
+                                {
+                                  method: "POST",
+                                  body: formData,
+                                },
+                              );
+
+                              if (!response.ok) {
+                                setParticipantError(
+                                  "Unable to upload avatar. Please try again.",
+                                );
+                                setIsUploadingParticipantAvatar(false);
+                                return;
+                              }
+
+                              const json = (await response.json()) as {
+                                secure_url?: string;
+                              };
+
+                              if (!json.secure_url) {
+                                setParticipantError(
+                                  "Upload did not return an image URL.",
+                                );
+                                setIsUploadingParticipantAvatar(false);
+                                return;
+                              }
+
+                              setParticipantAvatarUrl(json.secure_url);
+                            } catch {
+                              setParticipantError(
+                                "Unexpected error while uploading avatar.",
+                              );
+                            } finally {
+                              setIsUploadingParticipantAvatar(false);
+                            }
+                          }}
+                          className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition file:mr-3 file:rounded-full file:border-0 file:bg-[#1F4D3A] file:px-3 file:py-1 file:text-[10px] file:font-medium file:text-white hover:file:bg-[#163528] focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                        />
+                        {participantAvatarUrl && (
+                          <div className="text-[10px] text-slate-500">
+                            Avatar uploaded. This picture will be visible to
+                            judges.
+                          </div>
+                        )}
+                        {isUploadingParticipantAvatar && (
+                          <div className="text-[10px] text-slate-500">
+                            Uploading avatar…
+                          </div>
+                        )}
+                      </div>
+                    </div>
                   </div>
-                  <input
-                    value={participantNumber}
-                    onChange={(event) =>
-                      setParticipantNumber(event.target.value)
-                    }
-                    className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
-                    placeholder="Contestant number"
-                  />
                 </div>
                 {(participantError || participantSuccess) && (
                   <div
-                    className={`text-[10px] ${
+                    className={`mt-3 text-[10px] ${
                       participantError ? "text-red-500" : "text-emerald-600"
                     }`}
                   >
@@ -4022,10 +10869,10 @@ export default function AdminDashboard() {
                         Judge list
                       </div>
                       <span className="text-[10px] text-slate-400">
-                        {judges.length === 0
+                        {judgesForActiveEvent.length === 0
                           ? "No judges yet"
-                          : `${judges.length} judge${
-                              judges.length > 1 ? "s" : ""
+                          : `${judgesForActiveEvent.length} judge${
+                              judgesForActiveEvent.length > 1 ? "s" : ""
                             }`}
                       </span>
                     </div>
@@ -4041,7 +10888,7 @@ export default function AdminDashboard() {
                           </tr>
                         </thead>
                         <tbody>
-                          {judges.length === 0 ? (
+                          {judgesForActiveEvent.length === 0 ? (
                             <tr className="border-b border-[#F1F5F9]">
                               <td
                                 className="px-3 py-2 text-slate-400"
@@ -4052,7 +10899,7 @@ export default function AdminDashboard() {
                               </td>
                             </tr>
                           ) : (
-                            judges.map((judge) => {
+                            judgesForActiveEvent.map((judge) => {
                               const event = events.find(
                                 (e) => e.id === judge.event_id,
                               );
@@ -4144,10 +10991,10 @@ export default function AdminDashboard() {
                         Tabulator list
                       </div>
                       <span className="text-[10px] text-slate-400">
-                        {tabulators.length === 0
+                        {tabulatorsForActiveEvent.length === 0
                           ? "No tabulators yet"
-                          : `${tabulators.length} tabulator${
-                              tabulators.length > 1 ? "s" : ""
+                          : `${tabulatorsForActiveEvent.length} tabulator${
+                              tabulatorsForActiveEvent.length > 1 ? "s" : ""
                             }`}
                       </span>
                     </div>
@@ -4171,7 +11018,7 @@ export default function AdminDashboard() {
                           </tr>
                         </thead>
                         <tbody>
-                          {tabulators.length === 0 ? (
+                          {tabulatorsForActiveEvent.length === 0 ? (
                             <tr className="border-b border-[#F1F5F9]">
                               <td
                                 className="px-3 py-2 text-slate-400"
@@ -4181,7 +11028,7 @@ export default function AdminDashboard() {
                               </td>
                             </tr>
                           ) : (
-                            tabulators.map((tabulator) => {
+                            tabulatorsForActiveEvent.map((tabulator) => {
                               const event = events.find(
                                 (e) => e.id === tabulator.event_id,
                               );
