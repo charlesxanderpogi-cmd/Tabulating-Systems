@@ -262,18 +262,11 @@ export default function JudgeDashboardPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSavingParticipantScores, setIsSavingParticipantScores] =
     useState(false);
-  const [isSubmitAllModalOpen, setIsSubmitAllModalOpen] = useState(false);
-  const [isSubmittingAll, setIsSubmittingAll] = useState(false);
+  const [isSubmittingParticipant, setIsSubmittingParticipant] = useState(false);
   const [submittedContestIds, setSubmittedContestIds] = useState<number[]>([]);
   const [judgeScoringPermissions, setJudgeScoringPermissions] = useState<
     JudgeScoringPermissionRow[]
   >([]);
-  const [submitAllDivisionId, setSubmitAllDivisionId] = useState<number | null>(
-    null,
-  );
-  const [submitAllDivisionName, setSubmitAllDivisionName] = useState<
-    string | null
-  >(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [currentParticipantIndex, setCurrentParticipantIndex] = useState(0);
@@ -835,55 +828,17 @@ export default function JudgeDashboardPage() {
             schema: "public",
             table: "judge_scoring_permission",
           },
-          (payload) => {
-            if (
-              payload.eventType === "INSERT" ||
-              payload.eventType === "UPDATE"
-            ) {
-              const newRow = payload.new as JudgeScoringPermissionRow;
-
-              if (newRow.judge_id !== judgeRow.id) {
-                return;
-              }
-
-              setJudgeScoringPermissions((previous) => {
-                const exists = previous.some(
-                  (permission) =>
-                    permission.judge_id === newRow.judge_id &&
-                    permission.contest_id === newRow.contest_id &&
-                    permission.criteria_id === newRow.criteria_id,
-                );
-
-                if (payload.eventType === "INSERT" && !exists) {
-                  return [...previous, newRow];
+          () => {
+            // Re-fetch all permissions on any change (DELETE events may not include full row data)
+            supabase
+              .from("judge_scoring_permission")
+              .select("judge_id, contest_id, criteria_id, can_edit")
+              .eq("judge_id", judgeRow.id)
+              .then(({ data }) => {
+                if (data) {
+                  setJudgeScoringPermissions(data as JudgeScoringPermissionRow[]);
                 }
-
-                return previous.map((permission) =>
-                  permission.judge_id === newRow.judge_id &&
-                  permission.contest_id === newRow.contest_id &&
-                  permission.criteria_id === newRow.criteria_id
-                    ? newRow
-                    : permission,
-                );
               });
-            } else if (payload.eventType === "DELETE") {
-              const oldRow = payload.old as JudgeScoringPermissionRow | null;
-
-              if (!oldRow || oldRow.judge_id !== judgeRow.id) {
-                return;
-              }
-
-              setJudgeScoringPermissions((previous) =>
-                previous.filter(
-                  (permission) =>
-                    !(
-                      permission.judge_id === oldRow.judge_id &&
-                      permission.contest_id === oldRow.contest_id &&
-                      permission.criteria_id === oldRow.criteria_id
-                    ),
-                ),
-              );
-            }
           },
         )
         .on(
@@ -1537,138 +1492,60 @@ export default function JudgeDashboardPage() {
         return globalPermission.can_edit;
       }
 
-      // 3. Fallback: If no permissions are set, check if the contest is submitted
-      // If submitted -> Locked (false)
-      // If not submitted -> Open (true)
-      return !submittedContestIds.includes(contestId);
+      // 3. Fallback: No admin permissions set, always allow editing
+      return true;
     },
-    [judgeScoringPermissions, submittedContestIds],
+    [judgeScoringPermissions],
   );
 
-  const isContestSubmitted = (contestId: number | null) => {
-    if (contestId === null) {
-      return false;
-    }
-    return submittedContestIds.includes(contestId);
-  };
-
-  const handleOpenSubmitAllModal = () => {
-    if (!activeContest) {
-      return;
-    }
-    if (activeContestParticipants.length === 0 || activeContestCriteria.length === 0) {
-      return;
-    }
-    if (
-      !activeContestCriteria.some((criteria) =>
-        canEditCriteria(activeContest.id, criteria.id),
-      )
-    ) {
-      return;
-    }
-    let divisionId: number | null = null;
-    let divisionName: string | null = null;
-
-    if (currentParticipant) {
-      divisionId = currentParticipant.division_id;
-      const division = categories.find(
-        (category) => category.id === currentParticipant.division_id,
-      );
-      divisionName = division?.name ?? null;
-    }
-
-    setSubmitAllDivisionId(divisionId);
-    setSubmitAllDivisionName(divisionName);
-    setError(null);
-    setSuccess(null);
-    setIsSubmitAllModalOpen(true);
-  };
-
-  const handleConfirmSubmitAll = async () => {
-    if (!judge || !activeContest) {
-      setIsSubmitAllModalOpen(false);
+  const handleSubmitCurrentParticipant = async () => {
+    if (!currentParticipant || !judge || !activeContest) {
       return;
     }
 
-    // Prevent re-submission when contest is submitted and not unlocked by admin
-    if (
-      isContestSubmitted(activeContest.id) &&
-      !activeContestCriteria.some((criteria) =>
-        canEditCriteria(activeContest.id, criteria.id),
-      )
-    ) {
-      setIsSubmitAllModalOpen(false);
-      return;
-    }
-
-    setIsSubmittingAll(true);
+    setIsSubmittingParticipant(true);
     setError(null);
     setSuccess(null);
 
-    const participantsForSubmit =
-      submitAllDivisionId === null
-        ? activeContestParticipants
-        : activeContestParticipants.filter(
-            (participant) => participant.division_id === submitAllDivisionId,
-          );
-
-    if (participantsForSubmit.length === 0) {
-      setIsSubmittingAll(false);
-      setIsSubmitAllModalOpen(false);
-      setError("No participants found for this division to submit.");
-      return;
-    }
-
-    for (const participant of participantsForSubmit) {
+    try {
+      // Validate all scores exist for this participant
       for (const criteria of activeContestCriteria) {
-        const key = `${participant.id}-${criteria.id}`;
+        const key = `${currentParticipant.id}-${criteria.id}`;
         const value = scoreInputs[key];
 
         if (value === undefined || value === "") {
-          setIsSubmittingAll(false);
-          setIsSubmitAllModalOpen(false);
           setError(
-            "Please enter a score for every participant and criteria before submitting all.",
+            "Please enter a score for every criteria before submitting.",
           );
+          setIsSubmittingParticipant(false);
           return;
         }
 
         const parsed = Number(value);
+        const maxScore =
+          activeContestScoringType === "points"
+            ? criteria.percentage
+            : 100;
 
-        if (!Number.isFinite(parsed) || parsed < 0 || parsed > 100) {
-          setIsSubmittingAll(false);
-          setIsSubmitAllModalOpen(false);
-          setError("Scores must be between 0 and 100.");
+        if (!Number.isFinite(parsed) || parsed < 0 || parsed > maxScore) {
+          setError(`Scores must be between 0 and ${maxScore}.`);
+          setIsSubmittingParticipant(false);
           return;
         }
       }
-    }
 
-    await Promise.all(
-      participantsForSubmit.flatMap((participant) =>
+      // Save all raw scores for this participant
+      await Promise.all(
         activeContestCriteria.map((criteria) =>
-          handleScoreBlur(participant.id, criteria.id),
+          handleScoreBlur(currentParticipant.id, criteria.id),
         ),
-      ),
-    );
+      );
 
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-
-    if (!supabaseUrl || !supabaseAnonKey) {
-      setIsSubmittingAll(false);
-      setIsSubmitAllModalOpen(false);
-      setError("Supabase is not configured.");
-      return;
-    }
-
-    const supabase = createClient(supabaseUrl, supabaseAnonKey);
-
-    const totalRows = participantsForSubmit.map((participant) => {
+      // Calculate total score for this participant
       let total = 0;
 
       for (const criteria of activeContestCriteria) {
-        const key = `${participant.id}-${criteria.id}`;
+        const key = `${currentParticipant.id}-${criteria.id}`;
         const value = scoreInputs[key];
         const parsed = Number(value);
 
@@ -1683,94 +1560,80 @@ export default function JudgeDashboardPage() {
         }
       }
 
-      return {
-        judge_id: judge.id,
-        participant_id: participant.id,
-        contest_id: activeContest.id,
-        total_score: Number(total.toFixed(2)),
-      };
-    });
+      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+      const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
-    const participantIdsForSubmit = participantsForSubmit.map(
-      (participant) => participant.id,
-    );
-
-    const { error: deleteError } = await supabase
-      .from("judge_participant_total")
-      .delete()
-      .eq("judge_id", judge.id)
-      .eq("contest_id", activeContest.id)
-      .in("participant_id", participantIdsForSubmit);
-
-    if (deleteError) {
-      setIsSubmittingAll(false);
-      setIsSubmitAllModalOpen(false);
-      setError(
-        deleteError.message ||
-          "Unable to reset existing total scores for contestants.",
-      );
-      return;
-    }
-
-    const { error: totalError } = await supabase
-      .from("judge_participant_total")
-      .insert(totalRows);
-
-    if (totalError) {
-      setIsSubmittingAll(false);
-      setIsSubmitAllModalOpen(false);
-      setError(
-        totalError.message ||
-          "Unable to save total scores for all contestants.",
-      );
-      return;
-    }
-
-    // Always mark the contest as submitted immediately
-    const { data: existingSubmission, error: fetchSubmissionError } =
-      await supabase
-        .from("judge_contest_submission")
-        .select("judge_id, contest_id")
-        .eq("judge_id", judge.id)
-        .eq("contest_id", activeContest.id)
-        .limit(1);
-
-    if (fetchSubmissionError) {
-      setIsSubmittingAll(false);
-      setIsSubmitAllModalOpen(false);
-      setError(
-        fetchSubmissionError.message || "Unable to check submission status.",
-      );
-      return;
-    }
-
-    if (!existingSubmission || existingSubmission.length === 0) {
-      const { error } = await supabase
-        .from("judge_contest_submission")
-        .insert({
-          judge_id: judge.id,
-          contest_id: activeContest.id,
-        });
-
-      if (error) {
-        setIsSubmittingAll(false);
-        setIsSubmitAllModalOpen(false);
-        setError(error.message || "Unable to submit all scores.");
+      if (!supabaseUrl || !supabaseAnonKey) {
+        setError("Supabase is not configured.");
+        setIsSubmittingParticipant(false);
         return;
       }
+
+      const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
+      // Delete existing total for this participant
+      const { error: deleteError } = await supabase
+        .from("judge_participant_total")
+        .delete()
+        .eq("judge_id", judge.id)
+        .eq("contest_id", activeContest.id)
+        .eq("participant_id", currentParticipant.id);
+
+      if (deleteError) {
+        setError(
+          deleteError.message || "Unable to reset existing total score.",
+        );
+        setIsSubmittingParticipant(false);
+        return;
+      }
+
+      // Insert new total for this participant
+      const { error: totalError } = await supabase
+        .from("judge_participant_total")
+        .insert({
+          judge_id: judge.id,
+          participant_id: currentParticipant.id,
+          contest_id: activeContest.id,
+          total_score: Number(total.toFixed(2)),
+        });
+
+      if (totalError) {
+        setError(
+          totalError.message || "Unable to save total score.",
+        );
+        setIsSubmittingParticipant(false);
+        return;
+      }
+
+      // Update local state
+      setJudgeTotals((previous) => {
+        const filtered = previous.filter(
+          (t) =>
+            !(
+              t.judge_id === judge.id &&
+              t.participant_id === currentParticipant.id &&
+              t.contest_id === activeContest.id
+            ),
+        );
+        return [
+          ...filtered,
+          {
+            id: Date.now(),
+            judge_id: judge.id,
+            participant_id: currentParticipant.id,
+            contest_id: activeContest.id,
+            total_score: Number(total.toFixed(2)),
+            created_at: new Date().toISOString(),
+          },
+        ];
+      });
+
+      setSuccess(
+        `Score for ${currentParticipant.full_name} submitted to tabulation.`,
+      );
+    } finally {
+      setIsSubmittingParticipant(false);
     }
-
-    setIsSubmittingAll(false);
-    setIsSubmitAllModalOpen(false);
-
-    setSubmittedContestIds((previous) =>
-      previous.includes(activeContest.id)
-        ? previous
-        : [...previous, activeContest.id],
-    );
-    setSuccess(
-      "All scores for this contest have been submitted. Further changes are now locked.",
-    );
   };
 
   const handleScoreChange = (
@@ -3329,6 +3192,9 @@ export default function JudgeDashboardPage() {
                                       }
                                       step={0.01}
                                       value={value}
+                                      onWheel={(event) => {
+                                        event.currentTarget.blur();
+                                      }}
                                       onChange={(event) =>
                                         handleScoreChange(
                                           currentParticipant.id,
@@ -3455,11 +3321,9 @@ export default function JudgeDashboardPage() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => {
-                    handleOpenSubmitAllModal();
-                    setIsScoringModalOpen(false);
-                  }}
+                  onClick={handleSubmitCurrentParticipant}
                   disabled={
+                    isSubmittingParticipant ||
                     isSavingParticipantScores ||
                     !activeContestCriteria.some((criteria) =>
                       canEditCriteria(activeContest.id, criteria.id),
@@ -3487,7 +3351,7 @@ export default function JudgeDashboardPage() {
                       : { color: "#ffffff" }),
                   }}
                 >
-                  {isContestSubmitted(activeContest.id) ? "Submitted" : "Submit all"}
+                  {isSubmittingParticipant ? "Submitting..." : "Submit"}
                 </button>
               </div>
             </div>
@@ -3495,48 +3359,6 @@ export default function JudgeDashboardPage() {
         </div>
       )}
 
-      {isSubmitAllModalOpen && activeContest && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 px-4">
-          <div className="w-full max-w-xl rounded-3xl border border-[#1F4D3A1F] bg-white shadow-xl">
-            <div className="border-b border-[#E2E8F0] px-6 py-4">
-              <div className="text-base font-semibold text-[#1F4D3A]">
-                Submit all scores?
-              </div>
-              <div className="mt-2 text-sm text-slate-600">
-                {submitAllDivisionName && submitAllDivisionName.trim().length > 0
-                  ? `Are you sure you want to submit all scores for every contestant in the ${submitAllDivisionName} division of this contest? This will save all current scores for that division. Once all divisions are submitted, you will no longer be able to edit scores.`
-                  : "Are you sure you want to submit all scores for every contestant in this contest? This will save all current scores and you may no longer be able to edit them after submission."}
-              </div>
-            </div>
-            <div className="flex items-center justify-end gap-3 px-6 py-4">
-              <button
-                type="button"
-                onClick={() => {
-                  if (isSubmittingAll) {
-                    return;
-                  }
-                  setIsSubmitAllModalOpen(false);
-                }}
-                className="rounded-full border border-[#E2E8F0] px-3 py-1.5 text-xs text-slate-600 hover:bg-[#F8FAFC]"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={handleConfirmSubmitAll}
-                disabled={isSubmittingAll}
-                className="rounded-full bg-[#1F4D3A] px-4 py-1.5 text-xs font-medium text-white shadow-sm disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {isSubmittingAll
-                  ? "Submitting..."
-                  : submitAllDivisionName && submitAllDivisionName.trim().length > 0
-                    ? `Submit all (${submitAllDivisionName})`
-                    : "Submit all"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@supabase/supabase-js";
 
@@ -117,6 +117,138 @@ type AwardRankingRow = {
   rank: number | null;
 };
 
+type JudgeRow = {
+  id: number;
+  event_id: number;
+  full_name: string;
+  username: string;
+  role: "chairman" | "judge";
+  created_at: string;
+};
+
+type JudgeScoringPermissionRow = {
+  judge_id: number;
+  contest_id: number;
+  criteria_id: number | null;
+  can_edit: boolean;
+  created_at: string;
+};
+
+type JudgeDivisionPermissionRow = {
+  id: number;
+  judge_id: number;
+  contest_id: number;
+  division_id: number;
+  created_at: string;
+};
+
+type JudgeParticipantPermissionRow = {
+  id: number;
+  judge_id: number;
+  contest_id: number;
+  participant_id: number;
+  created_at: string;
+};
+
+type MultiSelectOption = {
+  id: number;
+  label: string;
+};
+
+type MultiSelectDropdownProps = {
+  placeholder: string;
+  options: MultiSelectOption[];
+  selectedIds: number[];
+  disabled?: boolean;
+  onChange: (ids: number[]) => void;
+};
+
+function MultiSelectDropdown({
+  placeholder,
+  options,
+  selectedIds,
+  disabled,
+  onChange,
+}: MultiSelectDropdownProps) {
+  const [isOpen, setIsOpen] = useState(false);
+
+  const selectedLabels = options
+    .filter((option) => selectedIds.includes(option.id))
+    .map((option) => option.label);
+
+  const displayText =
+    selectedLabels.length === 0
+      ? placeholder
+      : selectedLabels.length === 1
+      ? selectedLabels[0]
+      : `${selectedLabels[0]} + ${selectedLabels.length - 1} more`;
+
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => {
+          if (disabled) {
+            return;
+          }
+          setIsOpen((open) => !open);
+        }}
+        className={`flex w-full items-center justify-between rounded-xl border px-3 py-2 text-left text-xs outline-none transition ${
+          disabled
+            ? "cursor-not-allowed border-[#E2E8F0] bg-slate-50 text-slate-400"
+            : "border-[#D0D7E2] bg-white text-slate-700 focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+        }`}
+      >
+        <span
+          className={
+            selectedLabels.length === 0 ? "text-slate-400" : "text-slate-700"
+          }
+        >
+          {displayText}
+        </span>
+        <span className="ml-2 text-[10px] text-slate-400">▾</span>
+      </button>
+      {isOpen && !disabled && (
+        <div className="absolute z-20 mt-1 max-h-56 w-full overflow-auto rounded-xl border border-[#E2E8F0] bg-white py-1 text-xs shadow-lg">
+          {options.length === 0 ? (
+            <div className="px-3 py-2 text-[11px] text-slate-400">
+              No options available
+            </div>
+          ) : (
+            options.map((option) => {
+              const checked = selectedIds.includes(option.id);
+              return (
+                <label
+                  key={option.id}
+                  className="flex cursor-pointer items-center gap-2 px-3 py-1.5 hover:bg-[#F8FAFC]"
+                >
+                  <input
+                    type="checkbox"
+                    className="h-3 w-3 rounded border-[#D0D7E2] text-[#1F4D3A] focus:ring-[#1F4D3A]"
+                    checked={checked}
+                    onChange={(event) => {
+                      const isChecked = event.target.checked;
+                      onChange(
+                        isChecked
+                          ? [...selectedIds, option.id]
+                          : selectedIds.filter((id) => id !== option.id),
+                      );
+                    }}
+                  />
+                  <span className="text-[11px] text-slate-700">
+                    {option.label}
+                  </span>
+                </label>
+              );
+            })
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function TabulatorPage() {
   const router = useRouter();
   const [tabulator, setTabulator] = useState<TabulatorRow | null>(null);
@@ -141,6 +273,40 @@ export default function TabulatorPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+
+  const [activeTab, setActiveTab] = useState<"tabulation" | "access">("tabulation");
+  const [judges, setJudges] = useState<JudgeRow[]>([]);
+  const [judgeScoringPermissions, setJudgeScoringPermissions] = useState<
+    JudgeScoringPermissionRow[]
+  >([]);
+  const [judgeDivisionPermissions, setJudgeDivisionPermissions] = useState<
+    JudgeDivisionPermissionRow[]
+  >([]);
+  const [judgeParticipantPermissions, setJudgeParticipantPermissions] =
+    useState<JudgeParticipantPermissionRow[]>([]);
+  const [selectedJudgeIdsForPermissions, setSelectedJudgeIdsForPermissions] =
+    useState<number[]>([]);
+  const [selectedContestIdForPermissions, setSelectedContestIdForPermissions] =
+    useState<number | null>(null);
+  const [judgePermissionsMode, setJudgePermissionsMode] = useState<
+    "all" | "none" | "custom"
+  >("all");
+  const [judgePermissionsCriteriaIds, setJudgePermissionsCriteriaIds] =
+    useState<number[]>([]);
+  const [judgePermissionsError, setJudgePermissionsError] = useState<
+    string | null
+  >(null);
+  const [judgePermissionsSuccess, setJudgePermissionsSuccess] = useState<
+    string | null
+  >(null);
+  const [isSavingJudgePermissions, setIsSavingJudgePermissions] =
+    useState(false);
+  const [judgeDivisionMode, setJudgeDivisionMode] =
+    useState<"all" | "custom">("all");
+  const [judgeDivisionIds, setJudgeDivisionIds] = useState<number[]>([]);
+  const [judgeParticipantMode, setJudgeParticipantMode] =
+    useState<"all" | "custom">("all");
+  const [judgeParticipantIds, setJudgeParticipantIds] = useState<number[]>([]);
 
   useEffect(() => {
     let channel: ReturnType<
@@ -259,6 +425,10 @@ export default function TabulatorPage() {
         { data: criteriaRows, error: criteriaError },
         { data: awardRows, error: awardError },
         { data: scoreRows, error: scoreError },
+        { data: judgeRows, error: judgeError },
+        { data: scoringPermissionRows, error: scoringPermissionError },
+        { data: divisionPermissionRows, error: divisionPermissionError },
+        { data: participantPermissionRows, error: participantPermissionError },
       ] = await Promise.all([
         supabase
           .from("division")
@@ -296,6 +466,19 @@ export default function TabulatorPage() {
           .select(
             "id, judge_id, participant_id, criteria_id, score, created_at",
           ),
+        supabase
+          .from("user_judge")
+          .select("id, event_id, full_name, username, role, created_at")
+          .eq("event_id", activeEvent.id),
+        supabase
+          .from("judge_scoring_permission")
+          .select("judge_id, contest_id, criteria_id, can_edit, created_at"),
+        supabase
+          .from("judge_division_permission")
+          .select("id, judge_id, contest_id, division_id, created_at"),
+        supabase
+          .from("judge_participant_permission")
+          .select("id, judge_id, contest_id, participant_id, created_at"),
       ]);
 
       if (
@@ -305,7 +488,11 @@ export default function TabulatorPage() {
         totalError ||
         criteriaError ||
         awardError ||
-        scoreError
+        scoreError ||
+        judgeError ||
+        scoringPermissionError ||
+        divisionPermissionError ||
+        participantPermissionError
       ) {
         const message =
           categoryError?.message ||
@@ -315,6 +502,10 @@ export default function TabulatorPage() {
           criteriaError?.message ||
           awardError?.message ||
           scoreError?.message ||
+          judgeError?.message ||
+          scoringPermissionError?.message ||
+          divisionPermissionError?.message ||
+          participantPermissionError?.message ||
           "Unable to load tabulation data.";
         setError(message);
         setIsLoading(false);
@@ -329,6 +520,10 @@ export default function TabulatorPage() {
       setCriteriaList((criteriaRows ?? []) as CriteriaRow[]);
       setAwards((awardRows ?? []) as AwardRow[]);
       setScores((scoreRows ?? []) as ScoreRow[]);
+      setJudges((judgeRows ?? []) as JudgeRow[]);
+      setJudgeScoringPermissions((scoringPermissionRows ?? []) as JudgeScoringPermissionRow[]);
+      setJudgeDivisionPermissions((divisionPermissionRows ?? []) as JudgeDivisionPermissionRow[]);
+      setJudgeParticipantPermissions((participantPermissionRows ?? []) as JudgeParticipantPermissionRow[]);
 
       if (contestRows && contestRows.length > 0) {
         setActiveContestId((contestRows[0] as ContestRow).id);
@@ -872,6 +1067,109 @@ export default function TabulatorPage() {
       ? `${event.name} • ${event.year}`
       : "Tabulation workspace";
 
+  const judgesForActiveEvent = useMemo(
+    () => (event ? judges.filter((j) => j.event_id === event.id) : []),
+    [judges, event],
+  );
+
+  const contestsForActiveEvent = useMemo(
+    () => (event ? contests.filter((c) => c.event_id === event.id) : []),
+    [contests, event],
+  );
+
+  const judgeDivisionIdsForContest = useMemo(() => {
+    if (selectedContestIdForPermissions === null) return [];
+    return judgeDivisionPermissions
+      .filter(
+        (p) =>
+          p.contest_id === selectedContestIdForPermissions &&
+          (selectedJudgeIdsForPermissions.length === 0 ||
+            selectedJudgeIdsForPermissions.includes(p.judge_id)),
+      )
+      .map((p) => p.division_id);
+  }, [
+    judgeDivisionPermissions,
+    selectedContestIdForPermissions,
+    selectedJudgeIdsForPermissions,
+  ]);
+
+  const judgeParticipantIdsForContest = useMemo(() => {
+    if (selectedContestIdForPermissions === null) return [];
+    return judgeParticipantPermissions
+      .filter(
+        (p) =>
+          p.contest_id === selectedContestIdForPermissions &&
+          (selectedJudgeIdsForPermissions.length === 0 ||
+            selectedJudgeIdsForPermissions.includes(p.judge_id)),
+      )
+      .map((p) => p.participant_id);
+  }, [
+    judgeParticipantPermissions,
+    selectedContestIdForPermissions,
+    selectedJudgeIdsForPermissions,
+  ]);
+
+  useEffect(() => {
+    if (selectedContestIdForPermissions === null) {
+      setJudgeDivisionIds([]);
+      setJudgeDivisionMode("all");
+      setJudgeParticipantIds([]);
+      setJudgeParticipantMode("all");
+      setJudgePermissionsCriteriaIds([]);
+      setJudgePermissionsMode("all");
+      return;
+    }
+
+    const relevantJudges =
+      selectedJudgeIdsForPermissions.length === 0
+        ? judgesForActiveEvent.map((j) => j.id)
+        : selectedJudgeIdsForPermissions;
+
+    if (relevantJudges.length === 1) {
+      const judgeId = relevantJudges[0];
+      
+      const divIds = judgeDivisionPermissions
+        .filter(p => p.judge_id === judgeId && p.contest_id === selectedContestIdForPermissions)
+        .map(p => p.division_id);
+      setJudgeDivisionIds(divIds);
+      setJudgeDivisionMode(divIds.length > 0 ? "custom" : "all");
+
+      const partIds = judgeParticipantPermissions
+        .filter(p => p.judge_id === judgeId && p.contest_id === selectedContestIdForPermissions)
+        .map(p => p.participant_id);
+      setJudgeParticipantIds(partIds);
+      setJudgeParticipantMode(partIds.length > 0 ? "custom" : "all");
+
+      const scoringPerms = judgeScoringPermissions.filter(
+        p => p.judge_id === judgeId && p.contest_id === selectedContestIdForPermissions
+      );
+      
+      const hasFullAccess = scoringPerms.some(p => p.criteria_id === null && p.can_edit === true);
+      if (hasFullAccess) {
+        setJudgePermissionsMode("all");
+        setJudgePermissionsCriteriaIds([]);
+      } else {
+        const critIds = scoringPerms.filter(p => p.criteria_id !== null && p.can_edit === true).map(p => p.criteria_id as number);
+        setJudgePermissionsMode("custom");
+        setJudgePermissionsCriteriaIds(critIds);
+      }
+    } else {
+      setJudgeDivisionIds([]);
+      setJudgeDivisionMode("all");
+      setJudgeParticipantIds([]);
+      setJudgeParticipantMode("all");
+      setJudgePermissionsCriteriaIds([]);
+      setJudgePermissionsMode("all");
+    }
+  }, [
+    selectedContestIdForPermissions,
+    selectedJudgeIdsForPermissions,
+    judgeDivisionPermissions,
+    judgeParticipantPermissions,
+    judgeScoringPermissions,
+    judgesForActiveEvent,
+  ]);
+
   return (
     <div className="flex min-h-screen flex-col bg-gradient-to-br from-[#E3F2EA] via-white to-[#E3F2EA] px-4 py-6 text-slate-900">
       <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-4">
@@ -884,95 +1182,122 @@ export default function TabulatorPage() {
               Realtime rankings and medals for tabulators.
             </p>
           </div>
-          <div className="flex items-center gap-3 text-sm">
-            {tabulator && (
-              <div className="flex flex-col items-end">
-                <span className="font-semibold text-[#1F4D3A]">
-                  {tabulator.full_name}
-                </span>
-                <span className="text-[11px] text-slate-500">
-                  Tabulator • @{tabulator.username}
-                </span>
-              </div>
-            )}
-            <button
-              type="button"
-              onClick={handleSignOut}
-              className="rounded-full border border-[#1F4D3A33] px-3 py-1.5 text-[11px] font-medium text-[#1F4D3A] hover:bg-[#1F4D3A0A]"
-            >
-              Sign out
-            </button>
+          <div className="flex items-center gap-6">
+            <nav className="flex items-center gap-1 rounded-full bg-[#1F4D3A0A] p-1 text-[11px] font-medium">
+              <button
+                type="button"
+                onClick={() => setActiveTab("tabulation")}
+                className={`rounded-full px-4 py-1.5 transition ${
+                  activeTab === "tabulation"
+                    ? "bg-[#1F4D3A] text-white shadow-sm"
+                    : "text-[#1F4D3A] hover:bg-[#1F4D3A14]"
+                }`}
+              >
+                Tabulation
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab("access")}
+                className={`rounded-full px-4 py-1.5 transition ${
+                  activeTab === "access"
+                    ? "bg-[#1F4D3A] text-white shadow-sm"
+                    : "text-[#1F4D3A] hover:bg-[#1F4D3A14]"
+                }`}
+              >
+                Access
+              </button>
+            </nav>
+            <div className="flex items-center gap-3 text-sm">
+              {tabulator && (
+                <div className="flex flex-col items-end">
+                  <span className="font-semibold text-[#1F4D3A]">
+                    {tabulator.full_name}
+                  </span>
+                  <span className="text-[11px] text-slate-500">
+                    Tabulator • @{tabulator.username}
+                  </span>
+                </div>
+              )}
+              <button
+                type="button"
+                onClick={handleSignOut}
+                className="rounded-full border border-[#1F4D3A33] px-3 py-1.5 text-[11px] font-medium text-[#1F4D3A] hover:bg-[#1F4D3A0A]"
+              >
+                Sign out
+              </button>
+            </div>
           </div>
         </header>
 
         <main className="flex flex-1 flex-col gap-4">
-          <section className="relative rounded-3xl border border-[#1F4D3A1F] bg-white/95 p-6 shadow-[0_18px_45px_rgba(0,0,0,0.05)]">
-            <div className="mb-4 flex flex-wrap items-center justify-between gap-4">
-              <div className="flex flex-wrap items-center gap-3 text-sm">
-                <div className="rounded-full bg-[#E3F2EA] px-4 py-2 text-xs font-medium text-[#1F4D3A]">
-                  {event ? `Event: ${event.name}` : "No active event assigned"}
-                </div>
-                <div className="rounded-full bg-[#F5F7FF] px-4 py-2 text-xs font-medium text-slate-700">
-                  {contests.length > 0
-                    ? `${contests.length} contest${contests.length > 1 ? "s" : ""} available`
-                    : "No contests for this event yet"}
-                </div>
-              </div>
-              <div className="flex items-center gap-3">
-                {isLoading && (
-                  <div className="text-sm text-slate-500">Loading data…</div>
-                )}
-                <button
-                  type="button"
-                  onClick={handlePrint}
-                  className="rounded-full border border-[#1F4D3A33] px-4 py-2 text-xs font-medium text-[#1F4D3A] hover:bg-[#1F4D3A0A]"
-                >
-                  Print rankings
-                </button>
-              </div>
-            </div>
-
-            {error && (
-              <div className="mb-3 rounded-xl border border-[#C0392B] bg-[#FDECEA] px-3 py-2 text-[11px] text-[#C0392B]">
-                {error}
-              </div>
-            )}
-
-            {success && !error && (
-              <div className="mb-3 rounded-xl border border-[#2ECC71] bg-[#E9F9F1] px-3 py-2 text-[11px] text-[#1E9C57]">
-                {success}
-              </div>
-            )}
-
-            <div className="flex flex-col gap-4">
-              <div className="space-y-2 text-sm">
-                {contests.length === 0 ? (
-                  <div className="rounded-2xl border border-dashed border-[#CBD5E1] bg-[#F8FAFC] px-4 py-6 text-center text-sm text-slate-500">
-                    Once the administrator creates contests for this event, they will
-                    appear here.
+          {activeTab === "tabulation" && (
+            <section className="relative rounded-3xl border border-[#1F4D3A1F] bg-white/95 p-6 shadow-[0_18px_45_rgba(0,0,0,0.05)]">
+              <div className="mb-4 flex flex-wrap items-center justify-between gap-4">
+                <div className="flex flex-wrap items-center gap-3 text-sm">
+                  <div className="rounded-full bg-[#E3F2EA] px-4 py-2 text-xs font-medium text-[#1F4D3A]">
+                    {event ? `Event: ${event.name}` : "No active event assigned"}
                   </div>
-                ) : (
-                  <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
-                    <div className="flex w-full flex-col gap-1 text-xs md:flex-1">
-                      <span className="text-[11px] text-slate-500">Contest</span>
-                      <select
-                        className="w-full rounded-full border border-[#E2E8F0] bg-white px-4 py-2.5 text-xs font-medium text-slate-800 outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
-                        value={activeContestId ?? ""}
-                        onChange={(event) => {
-                          const value = event.target.value;
-                          setActiveContestId(
-                            value ? Number.parseInt(value, 10) : null,
-                          );
-                        }}
-                      >
-                        <option value="">Select a contest</option>
-                        {contests.map((contest) => (
-                          <option key={contest.id} value={contest.id}>
-                            {contest.name}
-                          </option>
-                        ))}
-                      </select>
+                  <div className="rounded-full bg-[#F5F7FF] px-4 py-2 text-xs font-medium text-slate-700">
+                    {contests.length > 0
+                      ? `${contests.length} contest${contests.length > 1 ? "s" : ""} available`
+                      : "No contests for this event yet"}
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  {isLoading && (
+                    <div className="text-sm text-slate-500">Loading data…</div>
+                  )}
+                  <button
+                    type="button"
+                    onClick={handlePrint}
+                    className="rounded-full border border-[#1F4D3A33] px-4 py-2 text-xs font-medium text-[#1F4D3A] hover:bg-[#1F4D3A0A]"
+                  >
+                    Print rankings
+                  </button>
+                </div>
+              </div>
+
+              {error && (
+                <div className="mb-3 rounded-xl border border-[#C0392B] bg-[#FDECEA] px-3 py-2 text-[11px] text-[#C0392B]">
+                  {error}
+                </div>
+              )}
+
+              {success && !error && (
+                <div className="mb-3 rounded-xl border border-[#2ECC71] bg-[#E9F9F1] px-3 py-2 text-[11px] text-[#1E9C57]">
+                  {success}
+                </div>
+              )}
+
+              <div className="flex flex-col gap-4">
+                <div className="space-y-2 text-sm">
+                  {contests.length === 0 ? (
+                    <div className="rounded-2xl border border-dashed border-[#CBD5E1] bg-[#F8FAFC] px-4 py-6 text-center text-sm text-slate-500">
+                      Once the administrator creates contests for this event, they will
+                      appear here.
                     </div>
+                  ) : (
+                    <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+                      <div className="flex w-full flex-col gap-1 text-xs md:flex-1">
+                        <span className="text-[11px] text-slate-500">Contest</span>
+                        <select
+                          className="w-full rounded-full border border-[#E2E8F0] bg-white px-4 py-2.5 text-xs font-medium text-slate-800 outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                          value={activeContestId ?? ""}
+                          onChange={(event) => {
+                            const value = event.target.value;
+                            setActiveContestId(
+                              value ? Number.parseInt(value, 10) : null,
+                            );
+                          }}
+                        >
+                          <option value="">Select a contest</option>
+                          {contests.map((contest) => (
+                            <option key={contest.id} value={contest.id}>
+                              {contest.name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
                     <div className="flex w-full flex-col gap-1 text-xs md:flex-1">
                       <span className="text-[11px] text-slate-500">
                         Division filter
@@ -1274,6 +1599,411 @@ export default function TabulatorPage() {
               )}
             </div>
           </section>
+        )}
+
+          {activeTab === "access" && (
+            <section className="relative space-y-4 rounded-3xl border border-[#1F4D3A1F] bg-white/95 p-6 shadow-[0_18px_45_rgba(0,0,0,0.05)]">
+              <div className="mb-2">
+                <h2 className="text-sm font-semibold tracking-tight text-[#1F4D3A]">
+                  Judge scoring access
+                </h2>
+                <p className="text-[11px] text-slate-500">
+                  Manage which criteria, divisions, and participants each judge can score.
+                </p>
+              </div>
+
+              <div className="grid gap-4 md:grid-cols-[minmax(0,1.2fr)_minmax(0,1.5fr)]">
+                <div className="space-y-3 rounded-2xl border border-[#1F4D3A1F] bg-white p-4">
+                  <div className="space-y-2">
+                    <div className="text-[11px] font-medium text-slate-600">
+                      Select judge
+                    </div>
+                    <MultiSelectDropdown
+                      placeholder="Select judge(s)"
+                      disabled={judgesForActiveEvent.length === 0}
+                      options={judgesForActiveEvent.map((judge) => ({
+                        id: judge.id,
+                        label: judge.full_name,
+                      }))}
+                      selectedIds={selectedJudgeIdsForPermissions}
+                      onChange={(ids) => {
+                        setSelectedJudgeIdsForPermissions(ids);
+                        setJudgePermissionsError(null);
+                        setJudgePermissionsSuccess(null);
+                      }}
+                    />
+                    <div className="text-[10px] text-slate-500">
+                      Leave empty to select all judges.
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="text-[11px] font-medium text-slate-600">
+                      Select contest
+                    </div>
+                    <select
+                      value={selectedContestIdForPermissions ?? ""}
+                      onChange={(event) => {
+                        const value = event.target.value;
+                        const parsed = value ? Number(value) : null;
+                        setSelectedContestIdForPermissions(parsed);
+                        setJudgePermissionsError(null);
+                        setJudgePermissionsSuccess(null);
+                      }}
+                      className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                    >
+                      <option value="">Select contest</option>
+                      {contestsForActiveEvent.map((contest) => (
+                        <option key={contest.id} value={contest.id}>
+                          {contest.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="text-[11px] font-medium text-slate-600">
+                      Divisions that judge can edit
+                    </div>
+                    <MultiSelectDropdown
+                      placeholder="Select division(s)"
+                      disabled={selectedContestIdForPermissions === null}
+                      options={
+                        selectedContestIdForPermissions === null
+                          ? []
+                          : categories
+                              .filter((category) =>
+                                participants.some(
+                                  (participant) =>
+                                    participant.contest_id ===
+                                      selectedContestIdForPermissions &&
+                                    participant.division_id === category.id,
+                                ),
+                              )
+                              .map((category) => ({
+                                id: category.id,
+                                label: category.name,
+                              }))
+                      }
+                      selectedIds={judgeDivisionIds}
+                      onChange={(ids) => {
+                        setJudgeDivisionIds(ids);
+                        setJudgeDivisionMode(
+                          ids.length === 0 ? "all" : "custom",
+                        );
+                      }}
+                    />
+                    <div className="text-[10px] text-slate-500">
+                      Leave empty to allow judge to edit all divisions.
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="text-[11px] font-medium text-slate-600">
+                      Participants that judge can edit
+                    </div>
+                    <MultiSelectDropdown
+                      placeholder="Select participant(s)"
+                      disabled={selectedContestIdForPermissions === null}
+                      options={
+                        selectedContestIdForPermissions === null
+                          ? []
+                          : participants
+                              .filter(
+                                (participant) =>
+                                  participant.contest_id ===
+                                  selectedContestIdForPermissions,
+                              )
+                              .map((participant) => ({
+                                id: participant.id,
+                                label: participant.full_name,
+                              }))
+                      }
+                      selectedIds={judgeParticipantIds}
+                      onChange={(ids) => {
+                        setJudgeParticipantIds(ids);
+                        setJudgeParticipantMode(
+                          ids.length === 0 ? "all" : "custom",
+                        );
+                      }}
+                    />
+                    <div className="text-[10px] text-slate-500">
+                      Leave empty to allow judge to edit all participants.
+                    </div>
+                  </div>
+
+                  {(judgePermissionsError || judgePermissionsSuccess) && (
+                    <div
+                      className={`text-[10px] ${
+                        judgePermissionsError ? "text-red-500" : "text-emerald-600"
+                      }`}
+                    >
+                      {judgePermissionsError ?? judgePermissionsSuccess}
+                    </div>
+                  )}
+                </div>
+
+                <div className="rounded-2xl border border-[#1F4D3A1F] bg-white p-4">
+                  <div className="mb-1 text-[11px] font-medium text-slate-600">
+                    Criteria permissions
+                  </div>
+                  <div className="mb-3 text-[10px] text-slate-500">
+                    {selectedContestIdForPermissions === null
+                      ? "Select a contest to manage criteria access."
+                      : "Toggle which criteria the judge is allowed to score."}
+                  </div>
+                  <div>
+                    {selectedContestIdForPermissions === null ? (
+                      <div className="flex h-24 items-center justify-center rounded-xl border border-dashed border-[#E2E8F0] text-[10px] text-slate-400">
+                        No contest selected
+                      </div>
+                    ) : (
+                      <div className="space-y-1.5">
+                        {criteriaList
+                          .filter(
+                            (criteria) =>
+                              criteria.contest_id ===
+                              selectedContestIdForPermissions,
+                          )
+                          .map((criteria) => {
+                            const isAllowed =
+                              judgePermissionsMode === "all"
+                                ? true
+                                : judgePermissionsCriteriaIds.includes(
+                                    criteria.id,
+                                  );
+                            const isInteractive = true;
+
+                            return (
+                              <div
+                                key={criteria.id}
+                                className={`flex items-center justify-between rounded-xl px-3 py-2.5 transition ${
+                                  isAllowed
+                                    ? "border border-emerald-200 bg-emerald-50/60"
+                                    : "border border-slate-200 bg-slate-50/60"
+                                }`}
+                              >
+                                <div className="flex items-center gap-2">
+                                  <div
+                                    className={`h-1.5 w-1.5 rounded-full ${
+                                      isAllowed ? "bg-emerald-500" : "bg-slate-300"
+                                    }`}
+                                  />
+                                  <span
+                                    className={`text-[11px] font-medium ${
+                                      isAllowed ? "text-slate-800" : "text-slate-400"
+                                    }`}
+                                  >
+                                    {criteria.name}
+                                  </span>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (judgePermissionsMode === "all") {
+                                      const allCriteriaIds = criteriaList
+                                        .filter(
+                                          (c) =>
+                                            c.contest_id ===
+                                            selectedContestIdForPermissions,
+                                        )
+                                        .map((c) => c.id);
+                                      setJudgePermissionsMode("custom");
+                                      setJudgePermissionsCriteriaIds(
+                                        allCriteriaIds.filter(
+                                          (id) => id !== criteria.id,
+                                        ),
+                                      );
+                                    } else {
+                                      setJudgePermissionsCriteriaIds(
+                                        (previous) =>
+                                          previous.includes(criteria.id)
+                                            ? previous.filter(
+                                                (id) => id !== criteria.id,
+                                              )
+                                            : [...previous, criteria.id],
+                                      );
+                                    }
+                                  }}
+                                  className={`relative inline-flex h-5 w-9 flex-shrink-0 items-center rounded-full transition-colors ${
+                                    !isInteractive
+                                      ? "cursor-not-allowed opacity-50"
+                                      : "cursor-pointer"
+                                  } ${
+                                    isAllowed ? "bg-emerald-500" : "bg-slate-300"
+                                  }`}
+                                >
+                                  <span
+                                    className={`inline-block h-3.5 w-3.5 rounded-full bg-white shadow-sm transition-transform ${
+                                      isAllowed
+                                        ? "translate-x-[18px]"
+                                        : "translate-x-[2px]"
+                                    }`}
+                                  />
+                                </button>
+                              </div>
+                            );
+                          })}
+                      </div>
+                    )}
+                  </div>
+                  <div className="mt-4 flex justify-end">
+                    <button
+                      type="button"
+                      disabled={isSavingJudgePermissions || selectedContestIdForPermissions === null}
+                      onClick={async () => {
+                        if (selectedContestIdForPermissions === null) {
+                          setJudgePermissionsError("Select a contest first.");
+                          setJudgePermissionsSuccess(null);
+                          return;
+                        }
+                        setIsSavingJudgePermissions(true);
+                        setJudgePermissionsError(null);
+                        setJudgePermissionsSuccess(null);
+                        const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+                        const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+                        if (!supabaseUrl || !supabaseAnonKey) {
+                          setJudgePermissionsError("Supabase configuration is missing.");
+                          setIsSavingJudgePermissions(false);
+                          return;
+                        }
+                        const supabase = createClient(supabaseUrl, supabaseAnonKey);
+                        const judgeIds =
+                          selectedJudgeIdsForPermissions.length === 0
+                            ? judgesForActiveEvent.map((judge) => judge.id)
+                            : selectedJudgeIdsForPermissions;
+                        if (judgeIds.length === 0) {
+                          setJudgePermissionsError("There are no judges for this event.");
+                          setIsSavingJudgePermissions(false);
+                          return;
+                        }
+
+                        // 1. Update Scoring Permissions
+                        const { error: deleteScoringError } = await supabase
+                          .from("judge_scoring_permission")
+                          .delete()
+                          .in("judge_id", judgeIds)
+                          .eq("contest_id", selectedContestIdForPermissions);
+                        if (deleteScoringError) {
+                          setJudgePermissionsError(deleteScoringError.message);
+                          setIsSavingJudgePermissions(false);
+                          return;
+                        }
+
+                        const allCriteriaIdsForSave = criteriaList
+                          .filter((c) => c.contest_id === selectedContestIdForPermissions)
+                          .map((c) => c.id);
+                        
+                        const scoringInserts: any[] = [];
+                        if (judgePermissionsMode === "all") {
+                          judgeIds.forEach(jId => scoringInserts.push({
+                            judge_id: jId, contest_id: selectedContestIdForPermissions, criteria_id: null, can_edit: true
+                          }));
+                        } else {
+                          judgeIds.forEach(jId => {
+                            scoringInserts.push({
+                              judge_id: jId, contest_id: selectedContestIdForPermissions, criteria_id: null, can_edit: false
+                            });
+                            judgePermissionsCriteriaIds.forEach(cId => scoringInserts.push({
+                              judge_id: jId, contest_id: selectedContestIdForPermissions, criteria_id: cId, can_edit: true
+                            }));
+                          });
+                        }
+
+                        if (scoringInserts.length > 0) {
+                          const { data: sData, error: sErr } = await supabase
+                            .from("judge_scoring_permission")
+                            .insert(scoringInserts)
+                            .select();
+                          if (sErr) {
+                            setJudgePermissionsError(sErr.message);
+                            setIsSavingJudgePermissions(false);
+                            return;
+                          }
+                          if (sData) {
+                            setJudgeScoringPermissions(prev => [
+                              ...prev.filter(p => !(judgeIds.includes(p.judge_id) && p.contest_id === selectedContestIdForPermissions)),
+                              ...sData
+                            ]);
+                          }
+                        }
+
+                        // 2. Update Division Permissions
+                        const { error: deleteDivError } = await supabase
+                          .from("judge_division_permission")
+                          .delete()
+                          .in("judge_id", judgeIds)
+                          .eq("contest_id", selectedContestIdForPermissions);
+                        if (deleteDivError) {
+                          setJudgePermissionsError(deleteDivError.message);
+                          setIsSavingJudgePermissions(false);
+                          return;
+                        }
+                        if (judgeDivisionMode === "custom" && judgeDivisionIds.length > 0) {
+                          const divInserts = judgeIds.flatMap(jId => judgeDivisionIds.map(dId => ({
+                            judge_id: jId, contest_id: selectedContestIdForPermissions, division_id: dId
+                          })));
+                          const { data: dData, error: dErr } = await supabase
+                            .from("judge_division_permission")
+                            .insert(divInserts)
+                            .select();
+                          if (dErr) {
+                            setJudgePermissionsError(dErr.message);
+                            setIsSavingJudgePermissions(false);
+                            return;
+                          }
+                          if (dData) {
+                            setJudgeDivisionPermissions(prev => [
+                              ...prev.filter(p => !(judgeIds.includes(p.judge_id) && p.contest_id === selectedContestIdForPermissions)),
+                              ...dData
+                            ]);
+                          }
+                        }
+
+                        // 3. Update Participant Permissions
+                        const { error: deletePartError } = await supabase
+                          .from("judge_participant_permission")
+                          .delete()
+                          .in("judge_id", judgeIds)
+                          .eq("contest_id", selectedContestIdForPermissions);
+                        if (deletePartError) {
+                          setJudgePermissionsError(deletePartError.message);
+                          setIsSavingJudgePermissions(false);
+                          return;
+                        }
+                        if (judgeParticipantMode === "custom" && judgeParticipantIds.length > 0) {
+                          const partInserts = judgeIds.flatMap(jId => judgeParticipantIds.map(pId => ({
+                            judge_id: jId, contest_id: selectedContestIdForPermissions, participant_id: pId
+                          })));
+                          const { data: pData, error: pErr } = await supabase
+                            .from("judge_participant_permission")
+                            .insert(partInserts)
+                            .select();
+                          if (pErr) {
+                            setJudgePermissionsError(pErr.message);
+                            setIsSavingJudgePermissions(false);
+                            return;
+                          }
+                          if (pData) {
+                            setJudgeParticipantPermissions(prev => [
+                              ...prev.filter(p => !(judgeIds.includes(p.judge_id) && p.contest_id === selectedContestIdForPermissions)),
+                              ...pData
+                            ]);
+                          }
+                        }
+
+                        setJudgePermissionsSuccess("Access permissions updated successfully.");
+                        setIsSavingJudgePermissions(false);
+                      }}
+                      className="inline-flex items-center rounded-full bg-[#1F4D3A] px-6 py-2 text-xs font-semibold text-white shadow-sm transition hover:bg-[#163528] disabled:opacity-50"
+                    >
+                      {isSavingJudgePermissions ? "Saving..." : "Save access"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </section>
+          )}
         </main>
         
         {/* Judge Score Breakdown Modal */}

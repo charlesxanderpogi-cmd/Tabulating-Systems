@@ -872,6 +872,7 @@ export default function AdminDashboard() {
   const [awardType, setAwardType] = useState<AwardType>("criteria");
   const [awardContestId, setAwardContestId] = useState<number | null>(null);
   const [awardCriteriaIds, setAwardCriteriaIds] = useState<number[]>([]);
+  const [expandedAwardCategories, setExpandedAwardCategories] = useState<Set<string>>(new Set());
   const [isAwardCriteriaDropdownOpen, setIsAwardCriteriaDropdownOpen] = useState(false);
   const awardCriteriaDropdownRef = useRef<HTMLDivElement>(null);
   const [awardDescription, setAwardDescription] = useState("");
@@ -2009,24 +2010,34 @@ export default function AdminDashboard() {
   ]);
 
   useEffect(() => {
-    if (
-      activeJudgeIdForPermissions === null ||
-      selectedContestIdForPermissions === null
-    ) {
-      setJudgePermissionsMode("all");
+    const allCriteriaIdsForContest =
+      selectedContestIdForPermissions !== null
+        ? criteriaList
+            .filter((c) => c.contest_id === selectedContestIdForPermissions)
+            .map((c) => c.id)
+        : [];
+
+    if (selectedContestIdForPermissions === null) {
       setJudgePermissionsCriteriaIds([]);
+      setJudgePermissionsMode("all");
       return;
     }
 
-    const permissionsForSelection = judgeScoringPermissions.filter(
-      (permission) =>
-        permission.judge_id === activeJudgeIdForPermissions &&
-        permission.contest_id === selectedContestIdForPermissions,
-    );
+    // When no single judge is selected, sample any judge's permissions for this contest
+    const permissionsForSelection = activeJudgeIdForPermissions !== null
+      ? judgeScoringPermissions.filter(
+          (permission) =>
+            permission.judge_id === activeJudgeIdForPermissions &&
+            permission.contest_id === selectedContestIdForPermissions,
+        )
+      : judgeScoringPermissions.filter(
+          (permission) =>
+            permission.contest_id === selectedContestIdForPermissions,
+        );
 
     if (permissionsForSelection.length === 0) {
       setJudgePermissionsMode("all");
-      setJudgePermissionsCriteriaIds([]);
+      setJudgePermissionsCriteriaIds(allCriteriaIdsForContest);
       return;
     }
 
@@ -2034,26 +2045,35 @@ export default function AdminDashboard() {
       (permission) => permission.criteria_id === null,
     );
 
+    const perCriteriaUnlocks = permissionsForSelection
+      .filter(
+        (permission) =>
+          permission.criteria_id !== null && permission.can_edit,
+      )
+      .map((permission) => permission.criteria_id as number);
+
+    // Deduplicate (multiple judges may have the same criteria unlocked)
+    const uniqueCriteriaUnlocks = [...new Set(perCriteriaUnlocks)];
+
     if (globalPermission) {
-      setJudgePermissionsMode(globalPermission.can_edit ? "all" : "none");
-      setJudgePermissionsCriteriaIds([]);
+      if (globalPermission.can_edit) {
+        setJudgePermissionsMode("all");
+        setJudgePermissionsCriteriaIds(allCriteriaIdsForContest);
+      } else {
+        setJudgePermissionsMode("custom");
+        setJudgePermissionsCriteriaIds(uniqueCriteriaUnlocks);
+      }
       return;
     }
 
     setJudgePermissionsMode("custom");
-    setJudgePermissionsCriteriaIds(
-      permissionsForSelection
-        .filter(
-          (permission) =>
-            permission.criteria_id !== null && permission.can_edit,
-        )
-        .map((permission) => permission.criteria_id as number),
-    );
+    setJudgePermissionsCriteriaIds(uniqueCriteriaUnlocks);
   }, [
     activeJudgeIdForPermissions,
     selectedJudgeIdsForPermissions,
     selectedContestIdForPermissions,
     judgeScoringPermissions,
+    criteriaList,
   ]);
 
   const openCreateEventModal = () => {
@@ -4112,6 +4132,7 @@ export default function AdminDashboard() {
     setAwardType("criteria");
     setAwardContestId(null);
     setAwardCriteriaIds([]);
+    setExpandedAwardCategories(new Set());
     setIsAwardCriteriaDropdownOpen(false);
     setAwardDescription("");
     setAwardIsActive(true);
@@ -4126,6 +4147,7 @@ export default function AdminDashboard() {
     setAwardType(award.award_type);
     setAwardContestId(award.contest_id);
     setAwardCriteriaIds(award.criteria_ids ?? (award.criteria_id ? [award.criteria_id] : []));
+    setExpandedAwardCategories(new Set());
     setIsAwardCriteriaDropdownOpen(false);
     setAwardDescription(award.description ?? "");
     setAwardIsActive(award.is_active);
@@ -4232,9 +4254,12 @@ export default function AdminDashboard() {
     setAwardName("");
     setAwardContestId(null);
     setAwardCriteriaIds([]);
+    setExpandedAwardCategories(new Set());
     setIsAwardCriteriaDropdownOpen(false);
     setAwardDescription("");
     setAwardIsActive(true);
+    setAwardError(null);
+    setAwardSuccess(null);
   };
 
   useEffect(() => {
@@ -9548,28 +9573,81 @@ export default function AdminDashboard() {
                                   {Array.from(new Set(criteriaForActiveEvent.map(c => c.category || "Uncategorized"))).map((category) => {
                                     const criteriaInCategory = criteriaForActiveEvent.filter(c => (c.category || "Uncategorized") === category);
                                     const allSelected = criteriaInCategory.every(c => awardCriteriaIds.includes(c.id));
+                                    const someSelected = criteriaInCategory.some(c => awardCriteriaIds.includes(c.id)) && !allSelected;
+                                    const isExpanded = expandedAwardCategories.has(category);
                                     
                                     return (
-                                      <div key={category} className="flex items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-[#F8FAFC]">
-                                        <input
-                                          type="checkbox"
-                                          id={`category-${category}`}
-                                          checked={allSelected}
-                                          onChange={(e) => {
-                                            const ids = criteriaInCategory.map(c => c.id);
-                                            if (e.target.checked) {
-                                              // Select all criteria in this category
-                                              setAwardCriteriaIds((prev) => Array.from(new Set([...prev, ...ids])));
-                                            } else {
-                                              // Deselect all criteria in this category
-                                              setAwardCriteriaIds((prev) => prev.filter((id) => !ids.includes(id)));
-                                            }
-                                          }}
-                                          className="h-3.5 w-3.5 rounded border-[#D0D7E2] text-[#1F4D3A] focus:ring-[#1F4D3A]"
-                                        />
-                                        <label htmlFor={`category-${category}`} className="w-full cursor-pointer text-xs text-slate-700">
-                                          {category}
-                                        </label>
+                                      <div key={category} className="border-b border-[#F1F5F9] last:border-0">
+                                        <div className="flex items-center gap-2 px-2 py-1.5 hover:bg-[#F8FAFC]">
+                                          <input
+                                            type="checkbox"
+                                            id={`category-${category}`}
+                                            checked={allSelected}
+                                            ref={(el) => {
+                                              if (el) el.indeterminate = someSelected;
+                                            }}
+                                            onChange={(e) => {
+                                              const ids = criteriaInCategory.map(c => c.id);
+                                              if (e.target.checked) {
+                                                setAwardCriteriaIds((prev) => Array.from(new Set([...prev, ...ids])));
+                                              } else {
+                                                setAwardCriteriaIds((prev) => prev.filter((id) => !ids.includes(id)));
+                                              }
+                                            }}
+                                            className="h-3.5 w-3.5 rounded border-[#D0D7E2] text-[#1F4D3A] focus:ring-[#1F4D3A]"
+                                          />
+                                          <div 
+                                            className="flex flex-1 cursor-pointer items-center justify-between py-0.5"
+                                            onClick={() => {
+                                              const next = new Set(expandedAwardCategories);
+                                              if (next.has(category)) next.delete(category);
+                                              else next.add(category);
+                                              setExpandedAwardCategories(next);
+                                            }}
+                                          >
+                                            <span className="text-xs font-medium text-slate-700">
+                                              {category}
+                                            </span>
+                                            <svg
+                                              xmlns="http://www.w3.org/2000/svg"
+                                              fill="none"
+                                              viewBox="0 0 24 24"
+                                              strokeWidth={2}
+                                              stroke="currentColor"
+                                              className={`h-3 w-3 text-slate-400 transition-transform ${isExpanded ? "rotate-180" : ""}`}
+                                            >
+                                              <path strokeLinecap="round" strokeLinejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
+                                            </svg>
+                                          </div>
+                                        </div>
+                                        
+                                        {isExpanded && (
+                                          <div className="bg-slate-50/50 py-1 pl-7 pr-2">
+                                            {criteriaInCategory.map((criterion) => (
+                                              <div key={criterion.id} className="flex items-center gap-2 py-1.5">
+                                                <input
+                                                  type="checkbox"
+                                                  id={`criterion-${criterion.id}`}
+                                                  checked={awardCriteriaIds.includes(criterion.id)}
+                                                  onChange={(e) => {
+                                                    if (e.target.checked) {
+                                                      setAwardCriteriaIds((prev) => [...prev, criterion.id]);
+                                                    } else {
+                                                      setAwardCriteriaIds((prev) => prev.filter((id) => id !== criterion.id));
+                                                    }
+                                                  }}
+                                                  className="h-3 w-3 rounded border-[#D0D7E2] text-[#1F4D3A] focus:ring-[#1F4D3A]"
+                                                />
+                                                <label 
+                                                  htmlFor={`criterion-${criterion.id}`} 
+                                                  className="cursor-pointer text-[11px] text-slate-600 hover:text-[#1F4D3A]"
+                                                >
+                                                  {criterion.name}
+                                                </label>
+                                              </div>
+                                            ))}
+                                          </div>
+                                        )}
                                       </div>
                                     );
                                   })}
@@ -10059,125 +10137,186 @@ export default function AdminDashboard() {
                         </div>
                       </div>
 
-                      <div className="space-y-2">
-                        <div className="text-[11px] font-medium text-slate-600">
-                          Access mode
-                        </div>
-                        <div className="space-y-1 text-[11px] text-slate-600">
-                          <label className="flex items-center gap-2">
-                            <input
-                              type="radio"
-                              className="h-3 w-3"
-                              checked={judgePermissionsMode === "all"}
-                              onChange={() => setJudgePermissionsMode("all")}
-                            />
-                            <span>Allow judge to edit all criteria</span>
-                          </label>
-                          <label className="flex items-center gap-2">
-                            <input
-                              type="radio"
-                              className="h-3 w-3"
-                              checked={judgePermissionsMode === "none"}
-                              onChange={() => setJudgePermissionsMode("none")}
-                            />
-                            <span>Do not allow judge to edit any criteria</span>
-                          </label>
-                          <label className="flex items-center gap-2">
-                            <input
-                              type="radio"
-                              className="h-3 w-3"
-                              checked={judgePermissionsMode === "custom"}
-                              onChange={() => setJudgePermissionsMode("custom")}
-                            />
-                            <span>
-                              Allow judge to edit only selected criteria
-                            </span>
-                          </label>
-                        </div>
-                      </div>
-
                       {(judgePermissionsError || judgePermissionsSuccess) && (
                         <div
                           className={`text-[10px] ${
-                            judgePermissionsError
-                              ? "text-red-500"
-                              : "text-emerald-600"
+                            judgePermissionsError ? "text-red-500" : "text-emerald-600"
                           }`}
                         >
                           {judgePermissionsError ?? judgePermissionsSuccess}
                         </div>
                       )}
+                    </div>
 
+                    <div className="rounded-2xl border border-[#1F4D3A1F] bg-white p-4">
+                      <div className="mb-1 text-[11px] font-medium text-slate-600">
+                        Criteria permissions
+                      </div>
+                      <div className="mb-3 text-[10px] text-slate-500">
+                        {selectedContestIdForPermissions === null
+                          ? "Select a contest to manage criteria access."
+                          : "Toggle which criteria the judge is allowed to score."}
+                      </div>
+                      <div>
+                        {selectedContestIdForPermissions === null ? (
+                          <div className="flex h-24 items-center justify-center rounded-xl border border-dashed border-[#E2E8F0] text-[10px] text-slate-400">
+                            No contest selected
+                          </div>
+                        ) : (
+                          <div className="space-y-1.5">
+                            {criteriaList
+                              .filter(
+                                (criteria) =>
+                                  criteria.contest_id ===
+                                  selectedContestIdForPermissions,
+                              )
+                              .map((criteria) => {
+                                const isAllowed =
+                                  judgePermissionsMode === "all"
+                                    ? true
+                                    : judgePermissionsCriteriaIds.includes(
+                                        criteria.id,
+                                      );
+                                const isInteractive = true;
+
+                                return (
+                                  <div
+                                    key={criteria.id}
+                                    className={`flex items-center justify-between rounded-xl px-3 py-2.5 transition ${
+                                      isAllowed
+                                        ? "border border-emerald-200 bg-emerald-50/60"
+                                        : "border border-slate-200 bg-slate-50/60"
+                                    }`}
+                                  >
+                                    <div className="flex items-center gap-2">
+                                      <div
+                                        className={`h-1.5 w-1.5 rounded-full ${
+                                          isAllowed ? "bg-emerald-500" : "bg-slate-300"
+                                        }`}
+                                      />
+                                      <span
+                                        className={`text-[11px] font-medium ${
+                                          isAllowed ? "text-slate-800" : "text-slate-400"
+                                        }`}
+                                      >
+                                        {criteria.name}
+                                      </span>
+                                    </div>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        if (judgePermissionsMode === "all") {
+                                          const allCriteriaIds = criteriaList
+                                            .filter(
+                                              (c) =>
+                                                c.contest_id ===
+                                                selectedContestIdForPermissions,
+                                            )
+                                            .map((c) => c.id);
+                                          setJudgePermissionsMode("custom");
+                                          setJudgePermissionsCriteriaIds(
+                                            allCriteriaIds.filter(
+                                              (id) => id !== criteria.id,
+                                            ),
+                                          );
+                                        } else {
+                                          setJudgePermissionsCriteriaIds(
+                                            (previous) =>
+                                              previous.includes(criteria.id)
+                                                ? previous.filter(
+                                                    (id) => id !== criteria.id,
+                                                  )
+                                                : [...previous, criteria.id],
+                                          );
+                                        }
+                                      }}
+                                      className={`relative inline-flex h-5 w-9 flex-shrink-0 items-center rounded-full transition-colors ${
+                                        !isInteractive
+                                          ? "cursor-not-allowed opacity-50"
+                                          : "cursor-pointer"
+                                      } ${
+                                        isAllowed ? "bg-emerald-500" : "bg-slate-300"
+                                      }`}
+                                    >
+                                      <span
+                                        className={`inline-block h-3.5 w-3.5 rounded-full bg-white shadow-sm transition-transform ${
+                                          isAllowed
+                                            ? "translate-x-[18px]"
+                                            : "translate-x-[2px]"
+                                        }`}
+                                      />
+                                    </button>
+                                  </div>
+                                );
+                              })}
+                          </div>
+                        )}
+                      </div>
+                      {(judgePermissionsError || judgePermissionsSuccess) && (
+                        <div
+                          className={`mt-3 text-[10px] ${
+                            judgePermissionsError ? "text-red-500" : "text-emerald-600"
+                          }`}
+                        >
+                          {judgePermissionsError ?? judgePermissionsSuccess}
+                        </div>
+                      )}
                       <button
                         type="button"
                         onClick={async () => {
-                          if (
-                            selectedContestIdForPermissions === null
-                          ) {
-                            setJudgePermissionsError(
-                              "Select a contest first.",
-                            );
+                          if (selectedContestIdForPermissions === null) {
+                            setJudgePermissionsError("Select a contest first.");
                             setJudgePermissionsSuccess(null);
                             return;
                           }
-
                           setIsSavingJudgePermissions(true);
                           setJudgePermissionsError(null);
                           setJudgePermissionsSuccess(null);
-
                           const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-                          const supabaseAnonKey =
-                            process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-
+                          const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
                           if (!supabaseUrl || !supabaseAnonKey) {
-                            setJudgePermissionsError(
-                              "Supabase configuration is missing.",
-                            );
+                            setJudgePermissionsError("Supabase configuration is missing.");
                             setIsSavingJudgePermissions(false);
                             return;
                           }
-
-                          const supabase = createClient(
-                            supabaseUrl,
-                            supabaseAnonKey,
-                          );
-
+                          const supabase = createClient(supabaseUrl, supabaseAnonKey);
                           const judgeIds =
                             selectedJudgeIdsForPermissions.length === 0
                               ? judgesForActiveEvent.map((judge) => judge.id)
                               : selectedJudgeIdsForPermissions;
-
                           if (judgeIds.length === 0) {
-                            setJudgePermissionsError(
-                              "There are no judges for this event.",
-                            );
+                            setJudgePermissionsError("There are no judges for this event.");
                             setIsSavingJudgePermissions(false);
                             return;
                           }
-
                           const { error: deleteScoringError } = await supabase
                             .from("judge_scoring_permission")
                             .delete()
                             .in("judge_id", judgeIds)
                             .eq("contest_id", selectedContestIdForPermissions);
-
                           if (deleteScoringError) {
                             setJudgePermissionsError(
-                              deleteScoringError.message ||
-                                "Unable to update judge permissions.",
+                              deleteScoringError.message || "Unable to update judge permissions.",
                             );
                             setIsSavingJudgePermissions(false);
                             return;
                           }
-
+                          const allCriteriaIdsForSave = criteriaList
+                            .filter((c) => c.contest_id === selectedContestIdForPermissions)
+                            .map((c) => c.id);
+                          const isAllCriteriaSelected =
+                            judgePermissionsMode === "all" ||
+                            (allCriteriaIdsForSave.length > 0 &&
+                              allCriteriaIdsForSave.every((id) =>
+                                judgePermissionsCriteriaIds.includes(id),
+                              ));
                           const scoringInserts: {
                             judge_id: number;
                             contest_id: number;
                             criteria_id: number | null;
                             can_edit: boolean;
                           }[] = [];
-
-                          if (judgePermissionsMode === "all") {
+                          if (isAllCriteriaSelected) {
                             judgeIds.forEach((judgeId) => {
                               scoringInserts.push({
                                 judge_id: judgeId,
@@ -10186,7 +10325,7 @@ export default function AdminDashboard() {
                                 can_edit: true,
                               });
                             });
-                          } else if (judgePermissionsMode === "none") {
+                          } else {
                             judgeIds.forEach((judgeId) => {
                               scoringInserts.push({
                                 judge_id: judgeId,
@@ -10195,7 +10334,6 @@ export default function AdminDashboard() {
                                 can_edit: false,
                               });
                             });
-                          } else if (judgePermissionsMode === "custom") {
                             judgePermissionsCriteriaIds.forEach((criteriaId) => {
                               judgeIds.forEach((judgeId) => {
                                 scoringInserts.push({
@@ -10207,32 +10345,25 @@ export default function AdminDashboard() {
                               });
                             });
                           }
-
                           if (scoringInserts.length > 0) {
                             const { data, error } = await supabase
                               .from("judge_scoring_permission")
                               .insert(scoringInserts)
-                              .select(
-                                "judge_id, contest_id, criteria_id, can_edit, created_at",
-                              );
-
+                              .select("judge_id, contest_id, criteria_id, can_edit, created_at");
                             if (error) {
                               setJudgePermissionsError(
-                                error.message ||
-                                  "Unable to update judge permissions.",
+                                error.message || "Unable to update judge permissions.",
                               );
                               setIsSavingJudgePermissions(false);
                               return;
                             }
-
                             if (data && Array.isArray(data)) {
                               setJudgeScoringPermissions((previous) => [
                                 ...previous.filter(
                                   (permission) =>
                                     !(
                                       judgeIds.includes(permission.judge_id) &&
-                                      permission.contest_id ===
-                                        selectedContestIdForPermissions
+                                      permission.contest_id === selectedContestIdForPermissions
                                     ),
                                 ),
                                 ...(data as JudgeScoringPermissionRow[]),
@@ -10244,32 +10375,24 @@ export default function AdminDashboard() {
                                 (permission) =>
                                   !(
                                     judgeIds.includes(permission.judge_id) &&
-                                    permission.contest_id ===
-                                      selectedContestIdForPermissions
+                                    permission.contest_id === selectedContestIdForPermissions
                                   ),
                               ),
                             );
                           }
-
                           const { error: deleteDivisionError } = await supabase
                             .from("judge_division_permission")
                             .delete()
                             .in("judge_id", judgeIds)
                             .eq("contest_id", selectedContestIdForPermissions);
-
                           if (deleteDivisionError) {
                             setJudgePermissionsError(
-                              deleteDivisionError.message ||
-                                "Unable to update judge division access.",
+                              deleteDivisionError.message || "Unable to update judge division access.",
                             );
                             setIsSavingJudgePermissions(false);
                             return;
                           }
-
-                          if (
-                            judgeDivisionMode === "custom" &&
-                            judgeDivisionIds.length > 0
-                          ) {
+                          if (judgeDivisionMode === "custom" && judgeDivisionIds.length > 0) {
                             const { error: insertDivisionError } = await supabase
                               .from("judge_division_permission")
                               .insert(
@@ -10281,7 +10404,6 @@ export default function AdminDashboard() {
                                   })),
                                 ),
                               );
-
                             if (insertDivisionError) {
                               setJudgePermissionsError(
                                 insertDivisionError.message ||
@@ -10291,13 +10413,11 @@ export default function AdminDashboard() {
                               return;
                             }
                           }
-
                           const { error: deleteParticipantError } = await supabase
                             .from("judge_participant_permission")
                             .delete()
                             .in("judge_id", judgeIds)
                             .eq("contest_id", selectedContestIdForPermissions);
-
                           if (deleteParticipantError) {
                             setJudgePermissionsError(
                               deleteParticipantError.message ||
@@ -10306,13 +10426,10 @@ export default function AdminDashboard() {
                             setIsSavingJudgePermissions(false);
                             return;
                           }
-
-                          if (
-                            judgeParticipantMode === "custom" &&
-                            judgeParticipantIds.length > 0
-                          ) {
-                            const { error: insertParticipantError } =
-                              await supabase.from("judge_participant_permission").insert(
+                          if (judgeParticipantMode === "custom" && judgeParticipantIds.length > 0) {
+                            const { error: insertParticipantError } = await supabase
+                              .from("judge_participant_permission")
+                              .insert(
                                 judgeParticipantIds.flatMap((participantId) =>
                                   judgeIds.map((judgeId) => ({
                                     judge_id: judgeId,
@@ -10321,7 +10438,6 @@ export default function AdminDashboard() {
                                   })),
                                 ),
                               );
-
                             if (insertParticipantError) {
                               setJudgePermissionsError(
                                 insertParticipantError.message ||
@@ -10331,138 +10447,38 @@ export default function AdminDashboard() {
                               return;
                             }
                           }
-
-                        if (
-                          judgePermissionsMode === "all" ||
-                          judgePermissionsMode === "custom"
-                        ) {
-                          const { error: resetSubmissionError } = await supabase
-                            .from("judge_contest_submission")
-                            .delete()
-                            .in("judge_id", judgeIds)
-                            .eq("contest_id", selectedContestIdForPermissions);
-
-                          if (resetSubmissionError) {
-                            setJudgePermissionsError(
-                              resetSubmissionError.message ||
-                                "Unable to reset judge submission status.",
+                          if (isAllCriteriaSelected || judgePermissionsCriteriaIds.length > 0) {
+                            const { error: resetSubmissionError } = await supabase
+                              .from("judge_contest_submission")
+                              .delete()
+                              .in("judge_id", judgeIds)
+                              .eq("contest_id", selectedContestIdForPermissions);
+                            if (resetSubmissionError) {
+                              setJudgePermissionsError(
+                                resetSubmissionError.message ||
+                                  "Unable to reset judge submission status.",
+                              );
+                              setIsSavingJudgePermissions(false);
+                              return;
+                            }
+                            setJudgeContestSubmissions((previous) =>
+                              previous.filter(
+                                (submission) =>
+                                  !(
+                                    judgeIds.includes(submission.judge_id) &&
+                                    submission.contest_id === selectedContestIdForPermissions
+                                  ),
+                              ),
                             );
-                            setIsSavingJudgePermissions(false);
-                            return;
                           }
-
-                          setJudgeContestSubmissions((previous) =>
-                            previous.filter(
-                              (submission) =>
-                                !(
-                                  judgeIds.includes(submission.judge_id) &&
-                                  submission.contest_id ===
-                                    selectedContestIdForPermissions
-                                ),
-                            ),
-                          );
-                        }
-
-                          setJudgePermissionsSuccess(
-                            "Judge scoring access has been updated.",
-                          );
+                          setJudgePermissionsSuccess("Judge scoring access has been updated.");
                           setIsSavingJudgePermissions(false);
                         }}
-                        disabled={
-                          isSavingJudgePermissions ||
-                          selectedContestIdForPermissions === null
-                        }
-                        className="mt-1 inline-flex items-center rounded-full bg-[#1F4D3A] px-4 py-1.5 text-[11px] font-medium text-white shadow-sm transition hover:bg-[#163528] disabled:cursor-not-allowed disabled:opacity-60"
+                        disabled={isSavingJudgePermissions || selectedContestIdForPermissions === null}
+                        className="mt-3 inline-flex items-center rounded-full bg-[#1F4D3A] px-4 py-1.5 text-[11px] font-medium text-white shadow-sm transition hover:bg-[#163528] disabled:cursor-not-allowed disabled:opacity-60"
                       >
                         {isSavingJudgePermissions ? "Saving..." : "Save access"}
                       </button>
-                    </div>
-
-                    <div className="rounded-2xl border border-[#1F4D3A1F] bg-white p-4">
-                      <div className="mb-2 flex items-center justify-between">
-                        <div className="text-[11px] font-medium text-slate-600">
-                          Criteria that judge can edit
-                        </div>
-                      </div>
-                      <div className="max-h-80 overflow-y-auto text-[11px]">
-                        {selectedContestIdForPermissions === null ? (
-                          <div className="text-[10px] text-slate-400">
-                            Select a contest to manage criteria access.
-                          </div>
-                        ) : (
-                          <table className="min-w-full border-collapse text-left text-[11px]">
-                            <thead>
-                              <tr className="border-b border-[#E2E8F0] bg-[#F5F7FF] text-[10px] uppercase tracking-wide text-slate-500">
-                                <th className="px-3 py-2 font-medium">
-                                  Criteria
-                                </th>
-                                <th className="px-3 py-2 font-medium text-right">
-                                  Can edit
-                                </th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {criteriaList
-                                .filter(
-                                  (criteria) =>
-                                    criteria.contest_id ===
-                                    selectedContestIdForPermissions,
-                                )
-                                .map((criteria) => {
-                                  const checked =
-                                    judgePermissionsMode === "all"
-                                      ? true
-                                      : judgePermissionsMode === "none"
-                                      ? false
-                                      : judgePermissionsCriteriaIds.includes(
-                                          criteria.id,
-                                        );
-
-                                  return (
-                                    <tr
-                                      key={criteria.id}
-                                      className="border-b border-[#F1F5F9]"
-                                    >
-                                      <td className="px-3 py-2 text-slate-700">
-                                        {criteria.name}
-                                      </td>
-                                      <td className="px-3 py-2 text-right">
-                                        <input
-                                          type="checkbox"
-                                          className="h-3 w-3"
-                                          checked={checked}
-                                          disabled={judgePermissionsMode !== "custom"}
-                                          onChange={(event) => {
-                                            const isChecked =
-                                              event.target.checked;
-                                            setJudgePermissionsCriteriaIds(
-                                              (previous) => {
-                                                if (isChecked) {
-                                                  if (
-                                                    previous.includes(criteria.id)
-                                                  ) {
-                                                    return previous;
-                                                  }
-                                                  return [
-                                                    ...previous,
-                                                    criteria.id,
-                                                  ];
-                                                }
-                                                return previous.filter(
-                                                  (id) => id !== criteria.id,
-                                                );
-                                              },
-                                            );
-                                          }}
-                                        />
-                                      </td>
-                                    </tr>
-                                  );
-                                })}
-                            </tbody>
-                          </table>
-                        )}
-                      </div>
                     </div>
 
                   </div>
