@@ -1018,55 +1018,6 @@ export default function TabulatorPage() {
     router.push("/");
   };
 
-  if (isLoading) {
-    return (
-      <div className="flex h-screen w-full items-center justify-center bg-[#F8FAFC]">
-        <div className="flex flex-col items-center gap-3">
-          <div className="h-8 w-8 animate-spin rounded-full border-4 border-[#1F4D3A] border-t-transparent" />
-          <div className="text-sm font-medium text-slate-500">
-            Loading tabulator workspace...
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  if (event && !event.is_active) {
-    return (
-      <div className="flex h-screen w-full flex-col items-center justify-center gap-4 bg-[#F8FAFC] px-6 text-center">
-        <div className="flex h-16 w-16 items-center justify-center rounded-full bg-[#F5F7FF] text-3xl">
-          🛑
-        </div>
-        <div className="space-y-2">
-          <h1 className="text-xl font-semibold text-slate-800">
-            Event is not active
-          </h1>
-          <p className="max-w-md text-sm text-slate-500">
-            The event <span className="font-medium text-slate-700">{event.name}</span> is currently inactive. Please wait for the administrator to start the event.
-          </p>
-        </div>
-        <button
-          onClick={handleSignOut}
-          className="mt-2 rounded-full border border-[#D0D7E2] bg-white px-5 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50 hover:text-slate-900"
-        >
-          Sign out
-        </button>
-      </div>
-    );
-  }
-
-  const handlePrint = () => {
-    if (typeof window === "undefined") {
-      return;
-    }
-    window.print();
-  };
-
-  const headerTitle =
-    tabulator && event
-      ? `${event.name} • ${event.year}`
-      : "Tabulation workspace";
-
   const judgesForActiveEvent = useMemo(
     () => (event ? judges.filter((j) => j.event_id === event.id) : []),
     [judges, event],
@@ -1169,6 +1120,56 @@ export default function TabulatorPage() {
     judgeScoringPermissions,
     judgesForActiveEvent,
   ]);
+
+  if (isLoading) {
+    return (
+      <div className="flex h-screen w-full items-center justify-center bg-[#F8FAFC]">
+        <div className="flex flex-col items-center gap-3">
+          <div className="h-8 w-8 animate-spin rounded-full border-4 border-[#1F4D3A] border-t-transparent" />
+          <div className="text-sm font-medium text-slate-500">
+            Loading tabulator workspace...
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (event && !event.is_active) {
+    return (
+      <div className="flex h-screen w-full flex-col items-center justify-center gap-4 bg-[#F8FAFC] px-6 text-center">
+        <div className="flex h-16 w-16 items-center justify-center rounded-full bg-[#F5F7FF] text-3xl">
+          🛑
+        </div>
+        <div className="space-y-2">
+          <h1 className="text-xl font-semibold text-slate-800">
+            Event is not active
+          </h1>
+          <p className="max-w-md text-sm text-slate-500">
+            The event <span className="font-medium text-slate-700">{event.name}</span> is currently inactive. Please wait for the administrator to start the event.
+          </p>
+        </div>
+        <button
+          onClick={handleSignOut}
+          className="mt-2 rounded-full border border-[#D0D7E2] bg-white px-5 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50 hover:text-slate-900"
+        >
+          Sign out
+        </button>
+      </div>
+    );
+  }
+
+  const handlePrint = () => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    window.print();
+  };
+
+  const headerTitle =
+    tabulator && event
+      ? `${event.name} • ${event.year}`
+      : "Tabulation workspace";
+
 
   return (
     <div className="flex min-h-screen flex-col bg-gradient-to-br from-[#E3F2EA] via-white to-[#E3F2EA] px-4 py-6 text-slate-900">
