@@ -148,6 +148,15 @@ type ParticipantRow = {
   created_at: string;
   avatar_url: string | null;
   gender: string | null;
+  team_id: number | null;
+};
+
+type TeamRow = {
+  id: number;
+  event_id: number;
+  name: string;
+  created_at: string;
+  division_id: number | null;
 };
 
 type ScoreRow = {
@@ -176,6 +185,7 @@ type AwardRow = {
   description: string | null;
   award_type: "criteria" | "special";
   criteria_id: number | null;
+  criteria_ids: number[] | null;
   is_active: boolean;
   created_at: string;
 };
@@ -183,8 +193,10 @@ type AwardRow = {
 type JudgeTabulationRow = {
   participant: ParticipantRow;
   categoryName: string;
+  teamName: string | null;
   totalScore: number;
   rank: number;
+  judgeScores: Record<number, number>;
 };
 
 type AwardResult = {
@@ -198,6 +210,7 @@ type AwardRankingRow = {
   row: JudgeTabulationRow;
   criteriaTotal: number | null;
   rank: number | null;
+  judgeCriteriaScores: Record<number, number>;
 };
 
 type JudgeRow = {
@@ -205,6 +218,7 @@ type JudgeRow = {
   event_id: number;
   full_name: string;
   username: string;
+  role: "chairman" | "judge";
   created_at: string;
 };
 
@@ -234,6 +248,8 @@ export default function JudgeDashboardPage() {
   const [participants, setParticipants] = useState<ParticipantRow[]>([]);
   const [criteriaList, setCriteriaList] = useState<CriteriaRow[]>([]);
   const [categories, setCategories] = useState<CategoryRow[]>([]);
+  const [teams, setTeams] = useState<TeamRow[]>([]);
+  const [eventJudges, setEventJudges] = useState<JudgeRow[]>([]);
   const [scores, setScores] = useState<ScoreRow[]>([]);
   const [judgeTotals, setJudgeTotals] = useState<JudgeParticipantTotalRow[]>([]);
   const [awards, setAwards] = useState<AwardRow[]>([]);
@@ -266,10 +282,11 @@ export default function JudgeDashboardPage() {
   const [contestLayoutTheme, setContestLayoutTheme] =
     useState<ContestLayoutTheme | null>(null);
   const [isScoringModalOpen, setIsScoringModalOpen] = useState(false);
+  const [selectedJudgeForBreakdown, setSelectedJudgeForBreakdown] = useState<number | null>(null);
   const [activeTab, setActiveTab] = useState<"score" | "tabulation">("score");
   const [activeTabulationView, setActiveTabulationView] = useState<
     "overall" | "awards"
-  >("overall");
+  >("awards");
   const [activeAwardFilterId, setActiveAwardFilterId] = useState<
     number | "all"
   >("all");
@@ -316,7 +333,7 @@ export default function JudgeDashboardPage() {
 
       const { data: judgeRows, error: judgeError } = await supabase
         .from("user_judge")
-        .select("id, event_id, full_name, username, created_at")
+        .select("id, event_id, full_name, username, role, created_at")
         .eq("username", storedUsername)
         .limit(1);
 
@@ -335,6 +352,21 @@ export default function JudgeDashboardPage() {
       const judgeRow = judgeRows[0] as JudgeRow;
       setJudge(judgeRow);
 
+      const totalQuery =
+        judgeRow.role === "chairman"
+          ? supabase
+              .from("judge_participant_total")
+              .select(
+                "id, judge_id, participant_id, contest_id, total_score, created_at, contest!inner(event_id)",
+              )
+              .eq("contest.event_id", judgeRow.event_id)
+          : supabase
+              .from("judge_participant_total")
+              .select(
+                "id, judge_id, participant_id, contest_id, total_score, created_at",
+              )
+              .eq("judge_id", judgeRow.id);
+
       const [
         { data: eventRows, error: eventError },
         { data: assignmentRows },
@@ -342,6 +374,8 @@ export default function JudgeDashboardPage() {
         { data: permissionRows },
         { data: totalRows, error: totalError },
         { data: awardRows, error: awardError },
+        { data: teamRows, error: teamError },
+        { data: eventJudgesRows, error: eventJudgesError },
       ] = await Promise.all([
         supabase
           .from("event")
@@ -360,26 +394,38 @@ export default function JudgeDashboardPage() {
           .from("judge_scoring_permission")
           .select("judge_id, contest_id, criteria_id, can_edit")
           .eq("judge_id", judgeRow.id),
-        supabase
-          .from("judge_participant_total")
-          .select(
-            "id, judge_id, participant_id, contest_id, total_score, created_at",
-          )
-          .eq("judge_id", judgeRow.id),
+        totalQuery,
         supabase
           .from("award")
           .select(
-            "id, event_id, contest_id, name, description, award_type, criteria_id, is_active, created_at",
+            "id, event_id, contest_id, name, description, award_type, criteria_id, criteria_ids, is_active, created_at",
           )
+          .eq("event_id", judgeRow.event_id),
+        supabase
+          .from("team")
+          .select("id, event_id, name, created_at, division_id")
+          .eq("event_id", judgeRow.event_id),
+        supabase
+          .from("user_judge")
+          .select("id, event_id, full_name, username, role, created_at")
           .eq("event_id", judgeRow.event_id),
       ]);
 
-      if (eventError || submissionError || totalError || awardError) {
+      if (
+        eventError ||
+        submissionError ||
+        totalError ||
+        awardError ||
+        teamError ||
+        eventJudgesError
+      ) {
         const message =
           eventError?.message ||
           awardError?.message ||
           totalError?.message ||
           submissionError?.message ||
+          teamError?.message ||
+          eventJudgesError?.message ||
           "Unable to load event information.";
         setError(message);
         setIsLoading(false);
@@ -392,7 +438,14 @@ export default function JudgeDashboardPage() {
         return;
       }
 
-      setEvent(eventRows[0] as EventRow);
+      const event = eventRows[0] as EventRow;
+      setEvent(event);
+
+      if (!event.is_active) {
+        setIsLoading(false);
+        // We will handle the inactive event UI in the render method
+        return;
+      }
 
       const contestIds =
         assignmentRows?.map((row) => row.contest_id as number) ?? [];
@@ -411,6 +464,8 @@ export default function JudgeDashboardPage() {
       setJudgeTotals(typedTotals);
 
       setAwards((awardRows ?? []) as AwardRow[]);
+      setTeams((teamRows ?? []) as TeamRow[]);
+      setEventJudges((eventJudgesRows ?? []) as JudgeRow[]);
 
       if (contestIds.length === 0) {
         setAssignedContestIds([]);
@@ -422,6 +477,14 @@ export default function JudgeDashboardPage() {
         setIsLoading(false);
       } else {
         setAssignedContestIds(contestIds);
+
+        // Load all scores for both chairman and judges to calculate correct totals in Awards
+        const scoreQuery = supabase
+          .from("score")
+          .select(
+            "id, judge_id, participant_id, criteria_id, score, created_at, criteria!inner(contest_id)",
+          )
+          .in("criteria.contest_id", contestIds);
 
         const [
           { data: contestRows, error: contestError },
@@ -438,7 +501,7 @@ export default function JudgeDashboardPage() {
           supabase
             .from("participant")
             .select(
-              "id, contest_id, division_id, full_name, contestant_number, created_at, avatar_url, gender",
+              "id, contest_id, division_id, full_name, contestant_number, created_at, avatar_url, gender, team_id",
             )
             .in("contest_id", contestIds),
           supabase
@@ -452,12 +515,7 @@ export default function JudgeDashboardPage() {
             .from("division")
             .select("id, event_id, name, created_at")
             .eq("event_id", judgeRow.event_id),
-          supabase
-            .from("score")
-            .select(
-              "id, judge_id, participant_id, criteria_id, score, created_at",
-            )
-            .eq("judge_id", judgeRow.id),
+          scoreQuery,
         ]);
 
         if (
@@ -486,10 +544,13 @@ export default function JudgeDashboardPage() {
         const typedScores = (scoreRows ?? []) as ScoreRow[];
         setScores(typedScores);
 
+        // Initialize score inputs only for current judge's own scores
         const initialInputs: Record<string, string> = {};
         for (const score of typedScores) {
-          const key = `${score.participant_id}-${score.criteria_id}`;
-          initialInputs[key] = String(score.score);
+          if (score.judge_id === judgeRow.id) {
+            const key = `${score.participant_id}-${score.criteria_id}`;
+            initialInputs[key] = String(score.score);
+          }
         }
         setScoreInputs(initialInputs);
 
@@ -500,6 +561,19 @@ export default function JudgeDashboardPage() {
 
       channel = supabase
         .channel("judge-changes")
+        .on(
+          "postgres_changes",
+          {
+            event: "UPDATE",
+            schema: "public",
+            table: "event",
+            filter: `id=eq.${judgeRow.event_id}`,
+          },
+          (payload) => {
+            const newRow = payload.new as EventRow;
+            setEvent(newRow);
+          },
+        )
         .on(
           "postgres_changes",
           {
@@ -710,10 +784,7 @@ export default function JudgeDashboardPage() {
             ) {
               const newRow = payload.new as ScoreRow;
 
-              if (newRow.judge_id !== judgeRow.id) {
-                return;
-              }
-
+              // Update scores array for all judges (for total calculations)
               setScores((previous) => {
                 const exists = previous.some((score) => score.id === newRow.id);
 
@@ -726,15 +797,18 @@ export default function JudgeDashboardPage() {
                 );
               });
 
-              const key = `${newRow.participant_id}-${newRow.criteria_id}`;
-              setScoreInputs((previous) => ({
-                ...previous,
-                [key]: String(newRow.score),
-              }));
+              // Only update score inputs for current judge's own scores
+              if (newRow.judge_id === judgeRow.id) {
+                const key = `${newRow.participant_id}-${newRow.criteria_id}`;
+                setScoreInputs((previous) => ({
+                  ...previous,
+                  [key]: String(newRow.score),
+                }));
+              }
             } else if (payload.eventType === "DELETE") {
               const oldRow = payload.old as ScoreRow | null;
 
-              if (!oldRow || oldRow.judge_id !== judgeRow.id) {
+              if (!oldRow) {
                 return;
               }
 
@@ -742,12 +816,15 @@ export default function JudgeDashboardPage() {
                 previous.filter((score) => score.id !== oldRow.id),
               );
 
-              const key = `${oldRow.participant_id}-${oldRow.criteria_id}`;
-              setScoreInputs((previous) => {
-                const next = { ...previous };
-                delete next[key];
-                return next;
-              });
+              // Only update score inputs for current judge's own scores
+              if (oldRow.judge_id === judgeRow.id) {
+                const key = `${oldRow.participant_id}-${oldRow.criteria_id}`;
+                setScoreInputs((previous) => {
+                  const next = { ...previous };
+                  delete next[key];
+                  return next;
+                });
+              }
             }
           },
         )
@@ -986,31 +1063,48 @@ export default function JudgeDashboardPage() {
       return [];
     }
 
-    const totalsForContest = judgeTotals.filter(
-      (row) =>
-        row.contest_id === activeContest.id && row.judge_id === judge.id,
+    let totalsForContest = judgeTotals.filter(
+      (row) => row.contest_id === activeContest.id,
     );
 
-    if (totalsForContest.length === 0 || activeContestParticipants.length === 0) {
+    if (judge.role !== "chairman") {
+      totalsForContest = totalsForContest.filter(
+        (row) => row.judge_id === judge.id,
+      );
+    }
+
+    if (
+      totalsForContest.length === 0 ||
+      activeContestParticipants.length === 0
+    ) {
       return [];
     }
 
-    const totalByParticipant = new Map<number, number>();
+    const statsByParticipant = new Map<
+      number,
+      { sum: number; count: number; judgeScores: Record<number, number> }
+    >();
 
     for (const totalRow of totalsForContest) {
-      const current = totalByParticipant.get(totalRow.participant_id) ?? 0;
-      totalByParticipant.set(
-        totalRow.participant_id,
-        current + Number(totalRow.total_score),
-      );
+      const current = statsByParticipant.get(totalRow.participant_id) ?? {
+        sum: 0,
+        count: 0,
+        judgeScores: {},
+      };
+      
+      current.sum += Number(totalRow.total_score);
+      current.count += 1;
+      current.judgeScores[totalRow.judge_id] = Number(totalRow.total_score);
+      
+      statsByParticipant.set(totalRow.participant_id, current);
     }
 
     const rows: JudgeTabulationRow[] = [];
 
     for (const participant of activeContestParticipants) {
-      const sum = totalByParticipant.get(participant.id);
+      const stats = statsByParticipant.get(participant.id);
 
-      if (sum === undefined) {
+      if (!stats) {
         continue;
       }
 
@@ -1018,11 +1112,23 @@ export default function JudgeDashboardPage() {
         (categoryRow) => categoryRow.id === participant.division_id,
       );
 
+      const team = teams.find(
+        (teamRow) => teamRow.id === participant.team_id,
+      );
+
+      // If Chairman, show SUM. If normal judge, it's just their score (count is 1, so sum/1 = sum).
+      // Wait, if Chairman, the user wants to see individual scores + Total.
+      // The visual cue shows Total = Sum of judges.
+      // So we should use Sum.
+      const finalScore = judge.role === "chairman" ? stats.sum : (stats.count > 0 ? stats.sum / stats.count : 0);
+
       rows.push({
         participant,
         categoryName: category ? category.name : "Uncategorized",
-        totalScore: Number(sum.toFixed(2)),
+        teamName: team ? team.name : null,
+        totalScore: Number(finalScore.toFixed(2)),
         rank: 0,
+        judgeScores: stats.judgeScores,
       });
     }
 
@@ -1042,7 +1148,14 @@ export default function JudgeDashboardPage() {
     }
 
     return rows;
-  }, [activeContest, activeContestParticipants, judgeTotals, categories, judge]);
+  }, [
+    activeContest,
+    activeContestParticipants,
+    judgeTotals,
+    categories,
+    judge,
+    teams,
+  ]);
 
   const currentParticipantTotalScore = useMemo(() => {
     if (!activeContest) {
@@ -1132,10 +1245,13 @@ export default function JudgeDashboardPage() {
     const filtered: AwardRow[] = [];
 
     for (const award of awardsForEvent) {
+      const criteriaIds = award.criteria_ids ?? (award.criteria_id ? [award.criteria_id] : []);
+      const firstCriteriaId = criteriaIds.length > 0 ? criteriaIds[0] : null;
+
       const criteria =
-        award.criteria_id === null
+        firstCriteriaId === null
           ? null
-          : criteriaList.find((criteriaRow) => criteriaRow.id === award.criteria_id) ??
+          : criteriaList.find((criteriaRow) => criteriaRow.id === firstCriteriaId) ??
             null;
 
       const contestId = award.contest_id ?? criteria?.contest_id ?? null;
@@ -1157,6 +1273,8 @@ export default function JudgeDashboardPage() {
       return map;
     }
 
+    const statsMap = new Map<string, { sum: number; count: number }>();
+
     for (const row of scores) {
       const criteria = criteriaList.find(
         (criteriaRow) => criteriaRow.id === row.criteria_id,
@@ -1165,11 +1283,23 @@ export default function JudgeDashboardPage() {
         continue;
       }
       const key = `${row.criteria_id}-${row.participant_id}`;
-      map.set(key, Number(row.score));
+      const current = statsMap.get(key) ?? { sum: 0, count: 0 };
+      statsMap.set(key, {
+        sum: current.sum + Number(row.score),
+        count: current.count + 1,
+      });
+    }
+
+    for (const [key, stats] of statsMap) {
+      // If Chairman, we want the SUM. If Judge, we want the Average (but since count=1, it's same).
+      // Wait, if Chairman, 'criteriaScoreByParticipant' is used for ranking.
+      // Ranking should be based on Total Score (Sum).
+      const value = judge && judge.role === "chairman" ? stats.sum : (stats.count > 0 ? stats.sum / stats.count : 0);
+      map.set(key, value);
     }
 
     return map;
-  }, [scores, criteriaList, activeContest]);
+  }, [scores, criteriaList, activeContest, judge]);
 
   const awardsResults = useMemo<AwardResult[]>(() => {
     if (!event || !activeContest) {
@@ -1186,10 +1316,13 @@ export default function JudgeDashboardPage() {
     const results: AwardResult[] = [];
 
     for (const award of sourceAwards) {
+      const criteriaIds = award.criteria_ids ?? (award.criteria_id ? [award.criteria_id] : []);
+      const firstCriteriaId = criteriaIds.length > 0 ? criteriaIds[0] : null;
+
       const criteria =
-        award.criteria_id === null
+        firstCriteriaId === null
           ? null
-          : criteriaList.find((criteriaRow) => criteriaRow.id === award.criteria_id) ??
+          : criteriaList.find((criteriaRow) => criteriaRow.id === firstCriteriaId) ??
             null;
 
       if (judgeTabulationRows.length === 0) {
@@ -1229,26 +1362,91 @@ export default function JudgeDashboardPage() {
       return [];
     }
 
+    let criteriaIds: number[] = [];
+    const rawIds = selectedAwardResult.award.criteria_ids;
+
+    if (Array.isArray(rawIds)) {
+      criteriaIds = rawIds.map(id => Number(id));
+    } else if (typeof rawIds === 'string') {
+      const s = rawIds as string;
+      if (s.startsWith('{') && s.endsWith('}')) {
+        criteriaIds = s.substring(1, s.length - 1).split(',').map(n => Number(n.trim()));
+      } else {
+        criteriaIds = s.split(',').map(n => Number(n.trim()));
+      }
+    } else if (selectedAwardResult.award.criteria_id) {
+      criteriaIds = [Number(selectedAwardResult.award.criteria_id)];
+    }
+    
+    criteriaIds = criteriaIds.filter(n => !isNaN(n));
+
+    // NEW: Include all criteria from categories
+    if (criteriaIds.length > 0) {
+      const selectedCriteria = criteriaList.filter(c => criteriaIds.includes(c.id));
+      const categories = Array.from(new Set(selectedCriteria.map(c => c.category).filter(Boolean)));
+      
+      if (categories.length > 0) {
+          const allCriteriaInCategories = criteriaList.filter(c => categories.includes(c.category));
+          const allIds = allCriteriaInCategories.map(c => c.id);
+          criteriaIds = Array.from(new Set([...criteriaIds, ...allIds]));
+      }
+    }
+
     if (
       selectedAwardResult.award.award_type !== "criteria" ||
-      selectedAwardResult.award.criteria_id === null
+      criteriaIds.length === 0
     ) {
       return [];
     }
 
-    const criteriaId = selectedAwardResult.award.criteria_id;
+    const scoresForCriteria = scores.filter(
+      (s) => criteriaIds.includes(s.criteria_id),
+    );
 
     const rowsWithTotals: AwardRankingRow[] = selectedAwardResult.winners.map(
       (row) => {
-        const key = `${criteriaId}-${row.participant.id}`;
-        const value = criteriaScoreByParticipant.get(key);
-        const criteriaTotal =
-          value === undefined ? null : Number(value.toFixed(2));
+        let criteriaTotal = 0;
+        let hasValue = false;
+
+        // Calculate total for this judge (or all judges if chairman) based on EXPANDED criteriaIds
+        if (judge && judge.role === "chairman") {
+            // Chairman view: Sum of all judges for these criteria
+            for (const judgeId of eventJudges.map(j => j.id)) {
+                for (const cId of criteriaIds) {
+                    // Find score in scores array directly as criteriaScoreByParticipant might be pre-aggregated or limited
+                    const s = scores.find(s => s.judge_id === judgeId && s.participant_id === row.participant.id && s.criteria_id === cId);
+                    if (s) {
+                        criteriaTotal += Number(s.score);
+                        hasValue = true;
+                    }
+                }
+            }
+        } else if (judge) {
+            // Regular judge view: Sum of OWN scores for these criteria
+            for (const cId of criteriaIds) {
+                const s = scores.find(s => s.judge_id === judge.id && s.participant_id === row.participant.id && s.criteria_id === cId);
+                if (s) {
+                    criteriaTotal += Number(s.score);
+                    hasValue = true;
+                }
+            }
+        }
+
+        const finalTotal = hasValue ? Number(criteriaTotal.toFixed(2)) : null;
+
+        // For Chairman columns: calculate per-judge totals for this award
+        const judgeCriteriaScores: Record<number, number> = {};
+        for (const s of scoresForCriteria) {
+          if (s.participant_id === row.participant.id) {
+            judgeCriteriaScores[s.judge_id] = (judgeCriteriaScores[s.judge_id] || 0) + Number(s.score);
+          }
+        }
 
         return {
           row,
-          criteriaTotal,
+          criteriaTotal: finalTotal,
           rank: null,
+          judgeCriteriaScores,
         };
       },
     );
@@ -1284,7 +1482,7 @@ export default function JudgeDashboardPage() {
     });
 
     return rowsWithTotals;
-  }, [selectedAwardResult, criteriaScoreByParticipant]);
+  }, [selectedAwardResult, criteriaScoreByParticipant, scores]);
 
   const participantCategoryName = useCallback(
     (participant: ParticipantRow) => {
@@ -1323,26 +1521,28 @@ export default function JudgeDashboardPage() {
         (permission) => permission.contest_id === contestId,
       );
 
-      if (permissionsForContest.length === 0) {
-        return true;
+      // 1. Check for specific permission for this criteria
+      const specificPermission = permissionsForContest.find(
+        (permission) => permission.criteria_id === criteriaId,
+      );
+      if (specificPermission) {
+        return specificPermission.can_edit;
       }
 
+      // 2. Check for global permission for this contest
       const globalPermission = permissionsForContest.find(
         (permission) => permission.criteria_id === null,
       );
-
       if (globalPermission) {
         return globalPermission.can_edit;
       }
 
-      const specificPermission = permissionsForContest.find(
-        (permission) =>
-          permission.criteria_id === criteriaId && permission.can_edit,
-      );
-
-      return Boolean(specificPermission);
+      // 3. Fallback: If no permissions are set, check if the contest is submitted
+      // If submitted -> Locked (false)
+      // If not submitted -> Open (true)
+      return !submittedContestIds.includes(contestId);
     },
-    [judgeScoringPermissions],
+    [judgeScoringPermissions, submittedContestIds],
   );
 
   const isContestSubmitted = (contestId: number | null) => {
@@ -1354,9 +1554,6 @@ export default function JudgeDashboardPage() {
 
   const handleOpenSubmitAllModal = () => {
     if (!activeContest) {
-      return;
-    }
-    if (isContestSubmitted(activeContest.id)) {
       return;
     }
     if (activeContestParticipants.length === 0 || activeContestCriteria.length === 0) {
@@ -1389,6 +1586,17 @@ export default function JudgeDashboardPage() {
 
   const handleConfirmSubmitAll = async () => {
     if (!judge || !activeContest) {
+      setIsSubmitAllModalOpen(false);
+      return;
+    }
+
+    // Prevent re-submission when contest is submitted and not unlocked by admin
+    if (
+      isContestSubmitted(activeContest.id) &&
+      !activeContestCriteria.some((criteria) =>
+        canEditCriteria(activeContest.id, criteria.id),
+      )
+    ) {
       setIsSubmitAllModalOpen(false);
       return;
     }
@@ -1518,49 +1726,7 @@ export default function JudgeDashboardPage() {
       return;
     }
 
-    const divisionLabel =
-      submitAllDivisionName && submitAllDivisionName.trim().length > 0
-        ? submitAllDivisionName
-        : null;
-
-    const { data: totalsForContest, error: fetchTotalsError } = await supabase
-      .from("judge_participant_total")
-      .select("participant_id")
-      .eq("judge_id", judge.id)
-      .eq("contest_id", activeContest.id);
-
-    if (fetchTotalsError) {
-      setIsSubmittingAll(false);
-      setIsSubmitAllModalOpen(false);
-      setSuccess(
-        divisionLabel
-          ? `Scores for the ${divisionLabel} division have been submitted.`
-          : "Scores for the selected participants have been submitted.",
-      );
-      return;
-    }
-
-    const participantIdsWithTotals = new Set(
-      (totalsForContest ?? []).map(
-        (row) => (row as { participant_id: number }).participant_id,
-      ),
-    );
-
-    const isContestFullySubmitted = activeContestParticipants.every(
-      (participant) => participantIdsWithTotals.has(participant.id),
-    );
-
-    if (!isContestFullySubmitted) {
-      setIsSubmittingAll(false);
-      setIsSubmitAllModalOpen(false);
-      setSuccess(
-        divisionLabel
-          ? `Scores for the ${divisionLabel} division have been submitted. You can continue submitting other divisions.`
-          : "Scores for the selected participants have been submitted. You can continue submitting other divisions.",
-      );
-      return;
-    }
-
+    // Always mark the contest as submitted immediately
     const { data: existingSubmission, error: fetchSubmissionError } =
       await supabase
         .from("judge_contest_submission")
@@ -1572,10 +1738,8 @@ export default function JudgeDashboardPage() {
     if (fetchSubmissionError) {
       setIsSubmittingAll(false);
       setIsSubmitAllModalOpen(false);
-      setSuccess(
-        divisionLabel
-          ? `Scores for the ${divisionLabel} division have been submitted.`
-          : "Scores for the selected participants have been submitted.",
+      setError(
+        fetchSubmissionError.message || "Unable to check submission status.",
       );
       return;
     }
@@ -1614,9 +1778,6 @@ export default function JudgeDashboardPage() {
     criteriaId: number,
     value: string,
   ) => {
-    if (activeContest && isContestSubmitted(activeContest.id)) {
-      return;
-    }
     const criteria = criteriaList.find((item) => item.id === criteriaId);
     if (criteria && !canEditCriteria(criteria.contest_id, criteria.id)) {
       return;
@@ -1636,10 +1797,6 @@ export default function JudgeDashboardPage() {
     if (!judge) {
       return;
     }
-    if (activeContest && isContestSubmitted(activeContest.id)) {
-      return;
-    }
-
     const criteria = criteriaList.find((item) => item.id === criteriaId);
     if (criteria && !canEditCriteria(criteria.contest_id, criteria.id)) {
       return;
@@ -1881,6 +2038,43 @@ export default function JudgeDashboardPage() {
     }
     setCurrentParticipantIndex(currentParticipantIndex + 1);
   };
+
+  if (isLoading) {
+    return (
+      <div className="flex h-screen w-full items-center justify-center bg-[#F8FAFC]">
+        <div className="flex flex-col items-center gap-3">
+          <div className="h-8 w-8 animate-spin rounded-full border-4 border-[#1F4D3A] border-t-transparent" />
+          <div className="text-sm font-medium text-slate-500">
+            Loading judge profile...
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (event && !event.is_active) {
+    return (
+      <div className="flex h-screen w-full flex-col items-center justify-center gap-4 bg-[#F8FAFC] px-6 text-center">
+        <div className="flex h-16 w-16 items-center justify-center rounded-full bg-[#F5F7FF] text-3xl">
+          🛑
+        </div>
+        <div className="space-y-2">
+          <h1 className="text-xl font-semibold text-slate-800">
+            Event is not active
+          </h1>
+          <p className="max-w-md text-sm text-slate-500">
+            The event <span className="font-medium text-slate-700">{event.name}</span> is currently inactive. Please wait for the administrator to start the event.
+          </p>
+        </div>
+        <button
+          onClick={handleSignOut}
+          className="mt-2 rounded-full border border-[#D0D7E2] bg-white px-5 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50 hover:text-slate-900"
+        >
+          Sign out
+        </button>
+      </div>
+    );
+  }
 
   const headerTitle =
     judge && event
@@ -2282,32 +2476,7 @@ export default function JudgeDashboardPage() {
                     </div>
                   ) : (
                     <div className="flex flex-col gap-4">
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="rounded-full bg-[#F5F7FF] p-1 text-[11px] text-slate-600">
-                          <button
-                            type="button"
-                            onClick={() => setActiveTabulationView("overall")}
-                            className={`rounded-full px-3 py-1 font-medium transition ${
-                              activeTabulationView === "overall"
-                                ? "bg-white text-[#1F4D3A] shadow-sm"
-                                : "text-slate-600 hover:text-[#1F4D3A]"
-                            }`}
-                          >
-                            Overall
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setActiveTabulationView("awards")}
-                            className={`rounded-full px-3 py-1 font-medium transition ${
-                              activeTabulationView === "awards"
-                                ? "bg-white text-[#1F4D3A] shadow-sm"
-                                : "text-slate-600 hover:text-[#1F4D3A]"
-                            }`}
-                          >
-                            Awards
-                          </button>
-                        </div>
-                      </div>
+                      {/* View switcher removed */}
 
                       {activeTabulationView === "overall" && (
                         <div className="overflow-hidden rounded-2xl border border-[#E2E8F0] bg-white">
@@ -2315,8 +2484,20 @@ export default function JudgeDashboardPage() {
                             <thead className="bg-[#F5F7FF] text-xs font-semibold uppercase tracking-wide text-[#1F4D3A]">
                               <tr>
                                 <th className="px-4 py-3 font-medium">Rank</th>
-                                <th className="px-4 py-3 font-medium">Category</th>
+                                <th className="px-4 py-3 font-medium">Represent</th>
                                 <th className="px-4 py-3 font-medium">Contestant</th>
+                                {judge && judge.role === "chairman" ? (
+                                  eventJudges.map((j, index) => (
+                                    <th
+                                      key={j.id}
+                                      className="px-4 py-3 text-center font-medium"
+                                    >
+                                      {j.id === judge.id ? "YOU" : j.username}
+                                    </th>
+                                  ))
+                                ) : (
+                                  <th className="px-4 py-3 text-center font-medium">Your Score</th>
+                                )}
                                 <th className="px-4 py-3 text-right font-medium">
                                   Total score
                                 </th>
@@ -2332,7 +2513,7 @@ export default function JudgeDashboardPage() {
                                     {row.rank}
                                   </td>
                                   <td className="px-4 py-3 align-middle text-sm text-slate-700">
-                                    {row.categoryName}
+                                    {row.teamName ?? "—"}
                                   </td>
                                   <td className="px-4 py-3 align-middle">
                                     <div className="text-sm font-semibold text-slate-800">
@@ -2342,6 +2523,24 @@ export default function JudgeDashboardPage() {
                                       Contestant #{row.participant.contestant_number}
                                     </div>
                                   </td>
+                                  {judge && judge.role === "chairman" ? (
+                                    eventJudges.map((j) => (
+                                      <td
+                                        key={j.id}
+                                        className="px-4 py-3 align-middle text-center text-sm text-slate-600"
+                                      >
+                                        {row.judgeScores[j.id]
+                                          ? row.judgeScores[j.id].toFixed(2)
+                                          : "—"}
+                                      </td>
+                                    ))
+                                  ) : (
+                                    <td className="px-4 py-3 align-middle text-center text-sm text-slate-600">
+                                      {judge && row.judgeScores[judge.id]
+                                        ? row.judgeScores[judge.id].toFixed(2)
+                                        : "—"}
+                                    </td>
+                                  )}
                                   <td className="px-4 py-3 align-middle text-right text-sm font-semibold text-[#1F4D3A]">
                                     {row.totalScore.toFixed(2)}
                                   </td>
@@ -2410,7 +2609,7 @@ export default function JudgeDashboardPage() {
                               </div>
                             ) : selectedAwardResult.award.award_type !==
                                 "criteria" ||
-                              selectedAwardResult.award.criteria_id === null ? (
+                              ((!selectedAwardResult.award.criteria_ids || selectedAwardResult.award.criteria_ids.length === 0) && selectedAwardResult.award.criteria_id === null) ? (
                               <div className="text-[11px] text-slate-400">
                                 This is a special award. Criteria scores are not
                                 available.
@@ -2421,14 +2620,40 @@ export default function JudgeDashboardPage() {
                                   <thead className="bg-[#F5F7FF] text-xs font-semibold uppercase tracking-wide text-[#1F4D3A]">
                                     <tr>
                                       <th className="px-4 py-3 font-medium">Rank</th>
-                                      <th className="px-4 py-3 font-medium">
-                                        Category
-                                      </th>
+                                      <th className="px-4 py-3 font-medium">Represent</th>
                                       <th className="px-4 py-3 font-medium">
                                         Contestant
                                       </th>
+                                      {judge && judge.role === "chairman" ? (
+                                        eventJudges.map((j) => (
+                                          <th
+                                            key={j.id}
+                                            className="px-4 py-3 text-center font-medium"
+                                          >
+                                            <div>{j.username}</div>
+                                            <button
+                                              type="button"
+                                              onClick={() => setSelectedJudgeForBreakdown(j.id)}
+                                              className="mt-1 rounded-full border border-[#1F4D3A33] bg-white px-2 py-0.5 text-[9px] font-medium text-[#1F4D3A] transition hover:bg-[#F0FDF4]"
+                                            >
+                                              show more
+                                            </button>
+                                          </th>
+                                        ))
+                                      ) : (
+                                        <th className="px-4 py-3 text-center font-medium">
+                                          <div>{judge?.username || "Score"}</div>
+                                          <button
+                                            type="button"
+                                            onClick={() => setSelectedJudgeForBreakdown(judge?.id || null)}
+                                            className="mt-1 rounded-full border border-[#1F4D3A33] bg-white px-2 py-0.5 text-[9px] font-medium text-[#1F4D3A] transition hover:bg-[#F0FDF4]"
+                                          >
+                                            show more
+                                          </button>
+                                        </th>
+                                      )}
                                       <th className="px-4 py-3 text-right font-medium">
-                                        Criteria score
+                                        Total
                                       </th>
                                     </tr>
                                   </thead>
@@ -2442,7 +2667,7 @@ export default function JudgeDashboardPage() {
                                           {item.rank ?? "—"}
                                         </td>
                                         <td className="px-4 py-3 align-middle text-sm text-slate-700">
-                                          {item.row.categoryName}
+                                          {item.row.teamName ?? "—"}
                                         </td>
                                         <td className="px-4 py-3 align-middle">
                                           <div className="text-sm font-semibold text-slate-800">
@@ -2453,6 +2678,24 @@ export default function JudgeDashboardPage() {
                                             {item.row.participant.contestant_number}
                                           </div>
                                         </td>
+                                        {judge && judge.role === "chairman" ? (
+                                          eventJudges.map((j) => (
+                                            <td
+                                              key={j.id}
+                                              className="px-4 py-3 align-middle text-center text-sm text-slate-600"
+                                            >
+                                              {item.judgeCriteriaScores[j.id] !== undefined
+                                                ? item.judgeCriteriaScores[j.id].toFixed(2)
+                                                : "—"}
+                                            </td>
+                                          ))
+                                        ) : (
+                                          <td className="px-4 py-3 align-middle text-center text-sm font-semibold text-[#1F4D3A]">
+                                            {item.criteriaTotal === null
+                                              ? "—"
+                                              : item.criteriaTotal.toFixed(2)}
+                                          </td>
+                                        )}
                                         <td className="px-4 py-3 align-middle text-right text-sm font-semibold text-[#1F4D3A]">
                                           {item.criteriaTotal === null
                                             ? "—"
@@ -2475,6 +2718,224 @@ export default function JudgeDashboardPage() {
           </div>
         </main>
       </div>
+
+      {/* Judge Breakdown Modal */}
+      {selectedJudgeForBreakdown !== null && selectedAwardResult && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm">
+            <div className="flex max-h-[90vh] w-full max-w-5xl flex-col rounded-3xl bg-white shadow-2xl">
+              <div className="flex items-center justify-between border-b border-[#E2E8F0] p-6">
+                <div>
+                  <h3 className="text-lg font-semibold text-[#1F4D3A]">
+                    {judge?.role === 'chairman' ? (eventJudges.find(j => j.id === selectedJudgeForBreakdown)?.username || "Judge") : "My Scoring"} Breakdown
+                  </h3>
+                  <p className="text-sm text-slate-500">
+                    Detailed scoring for {selectedAwardResult.award.name}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSelectedJudgeForBreakdown(null)}
+                  className="rounded-full bg-[#F1F5F9] p-2 text-slate-500 hover:bg-[#E2E8F0]"
+                >
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="20"
+                    height="20"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <line x1="18" y1="6" x2="6" y2="18" />
+                    <line x1="6" y1="6" x2="18" y2="18" />
+                  </svg>
+                </button>
+              </div>
+              
+              <div className="flex-1 overflow-y-auto p-6">
+                <table className="min-w-full border-collapse text-left text-sm">
+                  <thead className="bg-[#F5F7FF] text-xs font-semibold uppercase tracking-wide text-[#1F4D3A]">
+                    <tr>
+                      <th className="px-4 py-3 font-medium">Contestant</th>
+                      {(() => {
+                        const originalAward = selectedAwardResult.award;
+                        // Determine categories involved
+                        let criteriaIds: number[] = [];
+                        const rawIds = originalAward?.criteria_ids;
+
+                        if (Array.isArray(rawIds)) {
+                          criteriaIds = rawIds.map(id => Number(id));
+                        } else if (typeof rawIds === 'string') {
+                          const s = rawIds as string;
+                          if (s.startsWith('{') && s.endsWith('}')) {
+                            criteriaIds = s.substring(1, s.length - 1).split(',').map(n => Number(n.trim()));
+                          } else {
+                            criteriaIds = s.split(',').map(n => Number(n.trim()));
+                          }
+                        } else if (originalAward?.criteria_id) {
+                          criteriaIds = [Number(originalAward.criteria_id)];
+                        }
+                        
+                        criteriaIds = criteriaIds.filter(n => !isNaN(n));
+                        
+                        // Expand to categories
+                        const selectedCriteria = criteriaList.filter(c => criteriaIds.includes(c.id));
+                        const categories = Array.from(new Set(selectedCriteria.map(c => c.category).filter(Boolean)));
+                        
+                        // If categories exist, show columns for each category
+                        if (categories.length > 0) {
+                            return categories.map(cat => (
+                                <th key={cat} className="px-4 py-3 text-center font-medium">
+                                    {cat}
+                                </th>
+                            ));
+                        } else {
+                            // If no categories, maybe just show criteria names? Or just one "Score" column
+                            return selectedCriteria.map(c => (
+                                <th key={c.id} className="px-4 py-3 text-center font-medium">
+                                    {c.name}
+                                </th>
+                            ));
+                        }
+                      })()}
+                      <th className="px-4 py-3 text-right font-medium">Total</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {selectedAwardResult.winners.map((row) => (
+                      <tr key={row.participant.id} className="border-t border-[#E2E8F0] hover:bg-[#F8FAFC]">
+                        <td className="px-4 py-3">
+                            <div className="font-semibold text-slate-800">{row.participant.full_name}</div>
+                            <div className="text-xs text-slate-500">#{row.participant.contestant_number} • {row.teamName ?? row.categoryName}</div>
+                        </td>
+                        {(() => {
+                            const originalAward = selectedAwardResult.award;
+                            // Re-calculate involved columns
+                            let criteriaIds: number[] = [];
+                            const rawIds = originalAward?.criteria_ids;
+
+                            if (Array.isArray(rawIds)) {
+                              criteriaIds = rawIds.map(id => Number(id));
+                            } else if (typeof rawIds === 'string') {
+                              const s = rawIds as string;
+                              if (s.startsWith('{') && s.endsWith('}')) {
+                                criteriaIds = s.substring(1, s.length - 1).split(',').map(n => Number(n.trim()));
+                              } else {
+                                criteriaIds = s.split(',').map(n => Number(n.trim()));
+                              }
+                            } else if (originalAward?.criteria_id) {
+                              criteriaIds = [Number(originalAward.criteria_id)];
+                            }
+                            
+                            criteriaIds = criteriaIds.filter(n => !isNaN(n));
+                            const selectedCriteria = criteriaList.filter(c => criteriaIds.includes(c.id));
+                            const categories = Array.from(new Set(selectedCriteria.map(c => c.category).filter(Boolean)));
+                            
+                            // Calculate scores for this participant and judge
+                            const judgeId = selectedJudgeForBreakdown!;
+                            
+                            if (categories.length > 0) {
+                                return categories.map(cat => {
+                                    // Sum all criteria in this category
+                                    const catCriteria = criteriaList.filter(c => c.category === cat);
+                                    let catTotal = 0;
+                                    let hasVal = false;
+                                    
+                                    for (const c of catCriteria) {
+                                        const s = scores.find(s => s.judge_id === judgeId && s.participant_id === row.participant.id && s.criteria_id === c.id);
+                                        if (s) {
+                                            catTotal += Number(s.score);
+                                            hasVal = true;
+                                        }
+                                    }
+                                    
+                                    return (
+                                        <td key={cat} className="px-4 py-3 text-center text-slate-600">
+                                            {hasVal ? catTotal.toFixed(2) : "—"}
+                                        </td>
+                                    );
+                                });
+                            } else {
+                                return selectedCriteria.map(c => {
+                                    const s = scores.find(s => s.judge_id === judgeId && s.participant_id === row.participant.id && s.criteria_id === c.id);
+                                    return (
+                                        <td key={c.id} className="px-4 py-3 text-center text-slate-600">
+                                            {s ? Number(s.score).toFixed(2) : "—"}
+                                        </td>
+                                    );
+                                });
+                            }
+                        })()}
+                        {(() => {
+                             // Calculate total again for this judge
+                             const originalAward = selectedAwardResult.award;
+                             let criteriaIds: number[] = [];
+                             const rawIds = originalAward?.criteria_ids;
+ 
+                             if (Array.isArray(rawIds)) {
+                               criteriaIds = rawIds.map(id => Number(id));
+                             } else if (typeof rawIds === 'string') {
+                               const s = rawIds as string;
+                               if (s.startsWith('{') && s.endsWith('}')) {
+                                 criteriaIds = s.substring(1, s.length - 1).split(',').map(n => Number(n.trim()));
+                               } else {
+                                 criteriaIds = s.split(',').map(n => Number(n.trim()));
+                               }
+                             } else if (originalAward?.criteria_id) {
+                               criteriaIds = [Number(originalAward.criteria_id)];
+                             }
+                             
+                             criteriaIds = criteriaIds.filter(n => !isNaN(n));
+ 
+                             // Include all criteria from categories
+                             if (criteriaIds.length > 0) {
+                               const selectedCriteria = criteriaList.filter(c => criteriaIds.includes(c.id));
+                               const categories = Array.from(new Set(selectedCriteria.map(c => c.category).filter(Boolean)));
+                               
+                               if (categories.length > 0) {
+                                   const allCriteriaInCategories = criteriaList.filter(c => categories.includes(c.category));
+                                   const allIds = allCriteriaInCategories.map(c => c.id);
+                                   criteriaIds = Array.from(new Set([...criteriaIds, ...allIds]));
+                               }
+                             }
+                             
+                             const judgeId = selectedJudgeForBreakdown!;
+                             let total = 0;
+                             let hasVal = false;
+                             for (const cId of criteriaIds) {
+                                 const s = scores.find(s => s.judge_id === judgeId && s.participant_id === row.participant.id && s.criteria_id === cId);
+                                 if (s) {
+                                     total += Number(s.score);
+                                     hasVal = true;
+                                 }
+                             }
+                             
+                            return (
+                                <td className="px-4 py-3 text-right font-semibold text-[#1F4D3A]">
+                                    {hasVal ? total.toFixed(2) : "—"}
+                                </td>
+                            );
+                        })()}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              
+              <div className="border-t border-[#E2E8F0] p-6 text-right">
+                <button
+                  type="button"
+                  onClick={() => setSelectedJudgeForBreakdown(null)}
+                  className="rounded-full bg-[#F1F5F9] px-6 py-2.5 text-sm font-medium text-slate-700 hover:bg-[#E2E8F0]"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
       {isScoringModalOpen && activeContest && currentParticipant && (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 px-4">
@@ -2766,6 +3227,14 @@ export default function JudgeDashboardPage() {
                       const isUncategorized = trimmed === "";
                       const headerLabel = isUncategorized ? "" : trimmed;
 
+                      // Calculate subtotal for this category
+                      const categorySubtotal = items.reduce((sum, criteria) => {
+                        const key = `${currentParticipant.id}-${criteria.id}`;
+                        const value = scoreInputs[key];
+                        const numericValue = value ? Number.parseFloat(value) : 0;
+                        return sum + (Number.isNaN(numericValue) ? 0 : numericValue);
+                      }, 0);
+
                       return (
                         <Fragment key={trimmed || "uncategorized"}>
                           <tr
@@ -2786,7 +3255,9 @@ export default function JudgeDashboardPage() {
                               colSpan={2}
                               className="px-4 py-2 text-xs font-semibold uppercase tracking-wide text-slate-500 md:text-sm"
                             >
-                              {headerLabel || "\u00A0"}
+                              <div className="flex items-center justify-between">
+                                <span>{headerLabel || "\u00A0"}</span>
+                              </div>
                             </td>
                           </tr>
                           {items.map((criteria) => {
@@ -2869,7 +3340,7 @@ export default function JudgeDashboardPage() {
                                         isSavingParticipantScores ||
                                         !canEditCriteria(activeContest.id, criteria.id)
                                       }
-                                      className="w-28 rounded-lg border border-[#CBD5E1] bg-white px-3 py-2 text-sm outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                                      className="w-28 rounded-lg border border-[#CBD5E1] bg-white px-3 py-2 text-sm outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26] [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                                       style={{
                                         ...(contestLayoutTheme?.scoreInputBg
                                           ? {
@@ -2913,65 +3384,25 @@ export default function JudgeDashboardPage() {
                               </tr>
                             );
                           })}
+                          {!isUncategorized && (
+                            <tr className="bg-[#F5F7FF]">
+                              <td
+                                className="px-4 py-3 text-right text-sm font-semibold text-slate-700"
+                              >
+                                Total
+                              </td>
+                              <td
+                                className="px-4 py-3 text-right text-sm font-semibold text-[#1F4D3A]"
+                              >
+                                {categorySubtotal > 0 ? categorySubtotal.toFixed(2) : "—"}
+                              </td>
+                            </tr>
+                          )}
                         </Fragment>
                       );
                     })}
                   </tbody>
-                  <tfoot
-                    className="bg-[#F5F7FF]"
-                    style={
-                      contestLayoutTheme?.scoringTotalRowBg
-                        ? {
-                            backgroundColor: hexWithOpacity(
-                              contestLayoutTheme.scoringTotalRowBg,
-                              (contestLayoutTheme.scoringTotalRowBgOpacity ?? 100) /
-                                100,
-                            ),
-                          }
-                        : undefined
-                    }
-                  >
-                    <tr>
-                      <td
-                        className="px-4 py-3 text-right text-sm font-semibold text-slate-700"
-                        style={
-                          contestLayoutTheme?.scoringTotalRowLabelTextColor
-                            ? {
-                                color: hexWithOpacity(
-                                  contestLayoutTheme.scoringTotalRowLabelTextColor,
-                                  (contestLayoutTheme
-                                    .scoringTotalRowLabelTextColorOpacity ?? 100) /
-                                    100,
-                                ),
-                              }
-                            : undefined
-                        }
-                      >
-                        {activeContestScoringType === "points"
-                          ? "Total points"
-                          : "Total (weighted)"}
-                      </td>
-                      <td
-                        className="px-4 py-3 text-right text-sm font-semibold text-[#1F4D3A]"
-                        style={
-                          contestLayoutTheme?.scoringTotalRowScoreTextColor
-                            ? {
-                                color: hexWithOpacity(
-                                  contestLayoutTheme.scoringTotalRowScoreTextColor,
-                                  (contestLayoutTheme
-                                    .scoringTotalRowScoreTextColorOpacity ?? 100) /
-                                    100,
-                                ),
-                              }
-                            : undefined
-                        }
-                      >
-                        {currentParticipantTotalScore !== null
-                          ? currentParticipantTotalScore.toFixed(2)
-                          : "—"}
-                      </td>
-                    </tr>
-                  </tfoot>
+                  {/* Total score row removed */}
                 </table>
               </div>
 

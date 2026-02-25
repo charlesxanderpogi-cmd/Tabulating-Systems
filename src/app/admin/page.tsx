@@ -92,6 +92,7 @@ type AwardRow = {
   description: string | null;
   award_type: AwardType;
   criteria_id: number | null;
+  criteria_ids: number[] | null;
   is_active: boolean;
   created_at: string;
 };
@@ -583,6 +584,7 @@ type JudgeRow = {
   event_id: number;
   full_name: string;
   username: string;
+  role: "chairman" | "judge";
   created_at: string;
 };
 
@@ -715,6 +717,15 @@ function MultiSelectDropdown({
   );
 }
 
+type ScoreRow = {
+  id: number;
+  judge_id: number;
+  participant_id: number;
+  criteria_id: number;
+  score: number;
+  created_at: string;
+};
+
 type JudgeParticipantTotalRow = {
   id: number;
   judge_id: number;
@@ -768,6 +779,7 @@ export default function AdminDashboard() {
   const [editingCriteriaId, setEditingCriteriaId] = useState<number | null>(
     null,
   );
+  const [editingCriteriaCategory, setEditingCriteriaCategory] = useState<string>("");
   const [editingContestId, setEditingContestId] = useState<number | null>(null);
   const [editingEventId, setEditingEventId] = useState<number | null>(null);
   const [editingCategoryId, setEditingCategoryId] = useState<number | null>(
@@ -803,6 +815,7 @@ export default function AdminDashboard() {
   const [judgeFullName, setJudgeFullName] = useState("");
   const [judgeUsername, setJudgeUsername] = useState("");
   const [judgePassword, setJudgePassword] = useState("");
+  const [judgeRole, setJudgeRole] = useState<"chairman" | "judge">("judge");
   const [isSavingJudge, setIsSavingJudge] = useState(false);
   const [judgeError, setJudgeError] = useState<string | null>(null);
   const [judgeSuccess, setJudgeSuccess] = useState<string | null>(null);
@@ -858,7 +871,9 @@ export default function AdminDashboard() {
   const [awardName, setAwardName] = useState("");
   const [awardType, setAwardType] = useState<AwardType>("criteria");
   const [awardContestId, setAwardContestId] = useState<number | null>(null);
-  const [awardCriteriaId, setAwardCriteriaId] = useState<number | null>(null);
+  const [awardCriteriaIds, setAwardCriteriaIds] = useState<number[]>([]);
+  const [isAwardCriteriaDropdownOpen, setIsAwardCriteriaDropdownOpen] = useState(false);
+  const awardCriteriaDropdownRef = useRef<HTMLDivElement>(null);
   const [awardDescription, setAwardDescription] = useState("");
   const [awardIsActive, setAwardIsActive] = useState(true);
   const [awardError, setAwardError] = useState<string | null>(null);
@@ -1032,16 +1047,19 @@ export default function AdminDashboard() {
   const [tabulationContestFilterId, setTabulationContestFilterId] = useState<
     number | "all"
   >("all");
+  const [selectedJudgeForBreakdown, setSelectedJudgeForBreakdown] = useState<number | null>(null);
   const [tabulationDivisionFilterId, setTabulationDivisionFilterId] = useState<
     number | "all"
   >("all");
   const [adminTabulationView, setAdminTabulationView] = useState<
     "overall" | "awards"
-  >("overall");
+  >("awards");
   const [tabulationAwardFilterId, setTabulationAwardFilterId] = useState<
     number | "all"
   >("all");
   const [judgeTotals, setJudgeTotals] = useState<JudgeParticipantTotalRow[]>([]);
+
+  const [scores, setScores] = useState<ScoreRow[]>([]);
 
   useEffect(() => {
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -1052,6 +1070,15 @@ export default function AdminDashboard() {
     }
 
     const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
+    supabase
+      .from("score")
+      .select("id, judge_id, participant_id, criteria_id, score, created_at")
+      .then(({ data }) => {
+        if (data) {
+          setScores(data as ScoreRow[]);
+        }
+      });
 
     supabase
       .from("event")
@@ -1094,7 +1121,7 @@ export default function AdminDashboard() {
     supabase
       .from("award")
       .select(
-        "id, event_id, contest_id, name, description, award_type, criteria_id, is_active, created_at",
+        "id, event_id, contest_id, name, description, award_type, criteria_id, criteria_ids, is_active, created_at",
       )
       .order("created_at", { ascending: false })
       .then(({ data }) => {
@@ -1157,7 +1184,7 @@ export default function AdminDashboard() {
 
     supabase
       .from("user_judge")
-      .select("id, event_id, full_name, username, created_at")
+      .select("id, event_id, full_name, username, role, created_at")
       .order("created_at", { ascending: false })
       .then(({ data }) => {
         if (data) {
@@ -1471,6 +1498,35 @@ export default function AdminDashboard() {
             const oldRow = payload.old as { id: number };
             setCriteriaList((previous) =>
               previous.filter((criteria) => criteria.id !== oldRow.id),
+            );
+          }
+        },
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "score",
+        },
+        (payload) => {
+          if (payload.eventType === "INSERT" || payload.eventType === "UPDATE") {
+            const newRow = payload.new as ScoreRow;
+            setScores((previous) => {
+              const exists = previous.some((score) => score.id === newRow.id);
+
+              if (payload.eventType === "INSERT" && !exists) {
+                return [...previous, newRow];
+              }
+
+              return previous.map((score) =>
+                score.id === newRow.id ? newRow : score,
+              );
+            });
+          } else if (payload.eventType === "DELETE") {
+            const oldRow = payload.old as { id: number };
+            setScores((previous) =>
+              previous.filter((score) => score.id !== oldRow.id),
             );
           }
         },
@@ -2105,6 +2161,7 @@ export default function AdminDashboard() {
     setJudgeFullName("");
     setJudgeUsername("");
     setJudgePassword("");
+    setJudgeRole("judge");
     setJudgeError(null);
     setJudgeSuccess(null);
     setSelectedContestIdsForJudge([]);
@@ -2116,9 +2173,10 @@ export default function AdminDashboard() {
     setJudgeFullName(judge.full_name);
     setJudgeUsername(judge.username);
     setJudgePassword("");
+    setJudgeRole(judge.role || "judge");
     setJudgeError(null);
     setJudgeSuccess(null);
-     setSelectedContestIdsForJudge(
+    setSelectedContestIdsForJudge(
       judgeAssignments
         .filter((assignment) => assignment.judge_id === judge.id)
         .map((assignment) => assignment.contest_id),
@@ -2478,6 +2536,13 @@ export default function AdminDashboard() {
       ? null
       : events.find((event) => event.id === activeEventId) ?? null;
 
+  // Force filters to respect active event
+  useEffect(() => {
+    if (activeEventId) {
+        setTabulationEventFilterId(activeEventId);
+    }
+  }, [activeEventId]);
+
   const contestsForActiveEvent = useMemo(
     () =>
       activeEventId === null
@@ -2673,7 +2738,7 @@ export default function AdminDashboard() {
 
     const totalsByParticipantAndContest = new Map<
       string,
-      { sum: number; count: number }
+      { sum: number; count: number; judgeScores: Record<number, number> }
     >();
 
     for (const totalRow of judgeTotals) {
@@ -2685,10 +2750,15 @@ export default function AdminDashboard() {
       const existing = totalsByParticipantAndContest.get(key) ?? {
         sum: 0,
         count: 0,
+        judgeScores: {},
       };
+      
+      existing.judgeScores[totalRow.judge_id] = Number(totalRow.total_score);
+      
       totalsByParticipantAndContest.set(key, {
         sum: existing.sum + Number(totalRow.total_score),
         count: existing.count + 1,
+        judgeScores: existing.judgeScores,
       });
     }
 
@@ -2696,11 +2766,13 @@ export default function AdminDashboard() {
       contestId: number;
       contestName: string;
       categoryName: string;
+      teamName: string | null;
       participantId: number;
       participantName: string;
       contestantNumber: string;
       totalScore: number;
       rank: number;
+      judgeScores: Record<number, number>;
     };
 
     const rows: Row[] = [];
@@ -2725,6 +2797,10 @@ export default function AdminDashboard() {
         (categoryRow) => categoryRow.id === participant.division_id,
       );
 
+      const team = teams.find(
+        (teamRow) => teamRow.id === participant.team_id,
+      );
+
       const average =
         totalsForParticipant.count === 0
           ? 0
@@ -2734,11 +2810,13 @@ export default function AdminDashboard() {
         contestId: contest.id,
         contestName: contest.name,
         categoryName: category ? category.name : "Uncategorized",
+        teamName: team ? team.name : null,
         participantId: participant.id,
         participantName: participant.full_name,
         contestantNumber: participant.contestant_number,
         totalScore: Number(average.toFixed(2)),
         rank: 0,
+        judgeScores: totalsForParticipant.judgeScores,
       });
     }
 
@@ -2790,6 +2868,7 @@ export default function AdminDashboard() {
     contests,
     participants,
     categories,
+    teams,
     judgeAssignments,
     judgeContestSubmissions,
     tabulationEventFilterId,
@@ -2811,6 +2890,17 @@ export default function AdminDashboard() {
         contestantNumber: string;
         rank: number;
         totalScore: number;
+        teamName: string | null;
+        judgeCriteriaScores: Record<number, number>;
+      }[];
+      allParticipants: {
+        participantId: number;
+        participantName: string;
+        contestantNumber: string;
+        rank: number;
+        totalScore: number;
+        teamName: string | null;
+        judgeCriteriaScores: Record<number, number>;
       }[];
       note: string | null;
     };
@@ -2822,12 +2912,52 @@ export default function AdminDashboard() {
     );
 
     for (const award of activeAwards) {
-      if (award.award_type === "criteria" && award.criteria_id !== null) {
-        const criteria = criteriaList.find(
-          (criteriaRow) => criteriaRow.id === award.criteria_id,
-        );
+      let criteriaIds: number[] = [];
+      const rawIds = award.criteria_ids as any;
 
-        if (!criteria) {
+      if (Array.isArray(rawIds)) {
+        criteriaIds = rawIds.map(id => Number(id));
+      } else if (typeof rawIds === 'string') {
+        const s = rawIds as string;
+        if (s.startsWith('{') && s.endsWith('}')) {
+          criteriaIds = s.substring(1, s.length - 1).split(',').map(n => Number(n.trim()));
+        } else {
+          criteriaIds = s.split(',').map(n => Number(n.trim()));
+        }
+      } else if (award.criteria_id) {
+        criteriaIds = [Number(award.criteria_id)];
+      }
+      
+      criteriaIds = criteriaIds.filter(n => !isNaN(n));
+
+      // NEW: If the award has associated criteria, check if we need to include ALL criteria from the categories
+      // that the selected criteria belong to.
+      // This is because the user might have selected a Category in the UI, which saved specific IDs at that time,
+      // but expects the award to cover "The Category" conceptually.
+      // OR, the user explicitly said "all of the points of that category... because i set the linked criteria category".
+      
+      // Let's identify the categories involved in this award based on the saved criteria IDs.
+      if (criteriaIds.length > 0) {
+        const selectedCriteria = criteriaList.filter(c => criteriaIds.includes(c.id));
+        const categories = Array.from(new Set(selectedCriteria.map(c => c.category).filter(Boolean)));
+        
+        // If there are categories, find ALL criteria in those categories and add their IDs if missing.
+        // This ensures that if the award is conceptually "All criteria in Category X", we get them all.
+        // This acts as a safeguard if the save operation missed some, or if new ones were added (though rare).
+        // More importantly, it aligns with the user's mental model of "Category-based Award".
+        
+        if (categories.length > 0) {
+            const allCriteriaInCategories = criteriaList.filter(c => categories.includes(c.category));
+            const allIds = allCriteriaInCategories.map(c => c.id);
+            // Merge unique IDs
+            criteriaIds = Array.from(new Set([...criteriaIds, ...allIds]));
+        }
+      }
+
+      if (award.award_type === "criteria" && criteriaIds.length > 0) {
+        const criteriaListForAward = criteriaList.filter(c => criteriaIds.includes(c.id));
+
+        if (criteriaListForAward.length === 0) {
           result.push({
             awardId: award.id,
             awardName: award.name,
@@ -2835,14 +2965,17 @@ export default function AdminDashboard() {
             contestName: "Unknown contest",
             criteriaName: null,
             winners: [],
+            allParticipants: [],
             note: "Criteria not found.",
           });
           continue;
         }
 
+        const firstCriteria = criteriaListForAward[0];
+        const contestId = award.contest_id ?? firstCriteria.contest_id;
+
         const contest = contests.find(
-          (contestRow) =>
-            contestRow.id === (award.contest_id ?? criteria.contest_id),
+          (contestRow) => contestRow.id === contestId,
         );
 
         if (!contest) {
@@ -2851,8 +2984,9 @@ export default function AdminDashboard() {
             awardName: award.name,
             awardType: award.award_type,
             contestName: "Unknown contest",
-            criteriaName: criteria.name,
+            criteriaName: criteriaListForAward.map(c => c.name).join(", "),
             winners: [],
+            allParticipants: [],
             note: "Contest not found.",
           });
           continue;
@@ -2868,35 +3002,94 @@ export default function AdminDashboard() {
             awardName: award.name,
             awardType: award.award_type,
             contestName: contest.name,
-            criteriaName: criteria.name,
+            criteriaName: criteriaListForAward.map(c => c.name).join(", "),
             winners: [],
+            allParticipants: [],
             note: "No tabulation data yet.",
           });
           continue;
         }
 
-        const bestRank = rowsForContest.reduce(
-          (min, row) => (row.rank < min ? row.rank : min),
-          rowsForContest[0]?.rank ?? 1,
-        );
+        // Calculate scores specifically for this criteria
+        const criteriaScoresMap = new Map<number, number>(); // participantId -> total criteria score
+        const participantScoresMap = new Map<number, Record<number, number>>(); // participantId -> { judgeId: score }
 
-        const winners = rowsForContest
-          .filter((row) => row.rank === bestRank)
+        for (const row of rowsForContest) {
+            // Find all scores for this criteria and participant
+            // Note: 'scores' state contains ALL scores.
+            // We need to filter scores based on the EXPANDED criteriaIds.
+            
+            const pScores = scores.filter(s => criteriaIds.includes(s.criteria_id) && s.participant_id === row.participantId);
+            
+            let total = 0;
+            const judgeScores: Record<number, number> = {};
+            
+            for (const s of pScores) {
+                const scoreVal = Number(s.score);
+                judgeScores[s.judge_id] = (judgeScores[s.judge_id] || 0) + scoreVal;
+                total += scoreVal;
+            }
+            
+            criteriaScoresMap.set(row.participantId, total);
+            participantScoresMap.set(row.participantId, judgeScores);
+        }
+
+        // Create a new list of participants with recalculated scores and ranks
+        const participantsWithCriteriaScores = rowsForContest.map(row => {
+            const score = criteriaScoresMap.get(row.participantId) ?? 0;
+            const jScores = participantScoresMap.get(row.participantId) ?? {};
+            return {
+                ...row,
+                criteriaTotalScore: score,
+                judgeCriteriaScores: jScores
+            };
+        });
+
+        // Sort by criteria score descending
+        participantsWithCriteriaScores.sort((a, b) => b.criteriaTotalScore - a.criteriaTotalScore);
+
+        // Assign ranks (handling ties properly)
+        let currentRank = 1;
+        for (let i = 0; i < participantsWithCriteriaScores.length; i++) {
+            if (i > 0 && participantsWithCriteriaScores[i].criteriaTotalScore < participantsWithCriteriaScores[i-1].criteriaTotalScore) {
+                currentRank = i + 1;
+            } else if (i > 0 && participantsWithCriteriaScores[i].criteriaTotalScore === participantsWithCriteriaScores[i-1].criteriaTotalScore) {
+                // Tie, keep same rank
+                currentRank = (participantsWithCriteriaScores[i-1] as any).criteriaRank;
+            }
+            (participantsWithCriteriaScores[i] as any).criteriaRank = currentRank;
+        }
+
+        const winners = participantsWithCriteriaScores
+          .filter((row) => (row as any).criteriaRank === 1)
           .map((row) => ({
             participantId: row.participantId,
             participantName: row.participantName,
             contestantNumber: row.contestantNumber,
-            rank: row.rank,
-            totalScore: row.totalScore,
+            rank: (row as any).criteriaRank,
+            totalScore: row.criteriaTotalScore,
+            teamName: row.teamName,
+            judgeCriteriaScores: row.judgeCriteriaScores,
           }));
+
+        const allParticipants = participantsWithCriteriaScores.map((row) => ({
+          participantId: row.participantId,
+          participantName: row.participantName,
+          contestantNumber: row.contestantNumber,
+          rank: (row as any).criteriaRank,
+          totalScore: row.criteriaTotalScore,
+          teamName: row.teamName,
+          judgeCriteriaScores: row.judgeCriteriaScores,
+        }));
 
         result.push({
           awardId: award.id,
           awardName: award.name,
           awardType: award.award_type,
           contestName: contest.name,
-          criteriaName: criteria.name,
+          criteriaName: criteriaListForAward.map(c => c.name).join(", "),
           winners,
+          allParticipants,
           note: null,
         });
       } else {
@@ -2916,13 +3109,63 @@ export default function AdminDashboard() {
           contestName,
           criteriaName: null,
           winners: [],
+          allParticipants: [],
           note: "Special award. Assign recipients manually.",
         });
       }
     }
 
+    // Now populate judgeCriteriaScores after basic setup, because accessing 'scores' state
+    // inside the loop above might be slow if we filter repeatedly.
+    // However, we need 'scores' state.
+    // Let's optimize: build a map of scores by (criteria_id, participant_id, judge_id) -> score
+    // Or just (criteria_id, participant_id) -> { judge_id: score }
+
+    const scoresMap = new Map<string, Record<number, number>>();
+    // Key: `${criteriaId}-${participantId}`
+
+    /* REMOVED PREVIOUS SCORE MAPPING LOGIC AS IT IS NOW HANDLED INSIDE THE LOOP ABOVE */
+    /*
+    if (scores.length > 0) {
+      for (const s of scores) {
+        const key = `${s.criteria_id}-${s.participant_id}`;
+        if (!scoresMap.has(key)) {
+          scoresMap.set(key, {});
+        }
+        const record = scoresMap.get(key)!;
+        record[s.judge_id] = Number(s.score);
+      }
+    }
+
+    for (const awardRow of result) {
+      if (awardRow.awardType !== "criteria") continue;
+      
+      // Find the criteria ID from the original award list
+      const originalAward = activeAwards.find(a => a.id === awardRow.awardId);
+      if (!originalAward || !originalAward.criteria_id) continue;
+      const cId = originalAward.criteria_id;
+
+      for (const p of awardRow.allParticipants) {
+        const key = `${cId}-${p.participantId}`;
+        const judgeScores = scoresMap.get(key);
+        if (judgeScores) {
+          p.judgeCriteriaScores = judgeScores;
+        }
+      }
+      
+      // Also update winners array (it's a subset/copy)
+      for (const w of awardRow.winners) {
+         const key = `${cId}-${w.participantId}`;
+         const judgeScores = scoresMap.get(key);
+         if (judgeScores) {
+           w.judgeCriteriaScores = judgeScores;
+         }
+      }
+    }
+    */
+
     return result;
-  }, [awardsForActiveEvent, criteriaList, contests, tabulationRows]);
+  }, [awardsForActiveEvent, criteriaList, contests, tabulationRows, scores]);
 
   const selectedTabulationAwardResult = useMemo(() => {
     if (tabulationAwardFilterId === "all") {
@@ -3618,6 +3861,8 @@ export default function AdminDashboard() {
       return;
     }
 
+    const categoryToUse = editingCriteriaId === null ? criteriaCategory.trim() : editingCriteriaCategory.trim();
+
     if (editingCriteriaId === null) {
       const cleanedItems = criteriaItems
         .map((item) => ({
@@ -3664,7 +3909,7 @@ export default function AdminDashboard() {
         name: item.name,
         percentage: Number(item.weight),
         description: null,
-        category: criteriaCategory.trim() || null,
+        category: categoryToUse || null,
       }));
 
       const { data, error } = await supabase
@@ -3787,7 +4032,7 @@ export default function AdminDashboard() {
         name: criteriaName.trim(),
         percentage: parsedWeight,
         description: criteriaDescription.trim() || null,
-        category: criteriaCategory.trim() || null,
+        category: categoryToUse || null,
       })
       .eq("id", editingCriteriaId)
       .select(
@@ -3866,7 +4111,8 @@ export default function AdminDashboard() {
     setAwardName("");
     setAwardType("criteria");
     setAwardContestId(null);
-    setAwardCriteriaId(null);
+    setAwardCriteriaIds([]);
+    setIsAwardCriteriaDropdownOpen(false);
     setAwardDescription("");
     setAwardIsActive(true);
     setAwardError(null);
@@ -3879,7 +4125,8 @@ export default function AdminDashboard() {
     setAwardName(award.name);
     setAwardType(award.award_type);
     setAwardContestId(award.contest_id);
-    setAwardCriteriaId(award.criteria_id);
+    setAwardCriteriaIds(award.criteria_ids ?? (award.criteria_id ? [award.criteria_id] : []));
+    setIsAwardCriteriaDropdownOpen(false);
     setAwardDescription(award.description ?? "");
     setAwardIsActive(award.is_active);
     setAwardError(null);
@@ -3901,8 +4148,8 @@ export default function AdminDashboard() {
       return;
     }
 
-    if (awardType === "criteria" && awardCriteriaId === null) {
-      setAwardError("Select a criteria for this award.");
+    if (awardType === "criteria" && awardCriteriaIds.length === 0) {
+      setAwardError("Select at least one criteria for this award.");
       return;
     }
 
@@ -3924,7 +4171,8 @@ export default function AdminDashboard() {
       name: awardName.trim(),
       description: awardDescription.trim() || null,
       award_type: awardType,
-      criteria_id: awardType === "criteria" ? awardCriteriaId : null,
+      criteria_ids: awardType === "criteria" ? awardCriteriaIds : null,
+      criteria_id: awardType === "criteria" && awardCriteriaIds.length > 0 ? awardCriteriaIds[0] : null,
       is_active: awardIsActive,
     };
 
@@ -3933,7 +4181,7 @@ export default function AdminDashboard() {
         .from("award")
         .insert(payload)
         .select(
-          "id, event_id, contest_id, name, description, award_type, criteria_id, is_active, created_at",
+          "id, event_id, contest_id, name, description, award_type, criteria_id, criteria_ids, is_active, created_at",
         )
         .single();
 
@@ -3957,7 +4205,7 @@ export default function AdminDashboard() {
         .update(payload)
         .eq("id", editingAwardId)
         .select(
-          "id, event_id, contest_id, name, description, award_type, criteria_id, is_active, created_at",
+          "id, event_id, contest_id, name, description, award_type, criteria_id, criteria_ids, is_active, created_at",
         )
         .single();
 
@@ -3983,10 +4231,32 @@ export default function AdminDashboard() {
     setEditingAwardId(null);
     setAwardName("");
     setAwardContestId(null);
-    setAwardCriteriaId(null);
+    setAwardCriteriaIds([]);
+    setIsAwardCriteriaDropdownOpen(false);
     setAwardDescription("");
     setAwardIsActive(true);
   };
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (
+        awardCriteriaDropdownRef.current &&
+        !awardCriteriaDropdownRef.current.contains(event.target as Node)
+      ) {
+        setIsAwardCriteriaDropdownOpen(false);
+      }
+    };
+
+    if (isAwardCriteriaDropdownOpen) {
+      document.addEventListener("mousedown", handleClickOutside);
+    } else {
+      document.removeEventListener("mousedown", handleClickOutside);
+    }
+
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, [isAwardCriteriaDropdownOpen]);
 
   const handleDeleteAward = async (id: number) => {
     setAwardError(null);
@@ -4601,8 +4871,9 @@ export default function AdminDashboard() {
           full_name: judgeFullName.trim(),
           username: judgeUsername.trim(),
           password_hash: judgePassword,
+          role: judgeRole,
         })
-        .select("id, event_id, full_name, username, created_at");
+        .select("id, event_id, full_name, username, role, created_at");
 
       error = response.error;
       data = response.data;
@@ -4638,9 +4909,10 @@ export default function AdminDashboard() {
           full_name: judgeFullName.trim(),
           username: judgeUsername.trim(),
           password_hash: judgePassword,
+          role: judgeRole,
         })
         .eq("id", editingJudgeId)
-        .select("id, event_id, full_name, username, created_at");
+        .select("id, event_id, full_name, username, role, created_at");
 
       error = response.error;
       data = response.data;
@@ -4937,7 +5209,7 @@ export default function AdminDashboard() {
                   Active events
                 </div>
                 <div className="mt-1 text-2xl font-semibold text-[#1F4D3A]">
-                  0
+                  {events.filter((e) => e.is_active).length}
                 </div>
               </div>
               <div className="rounded-2xl border border-[#1F4D3A14] bg-white px-4 py-3">
@@ -4945,7 +5217,9 @@ export default function AdminDashboard() {
                   Judges
                 </div>
                 <div className="mt-1 text-2xl font-semibold text-[#1F4D3A]">
-                  0
+                  {activeEventId
+                    ? judges.filter((j) => j.event_id === activeEventId).length
+                    : 0}
                 </div>
               </div>
               <div className="rounded-2xl border border-[#1F4D3A14] bg-white px-4 py-3">
@@ -4953,7 +5227,13 @@ export default function AdminDashboard() {
                   Participants
                 </div>
                 <div className="mt-1 text-2xl font-semibold text-[#1F4D3A]">
-                  0
+                  {activeEventId
+                    ? participants.filter(
+                        (p) =>
+                          contests.find((c) => c.id === p.contest_id)
+                            ?.event_id === activeEventId,
+                      ).length
+                    : 0}
                 </div>
               </div>
             </div>
@@ -5094,30 +5374,7 @@ export default function AdminDashboard() {
               </div>
 
               <div className="mb-2 flex items-center justify-between gap-3">
-                <div className="inline-flex rounded-full bg-[#F5F7FF] p-1 text-[10px] text-slate-600">
-                  <button
-                    type="button"
-                    onClick={() => setAdminTabulationView("overall")}
-                    className={`rounded-full px-3 py-1 font-medium transition ${
-                      adminTabulationView === "overall"
-                        ? "bg-white text-[#1F4D3A] shadow-sm"
-                        : "text-slate-600 hover:text-[#1F4D3A]"
-                    }`}
-                  >
-                    Overall
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setAdminTabulationView("awards")}
-                    className={`rounded-full px-3 py-1 font-medium transition ${
-                      adminTabulationView === "awards"
-                        ? "bg-white text-[#1F4D3A] shadow-sm"
-                        : "text-slate-600 hover:text-[#1F4D3A]"
-                    }`}
-                  >
-                    Awards
-                  </button>
-                </div>
+                {/* View switcher removed */}
               </div>
 
               {adminTabulationView === "overall" && (
@@ -5125,11 +5382,32 @@ export default function AdminDashboard() {
                   <table className="min-w-full border-collapse text-left text-[11px]">
                     <thead>
                       <tr className="border-b border-[#E2E8F0] bg-[#F5F7FF] text-[10px] uppercase tracking-wide text-slate-500">
-                        <th className="px-3 py-2 font-medium">Contest</th>
-                        <th className="px-3 py-2 font-medium">Category</th>
+                        <th className="px-3 py-2 font-medium">Represent</th>
                         <th className="px-3 py-2 font-medium">Contestant</th>
-                        <th className="px-3 py-2 font-medium">Total score</th>
-                        <th className="px-3 py-2 font-medium">Rank</th>
+                        {/* Dynamic Judge Columns */}
+                        {judges
+                          .filter((judge) => {
+                            // Filter judges relevant to the current view
+                            // Since tabulationRows can span multiple contests if filters are 'all',
+                            // showing specific judges is tricky.
+                            // But usually tabulation is viewed per contest.
+                            if (tabulationContestFilterId !== "all") {
+                                // Find if judge is assigned to this contest
+                                return judgeAssignments.some(ja => ja.judge_id === judge.id && ja.contest_id === tabulationContestFilterId);
+                            }
+                            if (tabulationEventFilterId !== "all") {
+                                return judge.event_id === tabulationEventFilterId;
+                            }
+                            return true;
+                          })
+                          .sort((a, b) => a.username.localeCompare(b.username))
+                          .map((judge) => (
+                            <th key={judge.id} className="px-3 py-2 font-medium text-center">
+                              {judge.username}
+                            </th>
+                          ))}
+                        <th className="px-3 py-2 font-medium text-right">Total score</th>
+                        <th className="px-3 py-2 font-medium text-right">Rank</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -5137,23 +5415,34 @@ export default function AdminDashboard() {
                         <tr className="border-b border-[#F1F5F9]">
                           <td
                             className="px-3 py-2 text-slate-400"
-                            colSpan={5}
+                            colSpan={4 + judges.length} // Approx
                           >
                             Once judges submit totals for contests, scores and
                             rankings will appear here.
                           </td>
                         </tr>
                       ) : (
-                        tabulationRows.map((row, index) => (
+                        tabulationRows.map((row, index) => {
+                            // Determine visible judges again to map scores
+                            const visibleJudges = judges
+                              .filter((judge) => {
+                                if (tabulationContestFilterId !== "all") {
+                                    return judgeAssignments.some(ja => ja.judge_id === judge.id && ja.contest_id === tabulationContestFilterId);
+                                }
+                                if (tabulationEventFilterId !== "all") {
+                                    return judge.event_id === tabulationEventFilterId;
+                                }
+                                return true;
+                              })
+                              .sort((a, b) => a.username.localeCompare(b.username));
+
+                            return (
                           <tr
                             key={`${row.contestName}-${row.contestantNumber}-${index}`}
                             className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC]"
                           >
                             <td className="px-3 py-2 text-slate-700">
-                              {row.contestName}
-                            </td>
-                            <td className="px-3 py-2 text-slate-700">
-                              {row.categoryName}
+                              {row.teamName ?? "—"}
                             </td>
                             <td className="px-3 py-2">
                               <div className="font-medium text-slate-800">
@@ -5163,14 +5452,21 @@ export default function AdminDashboard() {
                                 Contestant #{row.contestantNumber}
                               </div>
                             </td>
-                            <td className="px-3 py-2 font-semibold text-[#1F4D3A]">
+                            {visibleJudges.map(judge => (
+                                <td key={judge.id} className="px-3 py-2 text-center text-slate-600">
+                                    {row.judgeScores[judge.id] !== undefined 
+                                        ? row.judgeScores[judge.id].toFixed(2) 
+                                        : "—"}
+                                </td>
+                            ))}
+                            <td className="px-3 py-2 font-semibold text-[#1F4D3A] text-right">
                               {row.totalScore.toFixed(2)}
                             </td>
-                            <td className="px-3 py-2 font-semibold text-slate-800">
+                            <td className="px-3 py-2 font-semibold text-slate-800 text-right">
                               {row.rank}
                             </td>
                           </tr>
-                        ))
+                        )})
                       )}
                     </tbody>
                   </table>
@@ -5248,9 +5544,9 @@ export default function AdminDashboard() {
                     This is a special award. Confirm recipients manually in the Awards
                     tab.
                   </div>
-                ) : selectedTabulationAwardResult.winners.length === 0 ? (
+                ) : selectedTabulationAwardResult.allParticipants.length === 0 ? (
                   <div className="text-[11px] text-slate-400">
-                    No winners available yet for this award.
+                    No participants available yet for this award.
                   </div>
                 ) : (
                   <div className="space-y-3 text-[11px]">
@@ -5286,31 +5582,6 @@ export default function AdminDashboard() {
                                   : award.contestName}
                               </div>
                             </div>
-                            <button
-                              type="button"
-                              onClick={() =>
-                                handleConfirmAwardWinners(award.awardId)
-                              }
-                              disabled={
-                                isConfirmingAwardId === award.awardId ||
-                                allWinnersSaved
-                              }
-                              className={`rounded-full border px-3 py-1 text-[10px] ${
-                                allWinnersSaved
-                                  ? "border-[#BBF7D0] bg-[#DCFCE7] text-[#166534]"
-                                  : "border-[#1F4D3A] bg-[#1F4D3A] text-white hover:bg-[#163528]"
-                              } ${
-                                isConfirmingAwardId === award.awardId
-                                  ? "cursor-not-allowed opacity-70"
-                                  : ""
-                              }`}
-                            >
-                              {allWinnersSaved
-                                ? "Recipients saved"
-                                : isConfirmingAwardId === award.awardId
-                                ? "Saving..."
-                                : "Confirm winners"}
-                            </button>
                           </div>
 
                           <div className="overflow-hidden rounded-2xl border border-[#E2E8F0] bg-white">
@@ -5319,41 +5590,111 @@ export default function AdminDashboard() {
                                 <tr className="border-b border-[#E2E8F0] bg-[#F5F7FF] text-[10px] uppercase tracking-wide text-slate-500">
                                   <th className="px-3 py-2 font-medium">Rank</th>
                                   <th className="px-3 py-2 font-medium">
-                                    Contestant
+                                    Represent
                                   </th>
                                   <th className="px-3 py-2 font-medium">
-                                    Contest
+                                    Contestant
                                   </th>
+                                  {/* Dynamic Judge Columns */}
+                                  {(() => {
+                                    const originalAward = awards.find(
+                                      (a) => a.id === award.awardId,
+                                    );
+
+                                    const visibleJudges = judges
+                                      .filter((judge) => {
+                                        if (originalAward && originalAward.contest_id) {
+                                          return judgeAssignments.some(
+                                            (ja) =>
+                                              ja.judge_id === judge.id &&
+                                              ja.contest_id === originalAward.contest_id,
+                                          );
+                                        }
+                                        return judge.event_id === activeEventId;
+                                      })
+                                      .sort((a, b) => a.username.localeCompare(b.username));
+
+                                    return visibleJudges.map((judge) => (
+                                      <th
+                                        key={judge.id}
+                                        className="px-3 py-2 font-medium text-center"
+                                      >
+                                        <div>{judge.username}</div>
+                                        <button
+                                          type="button"
+                                          onClick={() => setSelectedJudgeForBreakdown(judge.id)}
+                                          className="mt-1 rounded-full border border-[#1F4D3A33] bg-white px-2 py-0.5 text-[9px] font-medium text-[#1F4D3A] transition hover:bg-[#F0FDF4]"
+                                        >
+                                          show more
+                                        </button>
+                                      </th>
+                                    ));
+                                  })()}
                                   <th className="px-3 py-2 font-medium text-right">
                                     Total score
                                   </th>
                                 </tr>
                               </thead>
                               <tbody>
-                                {award.winners.map((winner, index) => (
-                                  <tr
-                                    key={`${winner.contestantNumber}-${index}`}
-                                    className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC]"
-                                  >
-                                    <td className="px-3 py-2 font-semibold text-slate-800">
-                                      {winner.rank}
-                                    </td>
-                                    <td className="px-3 py-2">
-                                      <div className="font-medium text-slate-800">
-                                        {winner.participantName}
-                                      </div>
-                                      <div className="text-[10px] text-slate-500">
-                                        Contestant #{winner.contestantNumber}
-                                      </div>
-                                    </td>
-                                    <td className="px-3 py-2 text-slate-700">
-                                      {award.contestName}
-                                    </td>
-                                    <td className="px-3 py-2 text-right font-semibold text-[#1F4D3A]">
-                                      {winner.totalScore.toFixed(2)}
-                                    </td>
-                                  </tr>
-                                ))}
+                                {award.allParticipants.map((participant, index) => {
+                                  const originalAward = awards.find(
+                                    (a) => a.id === award.awardId,
+                                  );
+                                  const visibleJudges = judges
+                                    .filter((judge) => {
+                                      if (originalAward && originalAward.contest_id) {
+                                        return judgeAssignments.some(
+                                          (ja) =>
+                                            ja.judge_id === judge.id &&
+                                            ja.contest_id === originalAward.contest_id,
+                                        );
+                                      }
+                                      return judge.event_id === activeEventId;
+                                    })
+                                    .sort((a, b) => a.username.localeCompare(b.username));
+
+                                  return (
+                                    <tr
+                                      key={`${participant.contestantNumber}-${index}`}
+                                      className={`border-b border-[#F1F5F9] hover:bg-[#F8FAFC] ${
+                                        participant.rank === 1 ? "bg-[#F0FDF4]" : ""
+                                      }`}
+                                    >
+                                      <td className="px-3 py-2 font-semibold text-slate-800">
+                                        {participant.rank}
+                                      </td>
+                                      <td className="px-3 py-2 text-slate-700">
+                                        {participant.teamName ?? "—"}
+                                      </td>
+                                      <td className="px-3 py-2">
+                                        <div className="font-medium text-slate-800">
+                                          {participant.participantName}
+                                        </div>
+                                        <div className="text-[10px] text-slate-500">
+                                          Contestant #{participant.contestantNumber}
+                                        </div>
+                                      </td>
+                                      {visibleJudges.map((judge) => {
+                                        // Find the judge's total score for this award
+                                        const judgeScore = participant.judgeCriteriaScores[judge.id];
+
+                                        return (
+                                          <td
+                                            key={judge.id}
+                                            className="px-3 py-2 text-center text-slate-600"
+                                          >
+                                            {judgeScore !== undefined
+                                              ? judgeScore.toFixed(2)
+                                              : "—"}
+                                          </td>
+                                        );
+                                      })}
+                                      <td className="px-3 py-2 text-right font-semibold text-[#1F4D3A]">
+                                        {participant.totalScore.toFixed(2)}
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
                               </tbody>
                             </table>
                           </div>
@@ -5365,6 +5706,223 @@ export default function AdminDashboard() {
               </div>
             )}
           </section>
+        )}
+
+        {selectedJudgeForBreakdown !== null && selectedTabulationAwardResult && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm">
+            <div className="flex max-h-[90vh] w-full max-w-5xl flex-col rounded-3xl bg-white shadow-2xl">
+              <div className="flex items-center justify-between border-b border-[#E2E8F0] p-6">
+                <div>
+                  <h3 className="text-lg font-semibold text-[#1F4D3A]">
+                    {judges.find(j => j.id === selectedJudgeForBreakdown)?.username} Breakdown
+                  </h3>
+                  <p className="text-sm text-slate-500">
+                    Detailed scoring for {selectedTabulationAwardResult.awardName}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSelectedJudgeForBreakdown(null)}
+                  className="rounded-full bg-[#F1F5F9] p-2 text-slate-500 hover:bg-[#E2E8F0]"
+                >
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="20"
+                    height="20"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <line x1="18" y1="6" x2="6" y2="18" />
+                    <line x1="6" y1="6" x2="18" y2="18" />
+                  </svg>
+                </button>
+              </div>
+              
+              <div className="flex-1 overflow-y-auto p-6">
+                <table className="min-w-full border-collapse text-left text-sm">
+                  <thead className="bg-[#F5F7FF] text-xs font-semibold uppercase tracking-wide text-[#1F4D3A]">
+                    <tr>
+                      <th className="px-4 py-3 font-medium">Contestant</th>
+                      {(() => {
+                        const originalAward = awards.find(a => a.id === selectedTabulationAwardResult.awardId);
+                        // Determine categories involved
+                        let criteriaIds: number[] = [];
+                        const rawIds = originalAward?.criteria_ids;
+
+                        if (Array.isArray(rawIds)) {
+                          criteriaIds = rawIds.map(id => Number(id));
+                        } else if (typeof rawIds === 'string') {
+                          const s = rawIds as string;
+                          if (s.startsWith('{') && s.endsWith('}')) {
+                            criteriaIds = s.substring(1, s.length - 1).split(',').map(n => Number(n.trim()));
+                          } else {
+                            criteriaIds = s.split(',').map(n => Number(n.trim()));
+                          }
+                        } else if (originalAward?.criteria_id) {
+                          criteriaIds = [Number(originalAward.criteria_id)];
+                        }
+                        
+                        criteriaIds = criteriaIds.filter(n => !isNaN(n));
+                        
+                        // Expand to categories
+                        const selectedCriteria = criteriaList.filter(c => criteriaIds.includes(c.id));
+                        const categories = Array.from(new Set(selectedCriteria.map(c => c.category).filter(Boolean)));
+                        
+                        // If categories exist, show columns for each category
+                        if (categories.length > 0) {
+                            return categories.map(cat => (
+                                <th key={cat} className="px-4 py-3 text-center font-medium">
+                                    {cat}
+                                </th>
+                            ));
+                        } else {
+                            // If no categories, maybe just show criteria names? Or just one "Score" column
+                            return selectedCriteria.map(c => (
+                                <th key={c.id} className="px-4 py-3 text-center font-medium">
+                                    {c.name}
+                                </th>
+                            ));
+                        }
+                      })()}
+                      <th className="px-4 py-3 text-right font-medium">Total</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {selectedTabulationAwardResult.allParticipants.map((participant) => (
+                      <tr key={participant.contestantNumber} className="border-t border-[#E2E8F0] hover:bg-[#F8FAFC]">
+                        <td className="px-4 py-3">
+                            <div className="font-semibold text-slate-800">{participant.participantName}</div>
+                            <div className="text-xs text-slate-500">#{participant.contestantNumber} • {participant.teamName ?? "No Team"}</div>
+                        </td>
+                        {(() => {
+                            const originalAward = awards.find(a => a.id === selectedTabulationAwardResult.awardId);
+                            // Re-calculate involved columns
+                            let criteriaIds: number[] = [];
+                            const rawIds = originalAward?.criteria_ids;
+
+                            if (Array.isArray(rawIds)) {
+                              criteriaIds = rawIds.map(id => Number(id));
+                            } else if (typeof rawIds === 'string') {
+                              const s = rawIds as string;
+                              if (s.startsWith('{') && s.endsWith('}')) {
+                                criteriaIds = s.substring(1, s.length - 1).split(',').map(n => Number(n.trim()));
+                              } else {
+                                criteriaIds = s.split(',').map(n => Number(n.trim()));
+                              }
+                            } else if (originalAward?.criteria_id) {
+                              criteriaIds = [Number(originalAward.criteria_id)];
+                            }
+                            
+                            criteriaIds = criteriaIds.filter(n => !isNaN(n));
+                            const selectedCriteria = criteriaList.filter(c => criteriaIds.includes(c.id));
+                            const categories = Array.from(new Set(selectedCriteria.map(c => c.category).filter(Boolean)));
+                            
+                            // Calculate scores for this participant and judge
+                            const judgeId = selectedJudgeForBreakdown!;
+                            
+                            if (categories.length > 0) {
+                                return categories.map(cat => {
+                                    // Sum all criteria in this category
+                                    const catCriteria = criteriaList.filter(c => c.category === cat);
+                                    let catTotal = 0;
+                                    let hasVal = false;
+                                    
+                                    for (const c of catCriteria) {
+                                        const s = scores.find(s => s.judge_id === judgeId && s.participant_id === participant.participantId && s.criteria_id === c.id);
+                                        if (s) {
+                                            catTotal += Number(s.score);
+                                            hasVal = true;
+                                        }
+                                    }
+                                    
+                                    return (
+                                        <td key={cat} className="px-4 py-3 text-center text-slate-600">
+                                            {hasVal ? catTotal.toFixed(2) : "—"}
+                                        </td>
+                                    );
+                                });
+                            } else {
+                                return selectedCriteria.map(c => {
+                                    const s = scores.find(s => s.judge_id === judgeId && s.participant_id === participant.participantId && s.criteria_id === c.id);
+                                    return (
+                                        <td key={c.id} className="px-4 py-3 text-center text-slate-600">
+                                            {s ? Number(s.score).toFixed(2) : "—"}
+                                        </td>
+                                    );
+                                });
+                            }
+                        })()}
+                        {(() => {
+                             // Calculate total again for this judge
+                             const originalAward = awards.find(a => a.id === selectedTabulationAwardResult.awardId);
+                             let criteriaIds: number[] = [];
+                             const rawIds = originalAward?.criteria_ids;
+ 
+                             if (Array.isArray(rawIds)) {
+                               criteriaIds = rawIds.map(id => Number(id));
+                             } else if (typeof rawIds === 'string') {
+                               const s = rawIds as string;
+                               if (s.startsWith('{') && s.endsWith('}')) {
+                                 criteriaIds = s.substring(1, s.length - 1).split(',').map(n => Number(n.trim()));
+                               } else {
+                                 criteriaIds = s.split(',').map(n => Number(n.trim()));
+                               }
+                             } else if (originalAward?.criteria_id) {
+                               criteriaIds = [Number(originalAward.criteria_id)];
+                             }
+                             
+                             criteriaIds = criteriaIds.filter(n => !isNaN(n));
+ 
+                             // Include all criteria from categories
+                             if (criteriaIds.length > 0) {
+                               const selectedCriteria = criteriaList.filter(c => criteriaIds.includes(c.id));
+                               const categories = Array.from(new Set(selectedCriteria.map(c => c.category).filter(Boolean)));
+                               
+                               if (categories.length > 0) {
+                                   const allCriteriaInCategories = criteriaList.filter(c => categories.includes(c.category));
+                                   const allIds = allCriteriaInCategories.map(c => c.id);
+                                   criteriaIds = Array.from(new Set([...criteriaIds, ...allIds]));
+                               }
+                             }
+                             
+                             const judgeId = selectedJudgeForBreakdown!;
+                             let total = 0;
+                             let hasVal = false;
+                             for (const cId of criteriaIds) {
+                                 const s = scores.find(s => s.judge_id === judgeId && s.participant_id === participant.participantId && s.criteria_id === cId);
+                                 if (s) {
+                                     total += Number(s.score);
+                                     hasVal = true;
+                                 }
+                             }
+                             
+                            return (
+                                <td className="px-4 py-3 text-right font-semibold text-[#1F4D3A]">
+                                    {hasVal ? total.toFixed(2) : "—"}
+                                </td>
+                            );
+                        })()}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              
+              <div className="border-t border-[#E2E8F0] p-6 text-right">
+                <button
+                  type="button"
+                  onClick={() => setSelectedJudgeForBreakdown(null)}
+                  className="rounded-full bg-[#F1F5F9] px-6 py-2.5 text-sm font-medium text-slate-700 hover:bg-[#E2E8F0]"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
         )}
 
         {activeTab === "event" && (
@@ -5934,7 +6492,7 @@ export default function AdminDashboard() {
                             <th className="px-3 py-2 font-medium">Name</th>
                             <th className="px-3 py-2 font-medium">Type</th>
                             <th className="px-3 py-2 font-medium">Contest</th>
-                            <th className="px-3 py-2 font-medium">Criteria</th>
+                            <th className="px-3 py-2 font-medium">Category</th>
                             <th className="px-3 py-2 font-medium">Active</th>
                             <th className="px-3 py-2 font-medium">Actions</th>
                           </tr>
@@ -5973,12 +6531,17 @@ export default function AdminDashboard() {
                                       )?.name ?? "Unknown contest"}
                                 </td>
                                 <td className="px-3 py-2 text-slate-600">
-                                  {award.award_type === "criteria" &&
-                                  award.criteria_id !== null
-                                    ? criteriaList.find(
-                                        (criteria) =>
-                                          criteria.id === award.criteria_id,
-                                      )?.name ?? "Unknown criteria"
+                                  {award.award_type === "criteria"
+                                    ? (() => {
+                                        const ids = award.criteria_ids ?? (award.criteria_id ? [award.criteria_id] : []);
+                                        if (ids.length === 0) return "—";
+                                        
+                                        const categories = Array.from(new Set(ids
+                                          .map(id => criteriaList.find(c => c.id === id)?.category || "Uncategorized")
+                                          .filter(Boolean)));
+                                          
+                                        return categories.length > 0 ? categories.join(", ") : "Unknown category";
+                                      })()
                                     : "—"}
                                 </td>
                                 <td className="px-3 py-2 text-slate-600">
@@ -8773,6 +9336,19 @@ export default function AdminDashboard() {
                               ))}
                           </select>
                         </div>
+                        <div className="space-y-1">
+                          <div className="text-[10px] text-slate-500">
+                            Criteria Category Name
+                          </div>
+                          <input
+                            value={editingCriteriaCategory}
+                            onChange={(event) =>
+                              setEditingCriteriaCategory(event.target.value)
+                            }
+                            className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                            placeholder="e.g., Beauty"
+                          />
+                        </div>
                         
                         <div className="space-y-1">
                           <div className="text-[10px] text-slate-500">
@@ -8927,25 +9503,81 @@ export default function AdminDashboard() {
                     {awardType === "criteria" && (
                       <div className="space-y-1">
                         <div className="text-[10px] text-slate-500">
-                          Linked criteria *
+                          Linked criteria category *
                         </div>
-                        <select
-                          value={awardCriteriaId ?? ""}
-                          onChange={(event) => {
-                            const value = event.target.value;
-                            setAwardCriteriaId(
-                              value ? Number.parseInt(value, 10) : null,
-                            );
-                          }}
-                          className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
-                        >
-                          <option value="">Select criteria</option>
-                          {criteriaForActiveEvent.map((criteria) => (
-                            <option key={criteria.id} value={criteria.id}>
-                              {criteria.name}
-                            </option>
-                          ))}
-                        </select>
+                        <div className="relative" ref={awardCriteriaDropdownRef}>
+                          <button
+                            type="button"
+                            onClick={() => setIsAwardCriteriaDropdownOpen(!isAwardCriteriaDropdownOpen)}
+                            className="flex w-full items-center justify-between rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                          >
+                            <span className={awardCriteriaIds.length === 0 ? "text-slate-400" : "text-slate-900"}>
+                              {(() => {
+                                // Determine selected categories based on selected criteria IDs
+                                const selectedCategories = Array.from(new Set(
+                                  criteriaForActiveEvent
+                                    .filter(c => awardCriteriaIds.includes(c.id))
+                                    .map(c => c.category || "Uncategorized")
+                                ));
+                                
+                                return selectedCategories.length === 0
+                                  ? "Select category"
+                                  : selectedCategories.length === 1
+                                    ? selectedCategories[0]
+                                    : `${selectedCategories.length} categories selected`;
+                              })()}
+                            </span>
+                            <svg
+                              xmlns="http://www.w3.org/2000/svg"
+                              fill="none"
+                              viewBox="0 0 24 24"
+                              strokeWidth={1.5}
+                              stroke="currentColor"
+                              className={`h-4 w-4 text-slate-400 transition-transform ${isAwardCriteriaDropdownOpen ? "rotate-180" : ""}`}
+                            >
+                              <path strokeLinecap="round" strokeLinejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
+                            </svg>
+                          </button>
+                          
+                          {isAwardCriteriaDropdownOpen && (
+                            <div className="absolute left-0 top-full z-10 mt-1 max-h-60 w-full overflow-auto rounded-xl border border-[#E2E8F0] bg-white shadow-lg">
+                              {criteriaForActiveEvent.length === 0 ? (
+                                <div className="px-3 py-2 text-xs text-slate-400">No criteria available.</div>
+                              ) : (
+                                <div className="p-1">
+                                  {Array.from(new Set(criteriaForActiveEvent.map(c => c.category || "Uncategorized"))).map((category) => {
+                                    const criteriaInCategory = criteriaForActiveEvent.filter(c => (c.category || "Uncategorized") === category);
+                                    const allSelected = criteriaInCategory.every(c => awardCriteriaIds.includes(c.id));
+                                    
+                                    return (
+                                      <div key={category} className="flex items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-[#F8FAFC]">
+                                        <input
+                                          type="checkbox"
+                                          id={`category-${category}`}
+                                          checked={allSelected}
+                                          onChange={(e) => {
+                                            const ids = criteriaInCategory.map(c => c.id);
+                                            if (e.target.checked) {
+                                              // Select all criteria in this category
+                                              setAwardCriteriaIds((prev) => Array.from(new Set([...prev, ...ids])));
+                                            } else {
+                                              // Deselect all criteria in this category
+                                              setAwardCriteriaIds((prev) => prev.filter((id) => !ids.includes(id)));
+                                            }
+                                          }}
+                                          className="h-3.5 w-3.5 rounded border-[#D0D7E2] text-[#1F4D3A] focus:ring-[#1F4D3A]"
+                                        />
+                                        <label htmlFor={`category-${category}`} className="w-full cursor-pointer text-xs text-slate-700">
+                                          {category}
+                                        </label>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
                       </div>
                     )}
                     <div className="space-y-1">
@@ -10415,6 +11047,19 @@ export default function AdminDashboard() {
                     value={judgePassword}
                     onChange={(event) => setJudgePassword(event.target.value)}
                   />
+                </div>
+                <div className="space-y-1">
+                  <div className="text-[10px] text-slate-500">Role</div>
+                  <select
+                    className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                    value={judgeRole}
+                    onChange={(event) =>
+                      setJudgeRole(event.target.value as "chairman" | "judge")
+                    }
+                  >
+                    <option value="judge">Judge</option>
+                    <option value="chairman">Chairman</option>
+                  </select>
                 </div>
                 <div className="space-y-1">
                   <div className="flex items-center justify-between text-[10px] text-slate-500">

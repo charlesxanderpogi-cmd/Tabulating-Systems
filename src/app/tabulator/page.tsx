@@ -43,6 +43,7 @@ type CriteriaRow = {
   created_at: string;
   description: string | null;
   criteria_code: string | null;
+  category: string | null;
 };
 
 type AwardRow = {
@@ -53,6 +54,7 @@ type AwardRow = {
   description: string | null;
   award_type: "criteria" | "special";
   criteria_id: number | null;
+  criteria_ids: number[] | null;
   is_active: boolean;
   created_at: string;
 };
@@ -131,10 +133,11 @@ export default function TabulatorPage() {
   const [activeDivisionFilterId, setActiveDivisionFilterId] = useState<number | "all">(
     "all",
   );
-  const [activeView, setActiveView] = useState<"overall" | "awards">("overall");
+  const [activeView, setActiveView] = useState<"overall" | "awards">("awards");
   const [activeAwardFilterId, setActiveAwardFilterId] = useState<number | "all">(
     "all",
   );
+  const [selectedJudgeForBreakdown, setSelectedJudgeForBreakdown] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -202,14 +205,13 @@ export default function TabulatorPage() {
       } = await supabase
         .from("event")
         .select("id, name, code, year, is_active, created_at")
-        .eq("is_active", true)
-        .order("created_at", { ascending: false })
+        .eq("id", tabulatorRow.event_id)
         .limit(1);
 
       if (activeEventError) {
         setError(
           activeEventError.message ||
-            "Unable to load active event. Please contact the administrator.",
+            "Unable to load assigned event. Please contact the administrator.",
         );
         setIsLoading(false);
         return;
@@ -217,7 +219,7 @@ export default function TabulatorPage() {
 
       if (!activeEvents || activeEvents.length === 0) {
         setError(
-          "No active event is set. Please ask the administrator to set one in the Event tab.",
+          "No event is assigned to this tabulator. Please contact the administrator.",
         );
         setIsLoading(false);
         return;
@@ -225,6 +227,11 @@ export default function TabulatorPage() {
 
       const activeEvent = activeEvents[0] as EventRow;
       setEvent(activeEvent);
+
+      if (!activeEvent.is_active) {
+        setIsLoading(false);
+        return;
+      }
 
       const {
         data: contestRows,
@@ -275,13 +282,13 @@ export default function TabulatorPage() {
         supabase
           .from("criteria")
           .select(
-            "id, contest_id, name, percentage, created_at, description, criteria_code",
+            "id, contest_id, name, percentage, created_at, description, criteria_code, category",
           )
           .in("contest_id", contestIdsForEvent),
         supabase
           .from("award")
           .select(
-            "id, event_id, contest_id, name, description, award_type, criteria_id, is_active, created_at",
+            "id, event_id, contest_id, name, description, award_type, criteria_id, criteria_ids, is_active, created_at",
           )
           .eq("event_id", activeEvent.id),
         supabase
@@ -329,6 +336,19 @@ export default function TabulatorPage() {
 
       channel = supabase
         .channel("tabulator-changes")
+        .on(
+          "postgres_changes",
+          {
+            event: "UPDATE",
+            schema: "public",
+            table: "event",
+            filter: `id=eq.${activeEvent.id}`,
+          },
+          (payload) => {
+            const newRow = payload.new as EventRow;
+            setEvent(newRow);
+          },
+        )
         .on(
           "postgres_changes",
           {
@@ -384,6 +404,62 @@ export default function TabulatorPage() {
                 return;
               }
               setTotals((previous) => previous.filter((row) => row.id !== oldRow.id));
+            }
+          },
+        )
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "score",
+          },
+          (payload) => {
+            if (payload.eventType === "INSERT" || payload.eventType === "UPDATE") {
+              const newRow = payload.new as ScoreRow;
+              setScores((previous) => {
+                const exists = previous.some((score) => score.id === newRow.id);
+
+                if (payload.eventType === "INSERT" && !exists) {
+                  return [...previous, newRow];
+                }
+
+                return previous.map((score) =>
+                  score.id === newRow.id ? newRow : score,
+                );
+              });
+            } else if (payload.eventType === "DELETE") {
+              const oldRow = payload.old as { id: number };
+              setScores((previous) =>
+                previous.filter((score) => score.id !== oldRow.id),
+              );
+            }
+          },
+        )
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "award",
+          },
+          (payload) => {
+            if (payload.eventType === "INSERT" || payload.eventType === "UPDATE") {
+              const newRow = payload.new as AwardRow;
+              setAwards((previous) => {
+                const exists = previous.some((row) => row.id === newRow.id);
+
+                if (payload.eventType === "INSERT" && !exists) {
+                  return [...previous, newRow];
+                }
+
+                return previous.map((row) => (row.id === newRow.id ? newRow : row));
+              });
+            } else if (payload.eventType === "DELETE") {
+              const oldRow = payload.old as { id: number };
+              setAwards((previous) =>
+                previous.filter((row) => row.id !== oldRow.id),
+              );
             }
           },
         )
@@ -538,6 +614,7 @@ export default function TabulatorPage() {
     const map = new Map<string, number>();
 
     for (const row of scores) {
+      // Note: key includes criteria_id
       const key = `${row.criteria_id}-${row.judge_id}-${row.participant_id}`;
       map.set(key, Number(row.score));
     }
@@ -557,10 +634,13 @@ export default function TabulatorPage() {
     const filtered: AwardRow[] = [];
 
     for (const award of awardsForEvent) {
+      const criteriaIds = award.criteria_ids ?? (award.criteria_id ? [award.criteria_id] : []);
+      const firstCriteriaId = criteriaIds.length > 0 ? criteriaIds[0] : null;
+
       const criteria =
-        award.criteria_id === null
+        firstCriteriaId === null
           ? null
-          : criteriaList.find((criteriaRow) => criteriaRow.id === award.criteria_id) ??
+          : criteriaList.find((criteriaRow) => criteriaRow.id === firstCriteriaId) ??
             null;
 
       const contestId = award.contest_id ?? criteria?.contest_id ?? null;
@@ -590,10 +670,13 @@ export default function TabulatorPage() {
     const results: AwardResult[] = [];
 
     for (const award of sourceAwards) {
+      const criteriaIds = award.criteria_ids ?? (award.criteria_id ? [award.criteria_id] : []);
+      const firstCriteriaId = criteriaIds.length > 0 ? criteriaIds[0] : null;
+
       const criteria =
-        award.criteria_id === null
+        firstCriteriaId === null
           ? null
-          : criteriaList.find((criteriaRow) => criteriaRow.id === award.criteria_id) ??
+          : criteriaList.find((criteriaRow) => criteriaRow.id === firstCriteriaId) ??
             null;
 
       if (rankings.length === 0) {
@@ -626,27 +709,65 @@ export default function TabulatorPage() {
       return [];
     }
 
+    let criteriaIds: number[] = [];
+    const rawIds = selectedAwardResult.award.criteria_ids;
+
+    if (Array.isArray(rawIds)) {
+      criteriaIds = rawIds.map(id => Number(id));
+    } else if (typeof rawIds === 'string') {
+      // Handle potential string format
+      const s = rawIds as string;
+      if (s.startsWith('{') && s.endsWith('}')) {
+        criteriaIds = s.substring(1, s.length - 1).split(',').map(n => Number(n.trim()));
+      } else {
+        criteriaIds = s.split(',').map(n => Number(n.trim()));
+      }
+    } else if (selectedAwardResult.award.criteria_id) {
+      criteriaIds = [Number(selectedAwardResult.award.criteria_id)];
+    }
+
+    // Filter out NaNs if any parsing failed
+    criteriaIds = criteriaIds.filter(n => !isNaN(n));
+
+    // NEW: If the award has associated criteria, check if we need to include ALL criteria from the categories
+    // that the selected criteria belong to.
+    if (criteriaIds.length > 0) {
+      const selectedCriteria = criteriaList.filter(c => criteriaIds.includes(c.id));
+      const categories = Array.from(new Set(selectedCriteria.map(c => c.category).filter(Boolean)));
+      
+      if (categories.length > 0) {
+          const allCriteriaInCategories = criteriaList.filter(c => categories.includes(c.category));
+          const allIds = allCriteriaInCategories.map(c => c.id);
+          criteriaIds = Array.from(new Set([...criteriaIds, ...allIds]));
+      }
+    }
+
     if (
       selectedAwardResult.award.award_type !== "criteria" ||
-      selectedAwardResult.award.criteria_id === null
+      criteriaIds.length === 0
     ) {
       return [];
     }
-
-    const criteriaId = selectedAwardResult.award.criteria_id;
 
     const rowsWithTotals: AwardRankingRow[] = selectedAwardResult.winners.map(
       (row) => {
         let totalForCriteria = 0;
         let hasValue = false;
 
+        // Sum up all judge scores for all criteria linked to this award
         for (const judgeId of judgeIdsForActiveContest) {
-          const key = `${criteriaId}-${judgeId}-${row.participant.id}`;
-          const value = criteriaScoreByJudgeAndParticipant.get(key);
-          if (value !== undefined) {
-            totalForCriteria += value;
-            hasValue = true;
+          // Accumulate judge's total score for this award
+          let judgeTotal = 0;
+          for (const cId of criteriaIds) {
+            const key = `${cId}-${judgeId}-${row.participant.id}`;
+            const value = criteriaScoreByJudgeAndParticipant.get(key);
+            if (value !== undefined) {
+              judgeTotal += value;
+              hasValue = true;
+            }
           }
+          // Add judge's total to overall total
+          totalForCriteria += judgeTotal;
         }
 
         return {
@@ -692,6 +813,7 @@ export default function TabulatorPage() {
     selectedAwardResult,
     judgeIdsForActiveContest,
     criteriaScoreByJudgeAndParticipant,
+    criteriaList,
   ]);
 
   const handleSignOut = () => {
@@ -700,6 +822,43 @@ export default function TabulatorPage() {
     }
     router.push("/");
   };
+
+  if (isLoading) {
+    return (
+      <div className="flex h-screen w-full items-center justify-center bg-[#F8FAFC]">
+        <div className="flex flex-col items-center gap-3">
+          <div className="h-8 w-8 animate-spin rounded-full border-4 border-[#1F4D3A] border-t-transparent" />
+          <div className="text-sm font-medium text-slate-500">
+            Loading tabulator workspace...
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (event && !event.is_active) {
+    return (
+      <div className="flex h-screen w-full flex-col items-center justify-center gap-4 bg-[#F8FAFC] px-6 text-center">
+        <div className="flex h-16 w-16 items-center justify-center rounded-full bg-[#F5F7FF] text-3xl">
+          🛑
+        </div>
+        <div className="space-y-2">
+          <h1 className="text-xl font-semibold text-slate-800">
+            Event is not active
+          </h1>
+          <p className="max-w-md text-sm text-slate-500">
+            The event <span className="font-medium text-slate-700">{event.name}</span> is currently inactive. Please wait for the administrator to start the event.
+          </p>
+        </div>
+        <button
+          onClick={handleSignOut}
+          className="mt-2 rounded-full border border-[#D0D7E2] bg-white px-5 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50 hover:text-slate-900"
+        >
+          Sign out
+        </button>
+      </div>
+    );
+  }
 
   const handlePrint = () => {
     if (typeof window === "undefined") {
@@ -860,32 +1019,7 @@ export default function TabulatorPage() {
                 </div>
               ) : (
                 <div className="flex flex-col gap-6">
-                  <div className="flex items-center gap-2">
-                    <div className="rounded-full bg-[#F5F7FF] p-1 text-[11px] text-slate-600">
-                      <button
-                        type="button"
-                        onClick={() => setActiveView("overall")}
-                        className={`rounded-full px-3 py-1 text-[11px] font-medium transition ${
-                          activeView === "overall"
-                            ? "bg-white text-[#1F4D3A] shadow-sm"
-                            : "text-slate-600 hover:text-[#1F4D3A]"
-                        }`}
-                      >
-                        Overall
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setActiveView("awards")}
-                        className={`rounded-full px-3 py-1 text-[11px] font-medium transition ${
-                          activeView === "awards"
-                            ? "bg-white text-[#1F4D3A] shadow-sm"
-                            : "text-slate-600 hover:text-[#1F4D3A]"
-                        }`}
-                      >
-                        Awards
-                      </button>
-                    </div>
-                  </div>
+                  {/* View switcher removed as per request */}
 
                   {activeView === "overall" && (
                     <div className="flex flex-col gap-6">
@@ -1016,7 +1150,7 @@ export default function TabulatorPage() {
                             No winners available yet for this award.
                           </div>
                         ) : selectedAwardResult.award.award_type !== "criteria" ||
-                          selectedAwardResult.award.criteria_id === null ? (
+                          ((selectedAwardResult.award.criteria_ids === null || selectedAwardResult.award.criteria_ids.length === 0) && selectedAwardResult.award.criteria_id === null) ? (
                           <div className="text-[11px] text-slate-400">
                             This is a special award. Criteria scores per judge are not
                             available.
@@ -1029,12 +1163,19 @@ export default function TabulatorPage() {
                                   <th className="px-4 py-3 font-medium">Rank</th>
                                   <th className="px-4 py-3 font-medium">Represent</th>
                                   <th className="px-4 py-3 font-medium">Contestant</th>
-                                  {judgeIdsForActiveContest.map((_, index) => (
+                                  {judgeIdsForActiveContest.map((judgeId, index) => (
                                     <th
-                                      key={index}
-                                      className="px-4 py-3 text-right font-medium"
+                                      key={judgeId}
+                                      className="px-4 py-3 text-center font-medium"
                                     >
-                                      Judge {index + 1}
+                                      <div>Judge {index + 1}</div>
+                                      <button
+                                        type="button"
+                                        onClick={() => setSelectedJudgeForBreakdown(judgeId)}
+                                        className="mt-1 rounded-full border border-[#1F4D3A33] bg-white px-2 py-0.5 text-[9px] font-medium text-[#1F4D3A] transition hover:bg-[#F0FDF4]"
+                                      >
+                                        show more
+                                      </button>
                                     </th>
                                   ))}
                                   <th className="px-4 py-3 text-right font-medium">
@@ -1063,18 +1204,54 @@ export default function TabulatorPage() {
                                       </div>
                                     </td>
                                     {judgeIdsForActiveContest.map((judgeId) => {
-                                      const criteriaId =
-                                        selectedAwardResult.award.criteria_id!;
-                                      const key = `${criteriaId}-${judgeId}-${item.row.participant.id}`;
-                                      const value =
-                                        criteriaScoreByJudgeAndParticipant.get(key);
+                                      // Logic to calculate total judge score for this award
+                                      let criteriaIds: number[] = [];
+                                      const rawIds = selectedAwardResult.award.criteria_ids;
+
+                                      if (Array.isArray(rawIds)) {
+                                        criteriaIds = rawIds.map(id => Number(id));
+                                      } else if (typeof rawIds === 'string') {
+                                        const s = rawIds as string;
+                                        if (s.startsWith('{') && s.endsWith('}')) {
+                                          criteriaIds = s.substring(1, s.length - 1).split(',').map(n => Number(n.trim()));
+                                        } else {
+                                          criteriaIds = s.split(',').map(n => Number(n.trim()));
+                                        }
+                                      } else if (selectedAwardResult.award.criteria_id) {
+                                        criteriaIds = [Number(selectedAwardResult.award.criteria_id)];
+                                      }
+                                      
+                                      criteriaIds = criteriaIds.filter(n => !isNaN(n));
+
+                                      // Include all criteria from categories
+                                      if (criteriaIds.length > 0) {
+                                        const selectedCriteria = criteriaList.filter(c => criteriaIds.includes(c.id));
+                                        const categories = Array.from(new Set(selectedCriteria.map(c => c.category).filter(Boolean)));
+                                        
+                                        if (categories.length > 0) {
+                                            const allCriteriaInCategories = criteriaList.filter(c => categories.includes(c.category));
+                                            const allIds = allCriteriaInCategories.map(c => c.id);
+                                            criteriaIds = Array.from(new Set([...criteriaIds, ...allIds]));
+                                        }
+                                      }
+
+                                      let total = 0;
+                                      let hasVal = false;
+                                      for (const cId of criteriaIds) {
+                                          const key = `${cId}-${judgeId}-${item.row.participant.id}`;
+                                          const value = criteriaScoreByJudgeAndParticipant.get(key);
+                                          if (value !== undefined) {
+                                              total += value;
+                                              hasVal = true;
+                                          }
+                                      }
                                       return (
                                         <td
                                           key={judgeId}
-                                          className="px-4 py-3 align-middle text-right text-sm text-slate-700"
+                                          className="px-4 py-3 align-middle text-center text-sm text-slate-700"
                                         >
-                                          {value !== undefined
-                                            ? value.toFixed(2)
+                                          {hasVal
+                                            ? total.toFixed(2)
                                             : "—"}
                                         </td>
                                       );
@@ -1098,6 +1275,224 @@ export default function TabulatorPage() {
             </div>
           </section>
         </main>
+        
+        {/* Judge Score Breakdown Modal */}
+        {selectedJudgeForBreakdown !== null && selectedAwardResult && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm">
+            <div className="flex max-h-[90vh] w-full max-w-5xl flex-col rounded-3xl bg-white shadow-2xl">
+              <div className="flex items-center justify-between border-b border-[#E2E8F0] p-6">
+                <div>
+                  <h3 className="text-lg font-semibold text-[#1F4D3A]">
+                    Judge {judgeIdsForActiveContest.indexOf(selectedJudgeForBreakdown) + 1} Breakdown
+                  </h3>
+                  <p className="text-sm text-slate-500">
+                    Detailed scoring for {selectedAwardResult.award.name}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSelectedJudgeForBreakdown(null)}
+                  className="rounded-full bg-[#F1F5F9] p-2 text-slate-500 hover:bg-[#E2E8F0]"
+                >
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="20"
+                    height="20"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <line x1="18" y1="6" x2="6" y2="18" />
+                    <line x1="6" y1="6" x2="18" y2="18" />
+                  </svg>
+                </button>
+              </div>
+              
+              <div className="flex-1 overflow-y-auto p-6">
+                <table className="min-w-full border-collapse text-left text-sm">
+                  <thead className="bg-[#F5F7FF] text-xs font-semibold uppercase tracking-wide text-[#1F4D3A]">
+                    <tr>
+                      <th className="px-4 py-3 font-medium">Contestant</th>
+                      {(() => {
+                        // Determine categories involved
+                        let criteriaIds: number[] = [];
+                        const rawIds = selectedAwardResult.award.criteria_ids;
+
+                        if (Array.isArray(rawIds)) {
+                          criteriaIds = rawIds.map(id => Number(id));
+                        } else if (typeof rawIds === 'string') {
+                          const s = rawIds as string;
+                          if (s.startsWith('{') && s.endsWith('}')) {
+                            criteriaIds = s.substring(1, s.length - 1).split(',').map(n => Number(n.trim()));
+                          } else {
+                            criteriaIds = s.split(',').map(n => Number(n.trim()));
+                          }
+                        } else if (selectedAwardResult.award.criteria_id) {
+                          criteriaIds = [Number(selectedAwardResult.award.criteria_id)];
+                        }
+                        
+                        criteriaIds = criteriaIds.filter(n => !isNaN(n));
+                        
+                        // Expand to categories
+                        const selectedCriteria = criteriaList.filter(c => criteriaIds.includes(c.id));
+                        const categories = Array.from(new Set(selectedCriteria.map(c => c.category).filter(Boolean)));
+                        
+                        // If categories exist, show columns for each category
+                        if (categories.length > 0) {
+                            return categories.map(cat => (
+                                <th key={cat} className="px-4 py-3 text-center font-medium">
+                                    {cat}
+                                </th>
+                            ));
+                        } else {
+                            // If no categories, maybe just show criteria names? Or just one "Score" column
+                            return selectedCriteria.map(c => (
+                                <th key={c.id} className="px-4 py-3 text-center font-medium">
+                                    {c.name}
+                                </th>
+                            ));
+                        }
+                      })()}
+                      <th className="px-4 py-3 text-right font-medium">Total</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {awardRankingRows.map((item) => (
+                      <tr key={item.row.participant.id} className="border-t border-[#E2E8F0] hover:bg-[#F8FAFC]">
+                        <td className="px-4 py-3">
+                            <div className="font-semibold text-slate-800">{item.row.participant.full_name}</div>
+                            <div className="text-xs text-slate-500">#{item.row.participant.contestant_number} • {item.row.teamName ?? item.row.categoryName}</div>
+                        </td>
+                        {(() => {
+                            // Re-calculate involved columns
+                            let criteriaIds: number[] = [];
+                            const rawIds = selectedAwardResult.award.criteria_ids;
+
+                            if (Array.isArray(rawIds)) {
+                              criteriaIds = rawIds.map(id => Number(id));
+                            } else if (typeof rawIds === 'string') {
+                              const s = rawIds as string;
+                              if (s.startsWith('{') && s.endsWith('}')) {
+                                criteriaIds = s.substring(1, s.length - 1).split(',').map(n => Number(n.trim()));
+                              } else {
+                                criteriaIds = s.split(',').map(n => Number(n.trim()));
+                              }
+                            } else if (selectedAwardResult.award.criteria_id) {
+                              criteriaIds = [Number(selectedAwardResult.award.criteria_id)];
+                            }
+                            
+                            criteriaIds = criteriaIds.filter(n => !isNaN(n));
+                            const selectedCriteria = criteriaList.filter(c => criteriaIds.includes(c.id));
+                            const categories = Array.from(new Set(selectedCriteria.map(c => c.category).filter(Boolean)));
+                            
+                            // Calculate scores for this participant and judge
+                            const judgeId = selectedJudgeForBreakdown;
+                            
+                            if (categories.length > 0) {
+                                return categories.map(cat => {
+                                    // Sum all criteria in this category
+                                    const catCriteria = criteriaList.filter(c => c.category === cat);
+                                    let catTotal = 0;
+                                    let hasVal = false;
+                                    
+                                    for (const c of catCriteria) {
+                                        const key = `${c.id}-${judgeId}-${item.row.participant.id}`;
+                                        const val = criteriaScoreByJudgeAndParticipant.get(key);
+                                        if (val !== undefined) {
+                                            catTotal += val;
+                                            hasVal = true;
+                                        }
+                                    }
+                                    
+                                    return (
+                                        <td key={cat} className="px-4 py-3 text-center text-slate-600">
+                                            {hasVal ? catTotal.toFixed(2) : "—"}
+                                        </td>
+                                    );
+                                });
+                            } else {
+                                return selectedCriteria.map(c => {
+                                    const key = `${c.id}-${judgeId}-${item.row.participant.id}`;
+                                    const val = criteriaScoreByJudgeAndParticipant.get(key);
+                                    return (
+                                        <td key={c.id} className="px-4 py-3 text-center text-slate-600">
+                                            {val !== undefined ? val.toFixed(2) : "—"}
+                                        </td>
+                                    );
+                                });
+                            }
+                        })()}
+                        {(() => {
+                             // Calculate total again for this judge
+                             let criteriaIds: number[] = [];
+                             const rawIds = selectedAwardResult.award.criteria_ids;
+ 
+                             if (Array.isArray(rawIds)) {
+                               criteriaIds = rawIds.map(id => Number(id));
+                             } else if (typeof rawIds === 'string') {
+                               const s = rawIds as string;
+                               if (s.startsWith('{') && s.endsWith('}')) {
+                                 criteriaIds = s.substring(1, s.length - 1).split(',').map(n => Number(n.trim()));
+                               } else {
+                                 criteriaIds = s.split(',').map(n => Number(n.trim()));
+                               }
+                             } else if (selectedAwardResult.award.criteria_id) {
+                               criteriaIds = [Number(selectedAwardResult.award.criteria_id)];
+                             }
+                             
+                             criteriaIds = criteriaIds.filter(n => !isNaN(n));
+ 
+                             // Include all criteria from categories
+                             if (criteriaIds.length > 0) {
+                               const selectedCriteria = criteriaList.filter(c => criteriaIds.includes(c.id));
+                               const categories = Array.from(new Set(selectedCriteria.map(c => c.category).filter(Boolean)));
+                               
+                               if (categories.length > 0) {
+                                   const allCriteriaInCategories = criteriaList.filter(c => categories.includes(c.category));
+                                   const allIds = allCriteriaInCategories.map(c => c.id);
+                                   criteriaIds = Array.from(new Set([...criteriaIds, ...allIds]));
+                               }
+                             }
+                             
+                             const judgeId = selectedJudgeForBreakdown;
+                             let total = 0;
+                             let hasVal = false;
+                             for (const cId of criteriaIds) {
+                                 const key = `${cId}-${judgeId}-${item.row.participant.id}`;
+                                 const value = criteriaScoreByJudgeAndParticipant.get(key);
+                                 if (value !== undefined) {
+                                     total += value;
+                                     hasVal = true;
+                                 }
+                             }
+                             
+                            return (
+                                <td className="px-4 py-3 text-right font-semibold text-[#1F4D3A]">
+                                    {hasVal ? total.toFixed(2) : "—"}
+                                </td>
+                            );
+                        })()}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              
+              <div className="border-t border-[#E2E8F0] p-6 text-right">
+                <button
+                  type="button"
+                  onClick={() => setSelectedJudgeForBreakdown(null)}
+                  className="rounded-full bg-[#F1F5F9] px-6 py-2.5 text-sm font-medium text-slate-700 hover:bg-[#E2E8F0]"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
