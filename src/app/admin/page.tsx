@@ -810,8 +810,22 @@ export default function AdminDashboard() {
   const [isSettingActiveEventId, setIsSettingActiveEventId] = useState<
     number | null
   >(null);
+  const [isDeactivatingEventId, setIsDeactivatingEventId] = useState<
+    number | null
+  >(null);
   const [eventError, setEventError] = useState<string | null>(null);
   const [eventSuccess, setEventSuccess] = useState<string | null>(null);
+  const [selectedEventIdForContest, setSelectedEventIdForContest] = useState<
+    number | null
+  >(null);
+  const [selectedEventIdForTeam, setSelectedEventIdForTeam] = useState<
+    number | null
+  >(null);
+  const [selectedEventIdForJudge, setSelectedEventIdForJudge] = useState<
+    number | null
+  >(null);
+  const [selectedEventIdForTabulator, setSelectedEventIdForTabulator] =
+    useState<number | null>(null);
   const [judgeFullName, setJudgeFullName] = useState("");
   const [judgeUsername, setJudgeUsername] = useState("");
   const [judgePassword, setJudgePassword] = useState("");
@@ -976,7 +990,11 @@ export default function AdminDashboard() {
   const [participantFullName, setParticipantFullName] = useState("");
   const [participantNumber, setParticipantNumber] = useState("");
   const [participantAvatarUrl, setParticipantAvatarUrl] = useState("");
-  const [participantAvatarZoom, setParticipantAvatarZoom] = useState(1.1);
+  const [participantAvatarZoom, setParticipantAvatarZoom] = useState(1);
+  const [participantAvatarImageDims, setParticipantAvatarImageDims] = useState<{
+    w: number;
+    h: number;
+  } | null>(null);
   const [isUploadingParticipantAvatar, setIsUploadingParticipantAvatar] =
     useState(false);
   const [isSavingParticipant, setIsSavingParticipant] = useState(false);
@@ -1058,6 +1076,17 @@ export default function AdminDashboard() {
   const [tabulationAwardFilterId, setTabulationAwardFilterId] = useState<
     number | "all"
   >("all");
+  const [eventTabEventFilterId, setEventTabEventFilterId] = useState<number | null>(null);
+  const [participantsTabEventFilterId, setParticipantsTabEventFilterId] = useState<number | null>(null);
+  // filter used specifically in the "Add user" section when viewing judges/tabulators
+  const [userTabEventFilterId, setUserTabEventFilterId] = useState<number | null>(null);
+  const [selectedEventIdForParticipant, setSelectedEventIdForParticipant] = useState<number | null>(null);
+  const [selectedEventIdForAward, setSelectedEventIdForAward] = useState<number | null>(null);
+  const [adminSearch, setAdminSearch] = useState("");
+  const [judgeSearch, setJudgeSearch] = useState("");
+  const [tabulatorSearch, setTabulatorSearch] = useState("");
+  const [participantSearch, setParticipantSearch] = useState("");
+  const [awardSearch, setAwardSearch] = useState("");
   const [judgeTotals, setJudgeTotals] = useState<JudgeParticipantTotalRow[]>([]);
 
   const [scores, setScores] = useState<ScoreRow[]>([]);
@@ -2093,6 +2122,9 @@ export default function AdminDashboard() {
       .sort((a, b) => a.localeCompare(b));
 
     setEditingContestId(null);
+    setSelectedEventIdForContest(
+      activeEventId || (events.length > 0 ? events[0].id : null),
+    );
     setContestName("");
     setContestCategoryText("");
     setContestDivisionNames(initialDivisions);
@@ -2117,6 +2149,9 @@ export default function AdminDashboard() {
 
   const openCreateCategoryModal = () => {
     setEditingCategoryId(null);
+    setSelectedEventIdForTeam(
+      activeEventId || (events.length > 0 ? events[0].id : null),
+    );
     setCategoryName("");
     setCategoryError(null);
     setCategorySuccess(null);
@@ -2125,6 +2160,7 @@ export default function AdminDashboard() {
 
   const openEditCategoryModal = (team: TeamRow) => {
     setEditingCategoryId(team.id);
+    setSelectedEventIdForTeam(team.event_id);
     setCategoryName(team.name);
     setCategoryError(null);
     setCategorySuccess(null);
@@ -2133,13 +2169,15 @@ export default function AdminDashboard() {
 
   const openCreateParticipantModal = () => {
     setEditingParticipantId(null);
+    setSelectedEventIdForParticipant(activeEventId || (events.length > 0 ? events[0].id : null));
     setSelectedContestIdForParticipant(null);
     setSelectedCategoryIdForParticipant(null);
     setSelectedTeamIdForParticipant(null);
     setParticipantFullName("");
     setParticipantNumber("");
     setParticipantAvatarUrl("");
-    setParticipantAvatarZoom(1.1);
+    setParticipantAvatarZoom(1);
+    setParticipantAvatarImageDims(null);
     setParticipantError(null);
     setParticipantSuccess(null);
     setIsParticipantModalOpen(true);
@@ -2147,12 +2185,19 @@ export default function AdminDashboard() {
 
   const openEditParticipantModal = (participant: ParticipantRow) => {
     setEditingParticipantId(participant.id);
+    setSelectedEventIdForParticipant(
+      participant.contest_id
+        ? (contests.find((c) => c.id === participant.contest_id)?.event_id ?? activeEventId)
+        : activeEventId,
+    );
     setSelectedContestIdForParticipant(participant.contest_id);
     setSelectedCategoryIdForParticipant(participant.division_id);
     setSelectedTeamIdForParticipant(participant.team_id);
     setParticipantFullName(participant.full_name);
     setParticipantNumber(participant.contestant_number);
     setParticipantAvatarUrl(participant.avatar_url ?? "");
+    setParticipantAvatarZoom(1);
+    setParticipantAvatarImageDims(null);
     setParticipantError(null);
     setParticipantSuccess(null);
     setIsParticipantModalOpen(true);
@@ -2178,6 +2223,9 @@ export default function AdminDashboard() {
 
   const openCreateJudgeModal = () => {
     setEditingJudgeId(null);
+    setSelectedEventIdForJudge(
+      userTabEventFilterId ?? (activeEventId || (events.length > 0 ? events[0].id : null)),
+    );
     setJudgeFullName("");
     setJudgeUsername("");
     setJudgePassword("");
@@ -2190,6 +2238,7 @@ export default function AdminDashboard() {
 
   const openEditJudgeModal = (judge: JudgeRow) => {
     setEditingJudgeId(judge.id);
+    setSelectedEventIdForJudge(judge.event_id);
     setJudgeFullName(judge.full_name);
     setJudgeUsername(judge.username);
     setJudgePassword("");
@@ -2206,6 +2255,9 @@ export default function AdminDashboard() {
 
   const openCreateTabulatorModal = () => {
     setEditingTabulatorId(null);
+    setSelectedEventIdForTabulator(
+      userTabEventFilterId ?? (activeEventId || (events.length > 0 ? events[0].id : null)),
+    );
     setTabulatorFullName("");
     setTabulatorUsername("");
     setTabulatorPassword("");
@@ -2216,6 +2268,7 @@ export default function AdminDashboard() {
 
   const openEditTabulatorModal = (tabulator: TabulatorRow) => {
     setEditingTabulatorId(tabulator.id);
+    setSelectedEventIdForTabulator(tabulator.event_id);
     setTabulatorFullName(tabulator.full_name);
     setTabulatorUsername(tabulator.username);
     setTabulatorPassword("");
@@ -2457,6 +2510,100 @@ export default function AdminDashboard() {
 
     const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
+    // remove dependent rows in tables that reference event_id
+    // this mirrors an ON DELETE CASCADE that isn't configured for team
+    {
+      let result;
+
+      // remove any user accounts tied to this event (judges, tabulators)
+      // note: the table names are user_judge and user_tabulator; there is no
+      // table called "judge". the superscript error about a missing table
+      // comes from running incorrect SQL in the editor. we delete here to
+      // keep the database tidy when an event is purged.
+      result = await supabase.from("user_judge").delete().eq("event_id", id);
+      if (result.error) {
+        setIsDeletingEventId(null);
+        setEventError(
+          result.error.message || "Unable to delete related judge accounts.",
+        );
+        return;
+      }
+
+      result = await supabase.from("user_tabulator").delete().eq("event_id", id);
+      if (result.error) {
+        setIsDeletingEventId(null);
+        setEventError(
+          result.error.message || "Unable to delete related tabulator accounts.",
+        );
+        return;
+      }
+
+      // now delete the other dependent rows as before
+      result = await supabase.from("team").delete().eq("event_id", id);
+      if (result.error) {
+        setIsDeletingEventId(null);
+        setEventError(
+          result.error.message || "Unable to delete related records before removing event.",
+        );
+        return;
+      }
+
+      result = await supabase.from("division").delete().eq("event_id", id);
+      if (result.error) {
+        setIsDeletingEventId(null);
+        setEventError(
+          result.error.message || "Unable to delete related records before removing event.",
+        );
+        return;
+      }
+
+      result = await supabase.from("contest").delete().eq("event_id", id);
+      if (result.error) {
+        setIsDeletingEventId(null);
+        setEventError(
+          result.error.message || "Unable to delete related records before removing event.",
+        );
+        return;
+      }
+
+      result = await supabase.from("award").delete().eq("event_id", id);
+      if (result.error) {
+        setIsDeletingEventId(null);
+        setEventError(
+          result.error.message || "Unable to delete related records before removing event.",
+        );
+        return;
+      }
+
+      // remove judge user accounts; table is user_judge not judge
+      result = await supabase.from("user_judge").delete().eq("event_id", id);
+      if (result.error) {
+        setIsDeletingEventId(null);
+        setEventError(
+          result.error.message || "Unable to delete related judge accounts before removing event.",
+        );
+        return;
+      }
+
+      result = await supabase.from("user_tabulator").delete().eq("event_id", id);
+      if (result.error) {
+        setIsDeletingEventId(null);
+        setEventError(
+          result.error.message || "Unable to delete related records before removing event.",
+        );
+        return;
+      }
+
+      result = await supabase.from("user_judge").delete().eq("event_id", id);
+      if (result.error) {
+        setIsDeletingEventId(null);
+        setEventError(
+          result.error.message || "Unable to delete related records before removing event.",
+        );
+        return;
+      }
+    }
+
     const { error } = await supabase.from("event").delete().eq("id", id);
 
     setIsDeletingEventId(null);
@@ -2486,37 +2633,61 @@ export default function AdminDashboard() {
 
     const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
-    const { error: clearError } = await supabase
-      .from("event")
-      .update({ is_active: false })
-      .eq("is_active", true);
-
-    if (clearError) {
-      setIsSettingActiveEventId(null);
-      setEventError(clearError.message || "Unable to clear active event.");
-      return;
-    }
-
-    const { error: setError } = await supabase
+    const { error } = await supabase
       .from("event")
       .update({ is_active: true })
       .eq("id", id);
 
     setIsSettingActiveEventId(null);
 
-    if (setError) {
-      setEventError(setError.message || "Unable to set active event.");
+    if (error) {
+      setEventError(error.message || "Unable to activate event.");
       return;
     }
 
-    setActiveEventId(id);
     setEvents((prev) =>
-      prev.map((event) => ({
-        ...event,
-        is_active: event.id === id,
-      })),
+      prev.map((event) =>
+        event.id === id ? { ...event, is_active: true } : event,
+      ),
     );
-    setEventSuccess("Active event has been updated.");
+    setEventSuccess("Event activated successfully.");
+  };
+
+  const handleDeactivateEvent = async (id: number) => {
+    setEventError(null);
+    setEventSuccess(null);
+
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+    if (!supabaseUrl || !supabaseAnonKey) {
+      setEventError("Supabase is not configured.");
+      return;
+    }
+
+    setIsDeactivatingEventId(id);
+
+    const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
+    const { error } = await supabase
+      .from("event")
+      .update({ is_active: false })
+      .eq("id", id);
+
+    setIsDeactivatingEventId(null);
+
+    if (error) {
+      setEventError(error.message || "Unable to deactivate event.");
+      return;
+    }
+
+    setEvents((prev) =>
+      prev.map((event) =>
+        event.id === id ? { ...event, is_active: false } : event,
+      ),
+    );
+    setActiveEventId((current) => (current === id ? null : current));
+    setEventSuccess("Event deactivated successfully.");
   };
 
   const filteredEvents = events.filter((event) => {
@@ -2560,6 +2731,10 @@ export default function AdminDashboard() {
   useEffect(() => {
     if (activeEventId) {
         setTabulationEventFilterId(activeEventId);
+        setEventTabEventFilterId(activeEventId);
+        setParticipantsTabEventFilterId(activeEventId);
+        setSelectedEventIdForParticipant(activeEventId);
+        setSelectedEventIdForAward(activeEventId);
     }
   }, [activeEventId]);
 
@@ -2633,29 +2808,135 @@ export default function AdminDashboard() {
     [categories, activeEventId],
   );
 
+  // For Event Tab - show contests for selected event (not just active)
+  const contestsForEventTab = useMemo(
+    () =>
+      eventTabEventFilterId === null
+        ? contests
+        : contests.filter((contest) => contest.event_id === eventTabEventFilterId),
+    [contests, eventTabEventFilterId],
+  );
+
+  // For Event Tab - show criteria for selected event (not just active)
+  const criteriaForEventTab = useMemo(() => {
+    if (eventTabEventFilterId === null) {
+      return criteriaList;
+    }
+
+    const contestIdsForEvent = new Set(
+      contests
+        .filter((contest) => contest.event_id === eventTabEventFilterId)
+        .map((contest) => contest.id),
+    );
+
+    return criteriaList.filter((criteria) =>
+      contestIdsForEvent.has(criteria.contest_id),
+    );
+  }, [criteriaList, contests, eventTabEventFilterId]);
+
+  // For Event Tab - show awards for selected event (not just active)
+  const awardsForEventTab = useMemo(
+    () =>
+      eventTabEventFilterId === null
+        ? awards
+        : awards.filter((award) => award.event_id === eventTabEventFilterId),
+    [awards, eventTabEventFilterId],
+  );
+
+  // For Participants Tab - show teams for selected event (not just active)
+  const teamsForParticipantsTab = useMemo(
+    () =>
+      participantsTabEventFilterId === null
+        ? teams
+        : teams.filter((team) => team.event_id === participantsTabEventFilterId),
+    [teams, participantsTabEventFilterId],
+  );
+
+  // For Participants Tab - show contests for selected event (not just active)
+  const contestsForParticipantsTab = useMemo(
+    () =>
+      participantsTabEventFilterId === null
+        ? contests
+        : contests.filter((contest) => contest.event_id === participantsTabEventFilterId),
+    [contests, participantsTabEventFilterId],
+  );
+
   const participantsForActiveEvent = useMemo(() => {
-    if (activeEventId === null) {
+    const effectiveEventId = participantsTabEventFilterId ?? activeEventId;
+    if (effectiveEventId === null) {
       return participants;
     }
 
     const contestIdsForEvent = new Set(
       contests
-        .filter((contest) => contest.event_id === activeEventId)
+        .filter((contest) => contest.event_id === effectiveEventId)
         .map((contest) => contest.id),
     );
 
     return participants.filter((participant) =>
       contestIdsForEvent.has(participant.contest_id),
     );
-  }, [participants, contests, activeEventId]);
+  }, [participants, contests, activeEventId, participantsTabEventFilterId]);
+
+  const effectiveTabulationEventId =
+    tabulationEventFilterId === "all"
+      ? activeEventId === null
+        ? null
+        : activeEventId
+      : tabulationEventFilterId;
+
+  const debugTabulationInfo = useMemo(() => {
+    const eventId = effectiveTabulationEventId;
+    const contestIds = eventId === null
+      ? []
+      : contests.filter((c) => c.event_id === eventId).map((c) => c.id);
+
+    const participantCount = participants.filter((p) => contestIds.includes(p.contest_id)).length;
+    const judgeTotalsCount = judgeTotals.filter((t) => contestIds.includes(t.contest_id)).length;
+
+    return {
+      eventId,
+      contestCount: contestIds.length,
+      participantCount,
+      judgeTotalsCount,
+    };
+  }, [effectiveTabulationEventId, contests, participants, judgeTotals]);
+
+  const awardsForTabulationEvent = useMemo(() => {
+    const eventId = effectiveTabulationEventId;
+    if (eventId === null) return awards;
+    return awards.filter((a) => a.event_id === eventId);
+  }, [awards, effectiveTabulationEventId]);
+
+  // derive judges/tabulators using the add‑user-specific event filter, falling back to the global active event
+  const judgesForUserEvent = useMemo(
+    () => {
+      // when filter is null, show judges from all events
+      if (userTabEventFilterId === null) return judges;
+      return judges.filter((judge) => judge.event_id === userTabEventFilterId);
+    },
+    [judges, userTabEventFilterId],
+  );
+
+  const tabulatorsForUserEvent = useMemo(
+    () => {
+      if (userTabEventFilterId === null) return tabulators;
+      return tabulators.filter((tabulator) => tabulator.event_id === userTabEventFilterId);
+    },
+    [tabulators, userTabEventFilterId],
+  );
 
   const judgesForActiveEvent = useMemo(
-    () =>
-      activeEventId === null
+    () => {
+      const effectiveEventId = participantsTabEventFilterId ?? activeEventId;
+      return effectiveEventId === null
         ? judges
-        : judges.filter((judge) => judge.event_id === activeEventId),
-    [judges, activeEventId],
+        : judges.filter((judge) => judge.event_id === effectiveEventId);
+    },
+    [judges, activeEventId, participantsTabEventFilterId],
   );
+
+
 
   const tabulatorsForActiveEvent = useMemo(
     () =>
@@ -2672,6 +2953,44 @@ export default function AdminDashboard() {
         : awards.filter((award) => award.event_id === activeEventId),
     [awards, activeEventId],
   );
+
+  const filteredAdmins = useMemo(() => {
+    const q = adminSearch.trim().toLowerCase();
+    if (!q) return admins;
+    return admins.filter((a) => a.username.toLowerCase().includes(q));
+  }, [admins, adminSearch]);
+
+  const filteredJudges = useMemo(() => {
+    const q = judgeSearch.trim().toLowerCase();
+    if (!q) return judgesForUserEvent;
+    return judgesForUserEvent.filter(
+      (j) => j.full_name.toLowerCase().includes(q) || j.username.toLowerCase().includes(q),
+    );
+  }, [judgesForUserEvent, judgeSearch]);
+
+  const filteredTabulators = useMemo(() => {
+    const q = tabulatorSearch.trim().toLowerCase();
+    if (!q) return tabulatorsForUserEvent;
+    return tabulatorsForUserEvent.filter(
+      (t) => t.full_name.toLowerCase().includes(q) || t.username.toLowerCase().includes(q),
+    );
+  }, [tabulatorsForUserEvent, tabulatorSearch]);
+
+  const filteredParticipants = useMemo(() => {
+    const q = participantSearch.trim().toLowerCase();
+    if (!q) return participantsForActiveEvent;
+    return participantsForActiveEvent.filter(
+      (p) => p.full_name.toLowerCase().includes(q) || p.contestant_number.toLowerCase().includes(q),
+    );
+  }, [participantsForActiveEvent, participantSearch]);
+
+  const filteredAwards = useMemo(() => {
+    const q = awardSearch.trim().toLowerCase();
+    if (!q) return awardsForActiveEvent;
+    return awardsForActiveEvent.filter(
+      (a) => a.name.toLowerCase().includes(q) || (a.description ?? "").toLowerCase().includes(q),
+    );
+  }, [awardsForActiveEvent, awardSearch]);
 
   useEffect(() => {
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -2722,7 +3041,9 @@ export default function AdminDashboard() {
     const contestFilterId =
       tabulationContestFilterId === "all" ? null : tabulationContestFilterId;
     const eventFilterId =
-      tabulationEventFilterId === "all" ? null : tabulationEventFilterId;
+      tabulationEventFilterId === "all"
+        ? (activeEventId === null ? null : activeEventId)
+        : tabulationEventFilterId;
 
     const contestIds = new Set(
       contests
@@ -2927,7 +3248,7 @@ export default function AdminDashboard() {
 
     const result: AwardWinnerRow[] = [];
 
-    const activeAwards = awardsForActiveEvent.filter(
+    const activeAwards = awardsForTabulationEvent.filter(
       (award) => award.is_active,
     );
 
@@ -3313,8 +3634,8 @@ export default function AdminDashboard() {
     setContestError(null);
     setContestSuccess(null);
 
-    if (activeEventId === null) {
-      setContestError("Set an active event first in the Event tab.");
+    if (selectedEventIdForContest === null) {
+      setContestError("Please select an event.");
       return;
     }
 
@@ -3326,7 +3647,7 @@ export default function AdminDashboard() {
     const normalizedName = contestName.trim().toLowerCase();
 
     const hasDuplicateName = contests.some((contest) => {
-      if (contest.event_id !== activeEventId) {
+      if (contest.event_id !== selectedEventIdForContest) {
         return false;
       }
       if (editingContestId !== null && contest.id === editingContestId) {
@@ -3337,7 +3658,7 @@ export default function AdminDashboard() {
 
     if (hasDuplicateName) {
       setContestError(
-        "A contest with this name already exists for the active event.",
+        "A contest with this name already exists for the selected event.",
       );
       return;
     }
@@ -3374,12 +3695,12 @@ export default function AdminDashboard() {
       });
 
     const syncDivisionsForEvent = async () => {
-      if (activeEventId === null) {
+      if (selectedEventIdForContest === null) {
         return;
       }
 
       const existingForEvent = categories.filter(
-        (category) => category.event_id === activeEventId,
+        (category) => category.event_id === selectedEventIdForContest,
       );
 
       const existingNamesLower = existingForEvent.map((division) =>
@@ -3405,7 +3726,7 @@ export default function AdminDashboard() {
           .from("division")
           .insert(
             namesToInsert.map((name) => ({
-              event_id: activeEventId,
+              event_id: selectedEventIdForContest,
               name,
             })),
           )
@@ -3453,7 +3774,7 @@ export default function AdminDashboard() {
       const { data, error } = await supabase
         .from("contest")
         .insert({
-          event_id: activeEventId,
+          event_id: selectedEventIdForContest,
           name: contestName.trim(),
           scoring_type: contestScoringType,
         })
@@ -3466,7 +3787,7 @@ export default function AdminDashboard() {
           error.message.includes("contest_name_event_unique")
         ) {
           setContestError(
-            "A contest with this name already exists for the active event.",
+            "A contest with this name already exists for the selected event.",
           );
         } else {
           setContestError(error.message || "Unable to create contest.");
@@ -4138,6 +4459,9 @@ export default function AdminDashboard() {
     setAwardIsActive(true);
     setAwardError(null);
     setAwardSuccess(null);
+    setSelectedEventIdForAward(
+      (eventTabEventFilterId ?? activeEventId) || (events.length > 0 ? events[0].id : null),
+    );
     setIsAwardModalOpen(true);
   };
 
@@ -4153,15 +4477,17 @@ export default function AdminDashboard() {
     setAwardIsActive(award.is_active);
     setAwardError(null);
     setAwardSuccess(null);
+    setSelectedEventIdForAward(award.event_id ?? (eventTabEventFilterId ?? activeEventId));
     setIsAwardModalOpen(true);
   };
 
   const handleSaveAward = async () => {
     setAwardError(null);
     setAwardSuccess(null);
+    const effectiveEventId = selectedEventIdForAward ?? activeEventId;
 
-    if (activeEventId === null) {
-      setAwardError("Set an active event first in the Event tab.");
+    if (effectiveEventId === null) {
+      setAwardError("Set an active event first in the Event tab or select an event.");
       return;
     }
 
@@ -4187,16 +4513,36 @@ export default function AdminDashboard() {
 
     const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
-    const payload = {
-      event_id: activeEventId,
+    // build insert/update payload carefully so it cannot violate the check constraint
+    const payload: any = {
+      event_id: effectiveEventId,
       contest_id: awardContestId,
       name: awardName.trim(),
       description: awardDescription.trim() || null,
       award_type: awardType,
-      criteria_ids: awardType === "criteria" ? awardCriteriaIds : null,
-      criteria_id: awardType === "criteria" && awardCriteriaIds.length > 0 ? awardCriteriaIds[0] : null,
       is_active: awardIsActive,
     };
+
+    if (awardType === "criteria") {
+      // criteria awards must have at least one criteria id (validated above)
+      payload.criteria_ids = awardCriteriaIds;
+      payload.criteria_id =
+        awardCriteriaIds.length > 0 ? awardCriteriaIds[0] : null;
+    } else {
+      // special awards should not send any criteria reference fields
+      payload.criteria_ids = null;
+      payload.criteria_id = null;
+    }
+
+    // sanity check before sending; should never fail if logic above is correct
+    if (
+      (payload.award_type === "criteria" && payload.criteria_id == null) ||
+      (payload.award_type === "special" && payload.criteria_id != null)
+    ) {
+      setAwardError("Internal error: award data is inconsistent.");
+      setIsSavingAward(false);
+      return;
+    }
 
     if (editingAwardId === null) {
       const { data, error } = await supabase
@@ -4408,8 +4754,8 @@ export default function AdminDashboard() {
     setCategoryError(null);
     setCategorySuccess(null);
 
-    if (activeEventId === null) {
-      setCategoryError("Set an active event first in the Event tab.");
+    if (selectedEventIdForTeam === null) {
+      setCategoryError("Please select an event.");
       return;
     }
 
@@ -4434,7 +4780,7 @@ export default function AdminDashboard() {
       const { data, error } = await supabase
         .from("team")
         .insert({
-          event_id: activeEventId,
+          event_id: selectedEventIdForTeam,
           name: categoryName.trim(),
         })
         .select("id, event_id, name, created_at")
@@ -4527,8 +4873,10 @@ export default function AdminDashboard() {
     setParticipantError(null);
     setParticipantSuccess(null);
 
-    if (activeEventId === null) {
-      setParticipantError("Set an active event first in the Event tab.");
+    const effectiveEventId = selectedEventIdForParticipant ?? activeEventId;
+
+    if (effectiveEventId === null) {
+      setParticipantError("Set an active event first in the Event tab or select an event.");
       return;
     }
 
@@ -4716,8 +5064,8 @@ export default function AdminDashboard() {
     setTabulatorError(null);
     setTabulatorSuccess(null);
 
-    if (activeEventId === null) {
-      setTabulatorError("Set an active event first in the Event tab.");
+    if (selectedEventIdForTabulator === null) {
+      setTabulatorError("Please select an event.");
       return;
     }
 
@@ -4749,7 +5097,7 @@ export default function AdminDashboard() {
       const response = await supabase
         .from("user_tabulator")
         .insert({
-          event_id: activeEventId,
+          event_id: selectedEventIdForTabulator,
           full_name: tabulatorFullName.trim(),
           username: tabulatorUsername.trim(),
           password_hash: tabulatorPassword,
@@ -4859,8 +5207,8 @@ export default function AdminDashboard() {
     setJudgeError(null);
     setJudgeSuccess(null);
 
-    if (activeEventId === null) {
-      setJudgeError("Set an active event first in the Event tab.");
+    if (selectedEventIdForJudge === null) {
+      setJudgeError("Please select an event.");
       return;
     }
 
@@ -4892,7 +5240,7 @@ export default function AdminDashboard() {
       const response = await supabase
         .from("user_judge")
         .insert({
-          event_id: activeEventId,
+          event_id: selectedEventIdForJudge,
           full_name: judgeFullName.trim(),
           username: judgeUsername.trim(),
           password_hash: judgePassword,
@@ -5301,7 +5649,7 @@ export default function AdminDashboard() {
                   <div className="flex items-center gap-1.5">
                     <span className="text-[10px] text-slate-500">Event</span>
                     <select
-                      className="rounded-full border border-[#D0D7E2] bg-white px-3 py-1.5 text-[11px] outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                      className="rounded-full border border-[#D0D7E2] bg-white px-3 py-1.5 text-[11px] outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26] max-w-[320px]"
                       value={
                         tabulationEventFilterId === "all"
                           ? "all"
@@ -5316,7 +5664,7 @@ export default function AdminDashboard() {
                       }}
                     >
                       <option value="all">All events</option>
-                      {events
+                      {(events.filter(e => e.is_active).length > 0 ? events.filter(e => e.is_active) : events)
                         .slice()
                         .sort((a, b) => a.name.localeCompare(b.name))
                         .map((event) => (
@@ -5442,8 +5790,16 @@ export default function AdminDashboard() {
                             className="px-3 py-2 text-slate-400"
                             colSpan={4 + judges.length} // Approx
                           >
-                            Once judges submit totals for contests, scores and
-                            rankings will appear here.
+                            {debugTabulationInfo.judgeTotalsCount === 0 ? (
+                              <>
+                                No tabulation data yet for the selected event.
+                                <div className="mt-1 text-[10px] text-slate-400">
+                                  Contests: {debugTabulationInfo.contestCount} • Participants: {debugTabulationInfo.participantCount} • Judge totals: {debugTabulationInfo.judgeTotalsCount}
+                                </div>
+                              </>
+                            ) : (
+                              "Once judges submit totals for contests, scores and rankings will appear here."
+                            )}
                           </td>
                         </tr>
                       ) : (
@@ -5535,11 +5891,15 @@ export default function AdminDashboard() {
                       }}
                     >
                       <option value="">Select award</option>
-                      {awardsResults.map((award) => (
-                        <option key={award.awardId} value={award.awardId}>
-                          {award.awardName}
-                        </option>
-                      ))}
+                      {awardsForTabulationEvent
+                        .filter((a) => a.is_active)
+                        .slice()
+                        .sort((a, b) => a.name.localeCompare(b.name))
+                        .map((award) => (
+                          <option key={award.id} value={award.id}>
+                            {award.name}
+                          </option>
+                        ))}
                     </select>
                   </div>
                 </div>
@@ -5818,7 +6178,7 @@ export default function AdminDashboard() {
                   </thead>
                   <tbody>
                     {selectedTabulationAwardResult.allParticipants.map((participant) => (
-                      <tr key={participant.contestantNumber} className="border-t border-[#E2E8F0] hover:bg-[#F8FAFC]">
+                      <tr key={participant.participantId} className="border-t border-[#E2E8F0] hover:bg-[#F8FAFC]">
                         <td className="px-4 py-3">
                             <div className="font-semibold text-slate-800">{participant.participantName}</div>
                             <div className="text-xs text-slate-500">#{participant.contestantNumber} • {participant.teamName ?? "No Team"}</div>
@@ -6062,7 +6422,7 @@ export default function AdminDashboard() {
                         <input
                           value={eventSearch}
                           onChange={(e) => setEventSearch(e.target.value)}
-                          className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-1.5 text-[10px] outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                          className="w-full max-w-[420px] rounded-xl border border-[#D0D7E2] bg-white px-3 py-1.5 text-[10px] outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
                           placeholder="Search by name or code"
                         />
                       </div>
@@ -6176,18 +6536,38 @@ export default function AdminDashboard() {
                                         event.is_active ||
                                         isSettingActiveEventId === event.id
                                       }
-                                      className={`rounded-full border border-[#1F4D3A26] px-2 py-0.5 text-[#1F4D3A] hover:bg-[#E3F2EA] ${
+                                      className={`rounded-full border px-2 py-0.5 ${
                                         event.is_active ||
                                         isSettingActiveEventId === event.id
-                                          ? "cursor-not-allowed opacity-70"
-                                          : ""
+                                          ? "cursor-not-allowed border-slate-300 bg-slate-100 text-slate-400 opacity-70"
+                                          : "border-[#1F4D3A26] text-[#1F4D3A] hover:bg-[#E3F2EA]"
                                       }`}
                                     >
                                       {event.is_active
-                                        ? "Active"
+                                        ? "Activated"
                                         : isSettingActiveEventId === event.id
-                                        ? "Setting..."
-                                        : "Set as active"}
+                                        ? "Activating..."
+                                        : "Activate"}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleDeactivateEvent(event.id)}
+                                      disabled={
+                                        !event.is_active ||
+                                        isDeactivatingEventId === event.id
+                                      }
+                                      className={`rounded-full border px-2 py-0.5 ${
+                                        !event.is_active ||
+                                        isDeactivatingEventId === event.id
+                                          ? "cursor-not-allowed border-slate-300 bg-slate-100 text-slate-400 opacity-70"
+                                          : "border-[#FCA5A5] text-red-500 hover:bg-[#FEF2F2]"
+                                      }`}
+                                    >
+                                      {!event.is_active
+                                        ? "Deactivated"
+                                        : isDeactivatingEventId === event.id
+                                        ? "Deactivating..."
+                                        : "Deactivate"}
                                     </button>
                                     <button
                                       type="button"
@@ -6224,17 +6604,33 @@ export default function AdminDashboard() {
 
               {eventTab === "addContest" && (
                 <div className="space-y-4">
-                  <div className="flex items-center justify-between">
-                    <div className="text-[11px] font-medium text-slate-600">
-                      Contests
+                  <div className="flex items-center gap-3">
+                    <div className="flex-1">
+                      <div className="mb-2 text-[11px] font-medium text-slate-600">
+                        Select Event
+                      </div>
+                        <select
+                        value={eventTabEventFilterId ?? ""}
+                        onChange={(e) => setEventTabEventFilterId(e.target.value ? Number(e.target.value) : null)}
+                        className="w-full max-w-[420px] rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                      >
+                        <option value="">-- Choose an event --</option>
+                        {events.map((event) => (
+                          <option key={event.id} value={event.id}>
+                            {event.name} ({event.year})
+                          </option>
+                        ))}
+                      </select>
                     </div>
-                    <button
-                      type="button"
-                      onClick={openCreateContestModal}
-                      className="inline-flex items-center rounded-full bg-[#1F4D3A] px-3 py-1.5 text-[11px] font-medium text-white shadow-sm transition hover:bg-[#163528]"
-                    >
-                      Add contest
-                    </button>
+                    <div className="w-auto">
+                      <button
+                        type="button"
+                        onClick={openCreateContestModal}
+                        className="inline-flex items-center rounded-full bg-[#1F4D3A] px-3 py-1.5 text-[11px] font-medium text-white shadow-sm transition hover:bg-[#163528]"
+                      >
+                        Add contest
+                      </button>
+                    </div>
                   </div>
 
                   <div className="rounded-2xl border border-[#1F4D3A1F] bg-white p-4">
@@ -6243,10 +6639,10 @@ export default function AdminDashboard() {
                         Contest list
                       </div>
                       <span className="text-[10px] text-slate-400">
-                        {contestsForActiveEvent.length === 0
+                        {contestsForEventTab.length === 0
                           ? "No contests yet"
-                          : `${contestsForActiveEvent.length} contest${
-                              contestsForActiveEvent.length > 1 ? "s" : ""
+                          : `${contestsForEventTab.length} contest${
+                              contestsForEventTab.length > 1 ? "s" : ""
                             }`}
                       </span>
                     </div>
@@ -6271,7 +6667,7 @@ export default function AdminDashboard() {
                           </tr>
                         </thead>
                         <tbody>
-                          {contestsForActiveEvent.length === 0 ? (
+                          {contestsForEventTab.length === 0 ? (
                             <tr className="border-b border-[#F1F5F9]">
                               <td
                                 className="px-3 py-2 text-slate-400"
@@ -6282,7 +6678,7 @@ export default function AdminDashboard() {
                               </td>
                             </tr>
                           ) : (
-                            contestsForActiveEvent.map((contest) => (
+                            contestsForEventTab.map((contest) => (
                               <tr
                                 key={contest.id}
                                 className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC]"
@@ -6299,22 +6695,28 @@ export default function AdminDashboard() {
                                   )?.name ?? "Unknown event"}
                                 </td>
                                 <td className="px-3 py-2">
-                                  {categoriesForActiveEvent.length === 0 ? (
+                                  {categories
+                                    .filter(
+                                      (category) => category.event_id === contest.event_id,
+                                    )
+                                    .length === 0 ? (
                                     <span className="text-[10px] text-slate-400">
                                       No divisions yet
                                     </span>
                                   ) : (
                                     <div className="flex flex-wrap gap-1.5">
-                                      {categoriesForActiveEvent.map(
-                                        (division) => (
+                                      {categories
+                                        .filter(
+                                          (category) => category.event_id === contest.event_id,
+                                        )
+                                        .map((division) => (
                                           <span
                                             key={division.id}
                                             className="inline-flex items-center rounded-full bg-[#E3F2EA] px-2 py-0.5 text-[10px] text-[#1F4D3A]"
                                           >
                                             {division.name}
                                           </span>
-                                        ),
-                                      )}
+                                        ))}
                                     </div>
                                   )}
                                 </td>
@@ -6357,17 +6759,33 @@ export default function AdminDashboard() {
 
               {eventTab === "addCriteria" && (
                 <div className="space-y-4">
-                    <div className="flex items-center justify-between">
-                      <div className="text-[11px] font-medium text-slate-600">
-                        Criteria
+                    <div className="flex items-center gap-3">
+                      <div className="flex-1">
+                        <div className="mb-2 text-[11px] font-medium text-slate-600">
+                          Select Event
+                        </div>
+                        <select
+                          value={eventTabEventFilterId ?? ""}
+                          onChange={(e) => setEventTabEventFilterId(e.target.value ? Number(e.target.value) : null)}
+                          className="w-full max-w-[420px] rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                        >
+                          <option value="">-- Choose an event --</option>
+                          {events.map((event) => (
+                            <option key={event.id} value={event.id}>
+                              {event.name} ({event.year})
+                            </option>
+                          ))}
+                        </select>
                       </div>
-                      <button
-                        type="button"
-                        onClick={openCreateCriteriaModal}
-                        className="inline-flex items-center rounded-full bg-[#1F4D3A] px-3 py-1.5 text-[11px] font-medium text-white shadow-sm transition hover:bg-[#163528]"
-                      >
-                        Add criteria
-                      </button>
+                      <div className="w-auto">
+                        <button
+                          type="button"
+                          onClick={openCreateCriteriaModal}
+                          className="inline-flex items-center rounded-full bg-[#1F4D3A] px-3 py-1.5 text-[11px] font-medium text-white shadow-sm transition hover:bg-[#163528]"
+                        >
+                          Add criteria
+                        </button>
+                      </div>
                     </div>
 
                   <div className="rounded-2xl border border-[#1F4D3A1F] bg-white p-4">
@@ -6376,9 +6794,9 @@ export default function AdminDashboard() {
                         Criteria list
                       </div>
                       <span className="text-[10px] text-slate-400">
-                        {criteriaForActiveEvent.length === 0
+                        {criteriaForEventTab.length === 0
                           ? "No criteria yet"
-                          : `${criteriaForActiveEvent.length} criteria`}
+                          : `${criteriaForEventTab.length} criteria`}
                       </span>
                     </div>
                     {(criteriaError || criteriaSuccess) && (
@@ -6405,7 +6823,7 @@ export default function AdminDashboard() {
                           </tr>
                         </thead>
                         <tbody>
-                          {criteriaForActiveEvent.length === 0 ? (
+                          {criteriaForEventTab.length === 0 ? (
                             <tr className="border-b border-[#F1F5F9]">
                               <td
                                 className="px-3 py-2 text-slate-400"
@@ -6416,7 +6834,7 @@ export default function AdminDashboard() {
                               </td>
                             </tr>
                           ) : (
-                            criteriaForActiveEvent.map((criteria) => (
+                            criteriaForEventTab.map((criteria) => (
                               <tr
                                 key={criteria.id}
                                 className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC]"
@@ -6475,17 +6893,33 @@ export default function AdminDashboard() {
 
               {eventTab === "awards" && (
                 <div className="space-y-4">
-                  <div className="flex items-center justify-between">
-                    <div className="text-[11px] font-medium text-slate-600">
-                      Awards
+                  <div className="flex items-center gap-3">
+                    <div className="flex-1">
+                      <div className="mb-2 text-[11px] font-medium text-slate-600">
+                        Select Event
+                      </div>
+                      <select
+                        value={eventTabEventFilterId ?? ""}
+                        onChange={(e) => setEventTabEventFilterId(e.target.value ? Number(e.target.value) : null)}
+                        className="w-full max-w-[420px] rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                      >
+                        <option value="">-- Choose an event --</option>
+                        {events.map((event) => (
+                          <option key={event.id} value={event.id}>
+                            {event.name} ({event.year})
+                          </option>
+                        ))}
+                      </select>
                     </div>
-                    <button
-                      type="button"
-                      onClick={openCreateAwardModal}
-                      className="inline-flex items-center rounded-full bg-[#1F4D3A] px-3 py-1.5 text-[11px] font-medium text-white shadow-sm transition hover:bg-[#163528]"
-                    >
-                      Add award
-                    </button>
+                    <div className="w-auto">
+                      <button
+                        type="button"
+                        onClick={openCreateAwardModal}
+                        className="inline-flex items-center rounded-full bg-[#1F4D3A] px-3 py-1.5 text-[11px] font-medium text-white shadow-sm transition hover:bg-[#163528]"
+                      >
+                        Add award
+                      </button>
+                    </div>
                   </div>
 
                   <div className="rounded-2xl border border-[#1F4D3A1F] bg-white p-4">
@@ -6493,13 +6927,19 @@ export default function AdminDashboard() {
                       <div className="text-[11px] font-medium text-slate-600">
                         Awards list
                       </div>
-                      <span className="text-[10px] text-slate-400">
-                        {awardsForActiveEvent.length === 0
-                          ? "No awards yet"
-                          : `${awardsForActiveEvent.length} award${
-                              awardsForActiveEvent.length > 1 ? "s" : ""
-                            }`}
-                      </span>
+                      <div className="flex items-center gap-3">
+                        <input
+                          placeholder="Search awards"
+                          value={awardSearch}
+                          onChange={(e) => setAwardSearch(e.target.value)}
+                          className="rounded-xl border border-[#D0D7E2] bg-white px-3 py-1 text-xs outline-none"
+                        />
+                        <span className="text-[10px] text-slate-400">
+                          {awardsForEventTab.length === 0
+                            ? "No awards"
+                            : `${awardsForEventTab.length} award${awardsForEventTab.length > 1 ? "s" : ""}`}
+                        </span>
+                      </div>
                     </div>
                     {(awardError || awardSuccess) && (
                       <div
@@ -6523,7 +6963,7 @@ export default function AdminDashboard() {
                           </tr>
                         </thead>
                         <tbody>
-                          {awardsForActiveEvent.length === 0 ? (
+                          {awardsForEventTab.length === 0 ? (
                             <tr className="border-b border-[#F1F5F9]">
                               <td
                                 className="px-3 py-2 text-slate-400"
@@ -6534,7 +6974,7 @@ export default function AdminDashboard() {
                               </td>
                             </tr>
                           ) : (
-                            awardsForActiveEvent.map((award) => (
+                            awardsForEventTab.map((award) => (
                               <tr
                                 key={award.id}
                                 className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC]"
@@ -8963,7 +9403,7 @@ export default function AdminDashboard() {
                       <div className="w-1/2 space-y-1">
                         <div className="text-[10px] text-slate-500">Code</div>
                         <input
-                          className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                          className="w-full max-w-[420px] rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
                         placeholder="Code"
                         value={eventCode}
                         onChange={(event) => setEventCode(event.target.value)}
@@ -9040,11 +9480,24 @@ export default function AdminDashboard() {
                   <div className="space-y-3 px-5 py-4 text-[11px]">
                     <div className="space-y-1">
                       <div className="text-[10px] text-slate-500">
-                        Current active event
+                        Select Event *
                       </div>
-                      <div className="w-full rounded-xl border border-[#D0D7E2] bg-slate-50 px-3 py-2 text-xs text-slate-600">
-                        {activeEvent ? activeEvent.name : "No active event selected"}
-                      </div>
+                      <select
+                        value={selectedEventIdForContest ?? ""}
+                        onChange={(e) =>
+                          setSelectedEventIdForContest(
+                            e.target.value ? Number(e.target.value) : null,
+                          )
+                        }
+                        className="w-full max-w-[420px] rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                      >
+                        <option value="">-- Choose an event --</option>
+                        {events.filter((event) => event.is_active).map((event) => (
+                          <option key={event.id} value={event.id}>
+                            {event.name} ({event.year})
+                          </option>
+                        ))}
+                      </select>
                     </div>
                     <div className="space-y-1">
                       <div className="text-[10px] text-slate-500">
@@ -9053,7 +9506,7 @@ export default function AdminDashboard() {
                       <input
                         value={contestName}
                         onChange={(event) => setContestName(event.target.value)}
-                        className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                        className="w-full max-w-[420px] rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
                         placeholder="Enter contest name"
                       />
                     </div>
@@ -9482,10 +9935,25 @@ export default function AdminDashboard() {
                       <input
                         value={awardName}
                         onChange={(event) => setAwardName(event.target.value)}
-                        className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                        className="w-full max-w-[420px] rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
                         placeholder="e.g., Best in Talent"
                       />
                     </div>
+                      <div className="space-y-1">
+                        <div className="text-[10px] text-slate-500">Select Event *</div>
+                        <select
+                          value={selectedEventIdForAward ?? ""}
+                          onChange={(e) => setSelectedEventIdForAward(e.target.value ? Number(e.target.value) : null)}
+                          className="w-full max-w-[420px] rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                        >
+                          <option value="">-- Choose an event --</option>
+                          {events.map((event) => (
+                            <option key={event.id} value={event.id}>
+                              {event.name} ({event.year})
+                            </option>
+                          ))}
+                        </select>
+                      </div>
                     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                       <div className="space-y-1">
                         <div className="text-[10px] text-slate-500">
@@ -9506,23 +9974,23 @@ export default function AdminDashboard() {
                         <div className="text-[10px] text-slate-500">
                           Limit to contest
                         </div>
-                        <select
-                          value={awardContestId ?? ""}
-                          onChange={(event) => {
-                            const value = event.target.value;
-                            setAwardContestId(
-                              value ? Number.parseInt(value, 10) : null,
-                            );
-                          }}
-                          className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
-                        >
-                          <option value="">All contests</option>
-                          {contestsForActiveEvent.map((contest) => (
-                            <option key={contest.id} value={contest.id}>
-                              {contest.name}
-                            </option>
-                          ))}
-                        </select>
+                          <select
+                            value={awardContestId ?? ""}
+                            onChange={(event) => {
+                              const value = event.target.value;
+                              setAwardContestId(
+                                value ? Number.parseInt(value, 10) : null,
+                              );
+                            }}
+                            className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                          >
+                            <option value="">All contests</option>
+                            {(contests.filter((c) => (selectedEventIdForAward ?? activeEventId) === null ? true : c.event_id === (selectedEventIdForAward ?? activeEventId))).map((contest) => (
+                              <option key={contest.id} value={contest.id}>
+                                {contest.name}
+                              </option>
+                            ))}
+                          </select>
                       </div>
                     </div>
                     {awardType === "criteria" && (
@@ -9779,17 +10247,33 @@ export default function AdminDashboard() {
             <div>
               {participantTab === "category" && (
                 <div className="space-y-4">
-                  <div className="flex items-center justify-between">
-                    <div className="text-[11px] font-medium text-slate-600">
-                      Teams
+                  <div className="flex items-center gap-3">
+                    <div className="flex-1">
+                      <div className="mb-2 text-[11px] font-medium text-slate-600">
+                        Select Event
+                      </div>
+                      <select
+                        value={participantsTabEventFilterId ?? ""}
+                        onChange={(e) => setParticipantsTabEventFilterId(e.target.value ? Number(e.target.value) : null)}
+                        className="w-full max-w-[420px] rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                      >
+                        <option value="">-- Choose an event --</option>
+                        {events.map((event) => (
+                          <option key={event.id} value={event.id}>
+                            {event.name} ({event.year})
+                          </option>
+                        ))}
+                      </select>
                     </div>
-                    <button
-                      type="button"
-                      onClick={openCreateCategoryModal}
-                      className="inline-flex items-center rounded-full bg-[#1F4D3A] px-3 py-1.5 text-[11px] font-medium text-white shadow-sm transition hover:bg-[#163528]"
-                    >
-                      Add team
-                    </button>
+                    <div className="w-auto">
+                      <button
+                        type="button"
+                        onClick={openCreateCategoryModal}
+                        className="inline-flex items-center rounded-full bg-[#1F4D3A] px-3 py-1.5 text-[11px] font-medium text-white shadow-sm transition hover:bg-[#163528]"
+                      >
+                        Add team
+                      </button>
+                    </div>
                   </div>
 
                   <div className="rounded-2xl border border-[#1F4D3A1F] bg-white p-4">
@@ -9799,10 +10283,10 @@ export default function AdminDashboard() {
                           Team list
                         </div>
                         <div className="text-[10px] text-slate-400">
-                          {teamsForActiveEvent.length === 0
+                          {teamsForParticipantsTab.length === 0
                             ? "No teams yet"
-                            : `${teamsForActiveEvent.length} team${
-                                teamsForActiveEvent.length > 1 ? "s" : ""
+                            : `${teamsForParticipantsTab.length} team${
+                                teamsForParticipantsTab.length > 1 ? "s" : ""
                               }`}
                         </div>
                       </div>
@@ -9826,7 +10310,7 @@ export default function AdminDashboard() {
                           </tr>
                         </thead>
                         <tbody>
-                          {teamsForActiveEvent.length === 0 ? (
+                          {teamsForParticipantsTab.length === 0 ? (
                             <tr className="border-b border-[#F1F5F9]">
                               <td
                                 className="px-3 py-2 text-slate-400"
@@ -9837,7 +10321,7 @@ export default function AdminDashboard() {
                               </td>
                             </tr>
                           ) : (
-                            teamsForActiveEvent.map((team) => (
+                            teamsForParticipantsTab.map((team) => (
                               <tr
                                 key={team.id}
                                 className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC]"
@@ -9887,17 +10371,31 @@ export default function AdminDashboard() {
 
               {participantTab === "participant" && (
                 <div className="space-y-4">
-                  <div className="flex items-center justify-between">
-                    <div className="text-[11px] font-medium text-slate-600">
-                      Participants
+                  <div className="flex items-start gap-3">
+                    <div className="flex-1">
+                      <div className="mb-2 text-[11px] font-medium text-slate-600">Select Event</div>
+                      <select
+                        value={participantsTabEventFilterId ?? ""}
+                        onChange={(e) => setParticipantsTabEventFilterId(e.target.value ? Number(e.target.value) : null)}
+                        className="w-full max-w-[420px] rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                      >
+                        <option value="">-- Choose an event --</option>
+                        {events.map((event) => (
+                          <option key={event.id} value={event.id}>
+                            {event.name} ({event.year})
+                          </option>
+                        ))}
+                      </select>
                     </div>
-                    <button
-                      type="button"
-                      onClick={openCreateParticipantModal}
-                      className="inline-flex items-center rounded-full bg-[#1F4D3A] px-3 py-1.5 text-[11px] font-medium text-white shadow-sm transition hover:bg-[#163528]"
-                    >
-                      Add participant
-                    </button>
+                    <div className="w-auto">
+                      <button
+                        type="button"
+                        onClick={openCreateParticipantModal}
+                        className="inline-flex items-center rounded-full bg-[#1F4D3A] px-3 py-1.5 text-[11px] font-medium text-white shadow-sm transition hover:bg-[#163528]"
+                      >
+                        Add participant
+                      </button>
+                    </div>
                   </div>
 
                   <div className="rounded-2xl border border-[#1F4D3A1F] bg-white p-4">
@@ -9905,13 +10403,19 @@ export default function AdminDashboard() {
                       <div className="text-[11px] font-medium text-slate-600">
                         Participant list
                       </div>
-                      <span className="text-[10px] text-slate-400">
-                        {participantsForActiveEvent.length === 0
-                          ? "No participants yet"
-                          : `${participantsForActiveEvent.length} participant${
-                              participantsForActiveEvent.length > 1 ? "s" : ""
-                            }`}
-                      </span>
+                      <div className="flex items-center gap-3">
+                        <input
+                          placeholder="Search participants"
+                          value={participantSearch}
+                          onChange={(e) => setParticipantSearch(e.target.value)}
+                          className="rounded-xl border border-[#D0D7E2] bg-white px-3 py-1 text-xs outline-none"
+                        />
+                        <span className="text-[10px] text-slate-400">
+                          {filteredParticipants.length === 0
+                            ? "No participants"
+                            : `${filteredParticipants.length} participant${filteredParticipants.length > 1 ? "s" : ""}`}
+                        </span>
+                      </div>
                     </div>
                     {(participantError || participantSuccess) && (
                       <div
@@ -9936,7 +10440,7 @@ export default function AdminDashboard() {
                           </tr>
                         </thead>
                         <tbody>
-                          {participantsForActiveEvent.length === 0 ? (
+                          {filteredParticipants.length === 0 ? (
                             <tr className="border-b border-[#F1F5F9]">
                               <td
                                 className="px-3 py-2 text-slate-400"
@@ -9947,7 +10451,7 @@ export default function AdminDashboard() {
                               </td>
                             </tr>
                           ) : (
-                            participantsForActiveEvent.map((participant) => (
+                            filteredParticipants.map((participant) => (
                               <tr
                                 key={participant.id}
                                 className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC]"
@@ -10011,9 +10515,21 @@ export default function AdminDashboard() {
 
               {participantTab === "judge" && (
                 <div className="space-y-4">
-                  <div className="flex items-center justify-between">
-                    <div className="text-[11px] font-medium text-slate-600">
-                      Judge scoring access
+                  <div className="flex items-start gap-3">
+                    <div className="flex-1">
+                      <div className="mb-2 text-[11px] font-medium text-slate-600">Select Event</div>
+                      <select
+                        value={participantsTabEventFilterId ?? ""}
+                        onChange={(e) => setParticipantsTabEventFilterId(e.target.value ? Number(e.target.value) : null)}
+                        className="w-full max-w-[420px] rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                      >
+                        <option value="">-- Choose an event --</option>
+                        {events.map((event) => (
+                          <option key={event.id} value={event.id}>
+                            {event.name} ({event.year})
+                          </option>
+                        ))}
+                      </select>
                     </div>
                   </div>
 
@@ -10058,7 +10574,7 @@ export default function AdminDashboard() {
                           className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
                         >
                           <option value="">Select contest</option>
-                          {contestsForActiveEvent.map((contest) => (
+                          {contestsForParticipantsTab.map((contest) => (
                             <option key={contest.id} value={contest.id}>
                               {contest.name}
                             </option>
@@ -10280,14 +10796,29 @@ export default function AdminDashboard() {
                             return;
                           }
                           const supabase = createClient(supabaseUrl, supabaseAnonKey);
-                          const judgeIds =
+                          // gather judge IDs to modify; fall back to all judges for the event
+                          let judgeIds =
                             selectedJudgeIdsForPermissions.length === 0
                               ? judgesForActiveEvent.map((judge) => judge.id)
-                              : selectedJudgeIdsForPermissions;
+                              : [...selectedJudgeIdsForPermissions];
+
+                          // drop any ids that no longer exist in the fetched judge list
+                          const initialLength = judgeIds.length;
+                          judgeIds = judgeIds.filter((id) =>
+                            judgesForActiveEvent.some((j) => j.id === id),
+                          );
+
                           if (judgeIds.length === 0) {
-                            setJudgePermissionsError("There are no judges for this event.");
+                            setJudgePermissionsError(
+                              "There are no valid judges for this event.",
+                            );
                             setIsSavingJudgePermissions(false);
                             return;
+                          }
+                          if (judgeIds.length < initialLength) {
+                            setJudgePermissionsError(
+                              "Some selected judges are no longer valid and were ignored.",
+                            );
                           }
                           const { error: deleteScoringError } = await supabase
                             .from("judge_scoring_permission")
@@ -10346,10 +10877,9 @@ export default function AdminDashboard() {
                             });
                           }
                           if (scoringInserts.length > 0) {
-                            const { data, error } = await supabase
+                            const { error } = await supabase
                               .from("judge_scoring_permission")
-                              .insert(scoringInserts)
-                              .select("judge_id, contest_id, criteria_id, can_edit, created_at");
+                              .insert(scoringInserts);
                             if (error) {
                               setJudgePermissionsError(
                                 error.message || "Unable to update judge permissions.",
@@ -10357,28 +10887,6 @@ export default function AdminDashboard() {
                               setIsSavingJudgePermissions(false);
                               return;
                             }
-                            if (data && Array.isArray(data)) {
-                              setJudgeScoringPermissions((previous) => [
-                                ...previous.filter(
-                                  (permission) =>
-                                    !(
-                                      judgeIds.includes(permission.judge_id) &&
-                                      permission.contest_id === selectedContestIdForPermissions
-                                    ),
-                                ),
-                                ...(data as JudgeScoringPermissionRow[]),
-                              ]);
-                            }
-                          } else {
-                            setJudgeScoringPermissions((previous) =>
-                              previous.filter(
-                                (permission) =>
-                                  !(
-                                    judgeIds.includes(permission.judge_id) &&
-                                    permission.contest_id === selectedContestIdForPermissions
-                                  ),
-                              ),
-                            );
                           }
                           const { error: deleteDivisionError } = await supabase
                             .from("judge_division_permission")
@@ -10471,8 +10979,16 @@ export default function AdminDashboard() {
                               ),
                             );
                           }
+                          
+                          // clear earlier validation errors now that save succeeded
+                          setJudgePermissionsError(null);
                           setJudgePermissionsSuccess("Judge scoring access has been updated.");
                           setIsSavingJudgePermissions(false);
+                          
+                          // auto-clear success message after 3 seconds
+                          setTimeout(() => {
+                            setJudgePermissionsSuccess(null);
+                          }, 3000);
                         }}
                         disabled={isSavingJudgePermissions || selectedContestIdForPermissions === null}
                         className="mt-3 inline-flex items-center rounded-full bg-[#1F4D3A] px-4 py-1.5 text-[11px] font-medium text-white shadow-sm transition hover:bg-[#163528] disabled:cursor-not-allowed disabled:opacity-60"
@@ -10511,11 +11027,24 @@ export default function AdminDashboard() {
               <div className="space-y-3 px-5 py-4 text-[11px]">
                 <div className="space-y-1">
                   <div className="text-[10px] text-slate-500">
-                    Current active event
+                    Select Event *
                   </div>
-                  <div className="w-full rounded-xl border border-[#D0D7E2] bg-slate-50 px-3 py-2 text-xs text-slate-600">
-                    {activeEvent ? activeEvent.name : "No active event selected"}
-                  </div>
+                  <select
+                    value={selectedEventIdForTeam ?? ""}
+                    onChange={(e) =>
+                      setSelectedEventIdForTeam(
+                        e.target.value ? Number(e.target.value) : null,
+                      )
+                    }
+                    className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                  >
+                    <option value="">-- Choose an event --</option>
+                    {events.filter((event) => event.is_active).map((event) => (
+                      <option key={event.id} value={event.id}>
+                        {event.name} ({event.year})
+                      </option>
+                    ))}
+                  </select>
                 </div>
                   <div className="space-y-1">
                   <div className="text-[10px] text-slate-500">
@@ -10586,8 +11115,27 @@ export default function AdminDashboard() {
                   <div className="space-y-3">
                     <div className="space-y-1">
                       <div className="text-[10px] text-slate-500">
-                        Select contest
+                        Select Event
                       </div>
+                      <select
+                        value={selectedEventIdForParticipant ?? ""}
+                        onChange={(event) => {
+                          const value = event.target.value;
+                          setSelectedEventIdForParticipant(value ? Number(value) : null);
+                          setSelectedContestIdForParticipant(null);
+                        }}
+                        className="w-full max-w-[420px] rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                      >
+                        <option value="">-- Choose an event --</option>
+                        {events.filter((e) => e.is_active).map((event) => (
+                          <option key={event.id} value={event.id}>
+                            {event.name} ({event.year})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="space-y-1">
+                      <div className="text-[10px] text-slate-500">Select contest</div>
                       <select
                         value={selectedContestIdForParticipant ?? ""}
                         onChange={(event) => {
@@ -10596,14 +11144,14 @@ export default function AdminDashboard() {
                             value ? Number(value) : null,
                           );
                         }}
-                        className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                        className="w-full max-w-[420px] rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
                       >
                         <option value="">Select contest</option>
                         {contests
-                          .filter(
-                            (contest) =>
-                              activeEventId === null ||
-                              contest.event_id === activeEventId,
+                          .filter((contest) =>
+                            (selectedEventIdForParticipant ?? activeEventId) === null
+                              ? true
+                              : contest.event_id === (selectedEventIdForParticipant ?? activeEventId),
                           )
                           .map((contest) => (
                             <option key={contest.id} value={contest.id}>
@@ -10686,7 +11234,7 @@ export default function AdminDashboard() {
                   <div className="space-y-2">
                     <div className="text-[10px] text-slate-500">Avatar</div>
                     <div className="flex flex-col items-center gap-3 rounded-2xl border border-[#E2E8F0] bg-[#F8FAFC] px-4 py-3">
-                      <div className="flex h-32 w-32 items-center justify-center overflow-hidden rounded-full bg-[#E3F2EA] text-[11px] font-semibold text-[#1F4D3A] shadow-sm">
+                      <div className="flex h-48 w-48 items-center justify-center overflow-hidden rounded-lg bg-[#E3F2EA] text-[11px] font-semibold text-[#1F4D3A] shadow-sm">
                         {participantAvatarUrl ? (
                           // eslint-disable-next-line @next/next/no-img-element
                           <img
@@ -10699,6 +11247,13 @@ export default function AdminDashboard() {
                             style={{
                               transform: `scale(${participantAvatarZoom})`,
                             }}
+                            onLoad={(e) => {
+                              const img = e.target as HTMLImageElement;
+                              setParticipantAvatarImageDims({
+                                w: img.naturalWidth,
+                                h: img.naturalHeight,
+                              });
+                            }}
                           />
                         ) : (
                           "Preview"
@@ -10706,57 +11261,114 @@ export default function AdminDashboard() {
                       </div>
                       <div className="flex w-full flex-col gap-1 text-left">
                         <div className="flex items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setParticipantAvatarZoom((previous) =>
-                                Math.max(
-                                  1,
-                                  Number((previous - 0.1).toFixed(2)),
-                                ),
-                              )
-                            }
-                            className="flex h-6 w-6 items-center justify-center rounded-full border border-[#CBD5E1] text-[11px] text-slate-600 hover:bg-white"
-                          >
-                            -
-                          </button>
-                          <input
-                            type="range"
-                            min={1}
-                            max={2.5}
-                            step={0.05}
-                            value={participantAvatarZoom}
-                            onChange={(event) =>
-                              setParticipantAvatarZoom(
-                                Number(event.target.value),
-                              )
-                            }
-                            className="flex-1"
-                          />
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setParticipantAvatarZoom((previous) =>
-                                Math.min(
-                                  2.5,
-                                  Number((previous + 0.1).toFixed(2)),
-                                ),
-                              )
-                            }
-                            className="flex h-6 w-6 items-center justify-center rounded-full border border-[#CBD5E1] text-[11px] text-slate-600 hover:bg-white"
-                          >
-                            +
-                          </button>
+                          {participantAvatarImageDims ? (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setParticipantAvatarZoom((previous) =>
+                                    Math.max(
+                                      1,
+                                      Number((previous - 0.1).toFixed(2)),
+                                    ),
+                                  )
+                                }
+                                className="flex h-6 w-6 items-center justify-center rounded-full border border-[#CBD5E1] text-[11px] text-slate-600 hover:bg-white"
+                              >
+                                −
+                              </button>
+                              <div className="text-left flex-1">
+                                <input
+                                  type="range"
+                                  min="1"
+                                  max="3"
+                                  step="0.05"
+                                  value={participantAvatarZoom}
+                                  onChange={(event) =>
+                                    setParticipantAvatarZoom(
+                                      Number(event.target.value),
+                                    )
+                                  }
+                                  className="w-full"
+                                />
+                                <div className="text-[9px] text-slate-400 mt-1">
+                                  {participantAvatarImageDims.w}×{participantAvatarImageDims.h}px
+                                </div>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setParticipantAvatarZoom((previous) =>
+                                    Math.min(
+                                      3,
+                                      Number((previous + 0.1).toFixed(2)),
+                                    ),
+                                  )
+                                }
+                                className="flex h-6 w-6 items-center justify-center rounded-full border border-[#CBD5E1] text-[11px] text-slate-600 hover:bg-white"
+                              >
+                                +
+                              </button>
+                            </>
+                          ) : (
+                            <div className="text-[10px] text-slate-500">
+                              Upload an image to enable zoom controls
+                            </div>
+                          )}
                         </div>
                         <input
                           type="file"
                           accept="image/*"
                           disabled={isUploadingParticipantAvatar}
                           onChange={async (event) => {
-                            const file = event.target.files?.[0];
+                            let file = event.target.files?.[0];
 
                             if (!file) {
                               return;
+                            }
+
+                            // resize/compress client-side before upload to keep payload small
+                            const processImage = (file: File): Promise<Blob> =>
+                              new Promise((resolve, reject) => {
+                                const img = new Image();
+                                img.onload = () => {
+                                  const MAX_DIM = 1024;
+                                  let w = img.width;
+                                  let h = img.height;
+                                  if (w > MAX_DIM || h > MAX_DIM) {
+                                    const ratio = Math.min(
+                                      MAX_DIM / w,
+                                      MAX_DIM / h,
+                                    );
+                                    w = w * ratio;
+                                    h = h * ratio;
+                                  }
+                                  const canvas = document.createElement("canvas");
+                                  canvas.width = w;
+                                  canvas.height = h;
+                                  const ctx = canvas.getContext("2d");
+                                  if (!ctx) {
+                                    reject(new Error("Cannot get canvas context"));
+                                    return;
+                                  }
+                                  ctx.drawImage(img, 0, 0, w, h);
+                                  canvas.toBlob(
+                                    (blob) => {
+                                      if (blob) resolve(blob);
+                                      else reject(new Error("Blob creation failed"));
+                                    },
+                                    "image/jpeg",
+                                    0.8,
+                                  );
+                                };
+                                img.onerror = reject;
+                                img.src = URL.createObjectURL(file);
+                              });
+
+                            try {
+                              file = (await processImage(file)) as File;
+                            } catch (err) {
+                              // fallback to original if processing fails
                             }
 
                             const cloudName =
@@ -10854,7 +11466,7 @@ export default function AdminDashboard() {
                 <button
                   type="button"
                   onClick={handleSaveParticipant}
-                  disabled={isSavingParticipant || activeEventId === null}
+                  disabled={isSavingParticipant || (selectedEventIdForParticipant ?? activeEventId) === null}
                   className={`rounded-full bg-[#1F4D3A] px-4 py-1.5 text-[11px] font-medium text-white shadow-sm hover:bg-[#163528] ${
                     isSavingParticipant ? "cursor-not-allowed opacity-70" : ""
                   }`}
@@ -11030,11 +11642,24 @@ export default function AdminDashboard() {
               <div className="space-y-3 px-5 py-4 text-[11px]">
                 <div className="space-y-1">
                   <div className="text-[10px] text-slate-500">
-                    Current active event
+                    Select Event *
                   </div>
-                  <div className="w-full rounded-xl border border-[#D0D7E2] bg-slate-50 px-3 py-2 text-xs text-slate-600">
-                    {activeEvent ? activeEvent.name : "No active event selected"}
-                  </div>
+                  <select
+                    value={selectedEventIdForJudge ?? ""}
+                    onChange={(e) =>
+                      setSelectedEventIdForJudge(
+                        e.target.value ? Number(e.target.value) : null,
+                      )
+                    }
+                    className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                  >
+                    <option value="">-- Choose an event --</option>
+                    {events.filter((event) => event.is_active).map((event) => (
+                      <option key={event.id} value={event.id}>
+                        {event.name} ({event.year})
+                      </option>
+                    ))}
+                  </select>
                 </div>
                 <div className="space-y-1">
                   <div className="text-[10px] text-slate-500">Full name</div>
@@ -11276,11 +11901,24 @@ export default function AdminDashboard() {
               <div className="space-y-3 px-5 py-4 text-[11px]">
                 <div className="space-y-1">
                   <div className="text-[10px] text-slate-500">
-                    Current active event
+                    Select Event *
                   </div>
-                  <div className="w-full rounded-xl border border-[#D0D7E2] bg-slate-50 px-3 py-2 text-xs text-slate-600">
-                    {activeEvent ? activeEvent.name : "No active event selected"}
-                  </div>
+                  <select
+                    value={selectedEventIdForTabulator ?? ""}
+                    onChange={(e) =>
+                      setSelectedEventIdForTabulator(
+                        e.target.value ? Number(e.target.value) : null,
+                      )
+                    }
+                    className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                  >
+                    <option value="">-- Choose an event --</option>
+                    {events.filter((event) => event.is_active).map((event) => (
+                      <option key={event.id} value={event.id}>
+                        {event.name} ({event.year})
+                      </option>
+                    ))}
+                  </select>
                 </div>
                 <div className="space-y-1">
                   <div className="text-[10px] text-slate-500">Full name</div>
@@ -11371,40 +12009,63 @@ export default function AdminDashboard() {
               </div>
             </div>
 
-            <div className="mb-4 flex gap-2 text-[11px]">
-              <button
-                type="button"
-                onClick={() => setUserTab("admin")}
-                className={`rounded-full border px-3 py-1.5 transition ${
-                  userTab === "admin"
-                    ? "border-[#1F4D3A] bg-[#1F4D3A] text-white shadow-sm"
-                    : "border-transparent bg-[#F5F7FF] text-[#1F4D3A] hover:bg-[#E3F2EA]"
-                }`}
-              >
-                Admin
-              </button>
-              <button
-                type="button"
-                onClick={() => setUserTab("judge")}
-                className={`rounded-full border px-3 py-1.5 transition ${
-                  userTab === "judge"
-                    ? "border-[#1F4D3A] bg-[#1F4D3A] text-white shadow-sm"
-                    : "border-transparent bg-[#F5F7FF] text-[#1F4D3A] hover:bg-[#E3F2EA]"
-                }`}
-              >
-                Judge
-              </button>
-              <button
-                type="button"
-                onClick={() => setUserTab("tabulator")}
-                className={`rounded-full border px-3 py-1.5 transition ${
-                  userTab === "tabulator"
-                    ? "border-[#1F4D3A] bg-[#1F4D3A] text-white shadow-sm"
-                    : "border-transparent bg-[#F5F7FF] text-[#1F4D3A] hover:bg-[#E3F2EA]"
-                }`}
-              >
-                Tabulator
-              </button>
+            <div className="mb-4 flex items-center justify-between">
+              <div className="flex gap-2 text-[11px]">
+                <button
+                  type="button"
+                  onClick={() => setUserTab("admin")}
+                  className={`rounded-full border px-3 py-1.5 transition ${
+                    userTab === "admin"
+                      ? "border-[#1F4D3A] bg-[#1F4D3A] text-white shadow-sm"
+                      : "border-transparent bg-[#F5F7FF] text-[#1F4D3A] hover:bg-[#E3F2EA]"
+                  }`}
+                >
+                  Admin
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setUserTab("judge")}
+                  className={`rounded-full border px-3 py-1.5 transition ${
+                    userTab === "judge"
+                      ? "border-[#1F4D3A] bg-[#1F4D3A] text-white shadow-sm"
+                      : "border-transparent bg-[#F5F7FF] text-[#1F4D3A] hover:bg-[#E3F2EA]"
+                  }`}
+                >
+                  Judge
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setUserTab("tabulator")}
+                  className={`rounded-full border px-3 py-1.5 transition ${
+                    userTab === "tabulator"
+                      ? "border-[#1F4D3A] bg-[#1F4D3A] text-white shadow-sm"
+                      : "border-transparent bg-[#F5F7FF] text-[#1F4D3A] hover:bg-[#E3F2EA]"
+                  }`}
+                >
+                  Tabulator
+                </button>
+              </div>
+              {(userTab === "judge" || userTab === "tabulator") && (
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] text-slate-500">Event</span>
+                  <select
+                    value={userTabEventFilterId ?? ""}
+                    onChange={(e) =>
+                      setUserTabEventFilterId(
+                        e.target.value ? Number(e.target.value) : null,
+                      )
+                    }
+                    className="rounded-full border border-[#E2E8F0] bg-white px-3 py-1.5 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                  >
+                    <option value="">All events</option>
+                    {events.map((event) => (
+                      <option key={event.id} value={event.id}>
+                        {event.name} ({event.year})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
             </div>
 
             <div>
@@ -11428,13 +12089,19 @@ export default function AdminDashboard() {
                       <div className="text-[11px] font-medium text-slate-600">
                         Admin list
                       </div>
-                      <span className="text-[10px] text-slate-400">
-                        {admins.length === 0
-                          ? "No admins yet"
-                          : `${admins.length} admin${
-                              admins.length > 1 ? "s" : ""
-                            }`}
-                      </span>
+                      <div className="flex items-center gap-3">
+                        <input
+                          placeholder="Search admins"
+                          value={adminSearch}
+                          onChange={(e) => setAdminSearch(e.target.value)}
+                          className="rounded-xl border border-[#D0D7E2] bg-white px-3 py-1 text-xs outline-none"
+                        />
+                        <span className="text-[10px] text-slate-400">
+                          {filteredAdmins.length === 0
+                            ? "No admins"
+                            : `${filteredAdmins.length} admin${filteredAdmins.length > 1 ? "s" : ""}`}
+                        </span>
+                      </div>
                     </div>
                     <div className="overflow-x-auto">
                       <table className="min-w-full border-collapse text-left text-[11px]">
@@ -11446,7 +12113,7 @@ export default function AdminDashboard() {
                           </tr>
                         </thead>
                         <tbody>
-                          {admins.length === 0 ? (
+                          {filteredAdmins.length === 0 ? (
                             <tr className="border-b border-[#F1F5F9]">
                               <td
                                 className="px-3 py-2 text-slate-400"
@@ -11457,7 +12124,7 @@ export default function AdminDashboard() {
                               </td>
                             </tr>
                           ) : (
-                            admins.map((admin) => (
+                            filteredAdmins.map((admin) => (
                               <tr
                                 key={admin.id}
                                 className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC]"
@@ -11529,13 +12196,19 @@ export default function AdminDashboard() {
                       <div className="text-[11px] font-medium text-slate-600">
                         Judge list
                       </div>
-                      <span className="text-[10px] text-slate-400">
-                        {judgesForActiveEvent.length === 0
-                          ? "No judges yet"
-                          : `${judgesForActiveEvent.length} judge${
-                              judgesForActiveEvent.length > 1 ? "s" : ""
-                            }`}
-                      </span>
+                      <div className="flex items-center gap-3">
+                        <input
+                          placeholder="Search judges"
+                          value={judgeSearch}
+                          onChange={(e) => setJudgeSearch(e.target.value)}
+                          className="rounded-xl border border-[#D0D7E2] bg-white px-3 py-1 text-xs outline-none"
+                        />
+                        <span className="text-[10px] text-slate-400">
+                          {filteredJudges.length === 0
+                            ? "No judges"
+                            : `${filteredJudges.length} judge${filteredJudges.length > 1 ? "s" : ""}`}
+                        </span>
+                      </div>
                     </div>
                     <div className="overflow-x-auto">
                       <table className="min-w-full border-collapse text-left text-[11px]">
@@ -11549,7 +12222,7 @@ export default function AdminDashboard() {
                           </tr>
                         </thead>
                         <tbody>
-                          {judgesForActiveEvent.length === 0 ? (
+                          {filteredJudges.length === 0 ? (
                             <tr className="border-b border-[#F1F5F9]">
                               <td
                                 className="px-3 py-2 text-slate-400"
@@ -11560,7 +12233,7 @@ export default function AdminDashboard() {
                               </td>
                             </tr>
                           ) : (
-                            judgesForActiveEvent.map((judge) => {
+                            filteredJudges.map((judge) => {
                               const event = events.find(
                                 (e) => e.id === judge.event_id,
                               );
@@ -11651,13 +12324,19 @@ export default function AdminDashboard() {
                       <div className="text-[11px] font-medium text-slate-600">
                         Tabulator list
                       </div>
-                      <span className="text-[10px] text-slate-400">
-                        {tabulatorsForActiveEvent.length === 0
-                          ? "No tabulators yet"
-                          : `${tabulatorsForActiveEvent.length} tabulator${
-                              tabulatorsForActiveEvent.length > 1 ? "s" : ""
-                            }`}
-                      </span>
+                      <div className="flex items-center gap-3">
+                        <input
+                          placeholder="Search tabulators"
+                          value={tabulatorSearch}
+                          onChange={(e) => setTabulatorSearch(e.target.value)}
+                          className="rounded-xl border border-[#D0D7E2] bg-white px-3 py-1 text-xs outline-none"
+                        />
+                        <span className="text-[10px] text-slate-400">
+                          {filteredTabulators.length === 0
+                            ? "No tabulators"
+                            : `${filteredTabulators.length} tabulator${filteredTabulators.length > 1 ? "s" : ""}`}
+                        </span>
+                      </div>
                     </div>
                     {(tabulatorError || tabulatorSuccess) && (
                       <div
@@ -11679,7 +12358,7 @@ export default function AdminDashboard() {
                           </tr>
                         </thead>
                         <tbody>
-                          {tabulatorsForActiveEvent.length === 0 ? (
+                          {filteredTabulators.length === 0 ? (
                             <tr className="border-b border-[#F1F5F9]">
                               <td
                                 className="px-3 py-2 text-slate-400"
@@ -11689,7 +12368,7 @@ export default function AdminDashboard() {
                               </td>
                             </tr>
                           ) : (
-                            tabulatorsForActiveEvent.map((tabulator) => {
+                            filteredTabulators.map((tabulator) => {
                               const event = events.find(
                                 (e) => e.id === tabulator.event_id,
                               );

@@ -269,6 +269,7 @@ export default function JudgeDashboardPage() {
   >([]);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [modalError, setModalError] = useState<string | null>(null);
   const [currentParticipantIndex, setCurrentParticipantIndex] = useState(0);
   const [contestLayoutTemplateKey, setContestLayoutTemplateKey] =
     useState<ContestLayoutTemplateKey>("standard");
@@ -1504,7 +1505,7 @@ export default function JudgeDashboardPage() {
     }
 
     setIsSubmittingParticipant(true);
-    setError(null);
+    setModalError(null);
     setSuccess(null);
 
     try {
@@ -1514,7 +1515,7 @@ export default function JudgeDashboardPage() {
         const value = scoreInputs[key];
 
         if (value === undefined || value === "") {
-          setError(
+          setModalError(
             "Please enter a score for every criteria before submitting.",
           );
           setIsSubmittingParticipant(false);
@@ -1528,7 +1529,7 @@ export default function JudgeDashboardPage() {
             : 100;
 
         if (!Number.isFinite(parsed) || parsed < 0 || parsed > maxScore) {
-          setError(`Scores must be between 0 and ${maxScore}.`);
+          setModalError(`Scores must be between 0 and ${maxScore}.`);
           setIsSubmittingParticipant(false);
           return;
         }
@@ -1646,6 +1647,30 @@ export default function JudgeDashboardPage() {
       return;
     }
 
+    // Validate score doesn't exceed maximum
+    if (value !== "" && value !== "-") {
+      const parsed = Number(value);
+      if (Number.isFinite(parsed)) {
+        const maxScore =
+          activeContestScoringType === "points"
+            ? criteria?.percentage ?? 100
+            : 100;
+
+        if (parsed > maxScore) {
+          setModalError(
+            `Score cannot exceed ${maxScore}. Maximum allowed: ${maxScore} points.`,
+          );
+          return;
+        }
+        if (parsed < 0) {
+          setModalError("Score cannot be negative.");
+          return;
+        }
+        // Clear modal error if valid
+        setModalError(null);
+      }
+    }
+
     const key = `${participantId}-${criteriaId}`;
     setScoreInputs((previous) => ({
       ...previous,
@@ -1675,7 +1700,7 @@ export default function JudgeDashboardPage() {
     const parsed = Number(value);
 
     if (!Number.isFinite(parsed)) {
-      setError("Scores must be a valid number.");
+      setModalError("Scores must be a valid number.");
       return;
     }
 
@@ -1684,26 +1709,29 @@ export default function JudgeDashboardPage() {
         ? criteria?.percentage ?? 100
         : 100;
 
-    const clamped = Math.min(Math.max(parsed, 0), maxScore);
-
-    if (clamped !== parsed) {
-      setScoreInputs((previous) => ({
-        ...previous,
-        [key]: clamped.toString(),
-      }));
+    if (parsed > maxScore) {
+      setModalError(
+        `Score cannot exceed ${maxScore}. Maximum allowed: ${maxScore} points.`,
+      );
+      return;
     }
 
-    const scoreToSave = clamped;
+    if (parsed < 0) {
+      setModalError("Score cannot be negative.");
+      return;
+    }
+
+    const scoreToSave = parsed;
 
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
     const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
     if (!supabaseUrl || !supabaseAnonKey) {
-      setError("Supabase is not configured.");
+      setModalError("Supabase is not configured.");
       return;
     }
 
-    setError(null);
+    setModalError(null);
     setSuccess(null);
 
     const supabase = createClient(supabaseUrl, supabaseAnonKey);
@@ -1729,7 +1757,7 @@ export default function JudgeDashboardPage() {
         );
 
       if (error) {
-        setError(error.message || "Unable to save score.");
+        setModalError(error.message || "Unable to save score.");
         return;
       }
 
@@ -1737,6 +1765,7 @@ export default function JudgeDashboardPage() {
         const created = data[0] as ScoreRow;
         setScores((previous) => [...previous, created]);
         setSuccess("Score saved.");
+        setModalError(null);
       }
     } else {
       const { data, error } = await supabase
@@ -1748,7 +1777,7 @@ export default function JudgeDashboardPage() {
         );
 
       if (error) {
-        setError(error.message || "Unable to update score.");
+        setModalError(error.message || "Unable to update score.");
         return;
       }
 
@@ -1758,6 +1787,7 @@ export default function JudgeDashboardPage() {
           previous.map((score) => (score.id === updated.id ? updated : score)),
         );
         setSuccess("Score updated.");
+        setModalError(null);
       }
     }
   };
@@ -2010,31 +2040,6 @@ export default function JudgeDashboardPage() {
             )}
 
             <div className="flex flex-col gap-5">
-              <div className="inline-flex items-center gap-2 rounded-full bg-[#EEF2FF] p-1 text-[11px] text-slate-600">
-                <button
-                  type="button"
-                  onClick={() => setActiveTab("score")}
-                  className={`rounded-full px-4 py-1.5 font-medium transition ${
-                    activeTab === "score"
-                      ? "bg-white text-[#1F4D3A] shadow-sm"
-                      : "text-slate-600 hover:text-[#1F4D3A]"
-                  }`}
-                >
-                  Score
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setActiveTab("tabulation")}
-                  className={`rounded-full px-4 py-1.5 font-medium transition ${
-                    activeTab === "tabulation"
-                      ? "bg-white text-[#1F4D3A] shadow-sm"
-                      : "text-slate-600 hover:text-[#1F4D3A]"
-                  }`}
-                >
-                  Tabulation
-                </button>
-              </div>
-
               <div className="grid gap-3 text-xs md:grid-cols-2">
                 <div className="flex flex-col gap-1">
                   <span className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
@@ -2092,20 +2097,19 @@ export default function JudgeDashboardPage() {
                 </div>
               </div>
 
-              {activeTab === "score" && (
-                <div
-                  className="w-full rounded-2xl border border-[#E2E8F0] bg-[#F8FAFC] p-6"
-                  style={
-                    contestLayoutTheme?.workspaceBg
-                      ? {
-                          backgroundColor: hexWithOpacity(
-                            contestLayoutTheme.workspaceBg,
-                            (contestLayoutTheme.workspaceBgOpacity ?? 100) / 100,
-                          ),
-                        }
-                      : undefined
-                  }
-                >
+              <div
+                className="w-full rounded-2xl border border-[#E2E8F0] bg-[#F8FAFC] p-6"
+                style={
+                  contestLayoutTheme?.workspaceBg
+                    ? {
+                        backgroundColor: hexWithOpacity(
+                          contestLayoutTheme.workspaceBg,
+                          (contestLayoutTheme.workspaceBgOpacity ?? 100) / 100,
+                        ),
+                      }
+                    : undefined
+                }
+              >
                   {!activeContest || activeContestParticipants.length === 0 ? (
                     <div className="flex h-full flex-col items-center justify-center gap-2 text-center text-sm text-slate-500">
                       <div className="rounded-full bg-white px-4 py-2 text-xs font-medium text-[#1F4D3A] shadow-sm">
@@ -2323,487 +2327,15 @@ export default function JudgeDashboardPage() {
                     </div>
                   )}
                 </div>
-              )}
-
-              {activeTab === "tabulation" && (
-                <div className="w-full rounded-2xl border border-[#E2E8F0] bg-[#F8FAFC] p-6">
-                  {!activeContest || judgeTabulationRows.length === 0 ? (
-                    <div className="flex h-full flex-col items-center justify-center gap-2 text-center text-sm text-slate-500">
-                      <div className="rounded-full bg-white px-4 py-2 text-xs font-medium text-[#1F4D3A] shadow-sm">
-                        Tabulation workspace
-                      </div>
-                      <p>
-                        Select a contest above to view your rankings once totals are
-                        available.
-                      </p>
-                    </div>
-                  ) : (
-                    <div className="flex flex-col gap-4">
-                      {/* View switcher removed */}
-
-                      {activeTabulationView === "overall" && (
-                        <div className="overflow-hidden rounded-2xl border border-[#E2E8F0] bg-white">
-                          <table className="min-w-full border-collapse text-left text-sm">
-                            <thead className="bg-[#F5F7FF] text-xs font-semibold uppercase tracking-wide text-[#1F4D3A]">
-                              <tr>
-                                <th className="px-4 py-3 font-medium">Rank</th>
-                                <th className="px-4 py-3 font-medium">Represent</th>
-                                <th className="px-4 py-3 font-medium">Contestant</th>
-                                {judge && judge.role === "chairman" ? (
-                                  eventJudges.map((j, index) => (
-                                    <th
-                                      key={j.id}
-                                      className="px-4 py-3 text-center font-medium"
-                                    >
-                                      {j.id === judge.id ? "YOU" : j.username}
-                                    </th>
-                                  ))
-                                ) : (
-                                  <th className="px-4 py-3 text-center font-medium">Your Score</th>
-                                )}
-                                <th className="px-4 py-3 text-right font-medium">
-                                  Total score
-                                </th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {judgeTabulationRows.map((row) => (
-                                <tr
-                                  key={row.participant.id}
-                                  className="border-t border-[#E2E8F0] hover:bg-[#F8FAFC]"
-                                >
-                                  <td className="px-4 py-3 align-middle text-sm font-semibold text-slate-700">
-                                    {row.rank}
-                                  </td>
-                                  <td className="px-4 py-3 align-middle text-sm text-slate-700">
-                                    {row.teamName ?? "—"}
-                                  </td>
-                                  <td className="px-4 py-3 align-middle">
-                                    <div className="text-sm font-semibold text-slate-800">
-                                      {row.participant.full_name}
-                                    </div>
-                                    <div className="text-xs text-slate-500">
-                                      Contestant #{row.participant.contestant_number}
-                                    </div>
-                                  </td>
-                                  {judge && judge.role === "chairman" ? (
-                                    eventJudges.map((j) => (
-                                      <td
-                                        key={j.id}
-                                        className="px-4 py-3 align-middle text-center text-sm text-slate-600"
-                                      >
-                                        {row.judgeScores[j.id]
-                                          ? row.judgeScores[j.id].toFixed(2)
-                                          : "—"}
-                                      </td>
-                                    ))
-                                  ) : (
-                                    <td className="px-4 py-3 align-middle text-center text-sm text-slate-600">
-                                      {judge && row.judgeScores[judge.id]
-                                        ? row.judgeScores[judge.id].toFixed(2)
-                                        : "—"}
-                                    </td>
-                                  )}
-                                  <td className="px-4 py-3 align-middle text-right text-sm font-semibold text-[#1F4D3A]">
-                                    {row.totalScore.toFixed(2)}
-                                  </td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      )}
-
-                      {activeTabulationView === "awards" && (
-                        <div className="flex flex-col gap-4">
-                          <div className="rounded-2xl border border-[#E2E8F0] bg-white px-4 py-4">
-                            <div className="mb-3 flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
-                              <div>
-                                <div className="text-sm font-semibold text-[#1F4D3A]">
-                                  Awards ranking
-                                </div>
-                                <div className="text-[11px] text-slate-500">
-                                  Select an award to view rankings based on your scores.
-                                </div>
-                              </div>
-                              <div className="w-full max-w-xs text-xs">
-                                <span className="mb-1 block text-[11px] text-slate-500">
-                                  Award
-                                </span>
-                                <select
-                                  className="w-full rounded-full border border-[#E2E8F0] bg-white px-4 py-2.5 text-xs font-medium text-slate-800 outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
-                                  value={
-                                    activeAwardFilterId === "all"
-                                      ? ""
-                                      : String(activeAwardFilterId)
-                                  }
-                                  onChange={(event) => {
-                                    const value = event.target.value;
-                                    if (!value) {
-                                      setActiveAwardFilterId("all");
-                                    } else {
-                                      setActiveAwardFilterId(
-                                        Number.parseInt(value, 10),
-                                      );
-                                    }
-                                  }}
-                                >
-                                  <option value="">Select award</option>
-                                  {awardsForActiveContest.map((award) => (
-                                    <option key={award.id} value={award.id}>
-                                      {award.name}
-                                    </option>
-                                  ))}
-                                </select>
-                              </div>
-                            </div>
-
-                            {awardsForActiveContest.length === 0 ? (
-                              <div className="text-[11px] text-slate-400">
-                                No awards configured for this contest.
-                              </div>
-                            ) : !selectedAwardResult ? (
-                              <div className="text-[11px] text-slate-400">
-                                Select an award above to view its ranking.
-                              </div>
-                            ) : selectedAwardResult.winners.length === 0 ? (
-                              <div className="text-[11px] text-slate-400">
-                                No winners available yet for this award.
-                              </div>
-                            ) : selectedAwardResult.award.award_type !==
-                                "criteria" ||
-                              ((!selectedAwardResult.award.criteria_ids || selectedAwardResult.award.criteria_ids.length === 0) && selectedAwardResult.award.criteria_id === null) ? (
-                              <div className="text-[11px] text-slate-400">
-                                This is a special award. Criteria scores are not
-                                available.
-                              </div>
-                            ) : (
-                              <div className="overflow-hidden rounded-2xl border border-[#E2E8F0] bg-white">
-                                <table className="min-w-full border-collapse text-left text-sm">
-                                  <thead className="bg-[#F5F7FF] text-xs font-semibold uppercase tracking-wide text-[#1F4D3A]">
-                                    <tr>
-                                      <th className="px-4 py-3 font-medium">Rank</th>
-                                      <th className="px-4 py-3 font-medium">Represent</th>
-                                      <th className="px-4 py-3 font-medium">
-                                        Contestant
-                                      </th>
-                                      {judge && judge.role === "chairman" ? (
-                                        eventJudges.map((j) => (
-                                          <th
-                                            key={j.id}
-                                            className="px-4 py-3 text-center font-medium"
-                                          >
-                                            <div>{j.username}</div>
-                                            <button
-                                              type="button"
-                                              onClick={() => setSelectedJudgeForBreakdown(j.id)}
-                                              className="mt-1 rounded-full border border-[#1F4D3A33] bg-white px-2 py-0.5 text-[9px] font-medium text-[#1F4D3A] transition hover:bg-[#F0FDF4]"
-                                            >
-                                              show more
-                                            </button>
-                                          </th>
-                                        ))
-                                      ) : (
-                                        <th className="px-4 py-3 text-center font-medium">
-                                          <div>{judge?.username || "Score"}</div>
-                                          <button
-                                            type="button"
-                                            onClick={() => setSelectedJudgeForBreakdown(judge?.id || null)}
-                                            className="mt-1 rounded-full border border-[#1F4D3A33] bg-white px-2 py-0.5 text-[9px] font-medium text-[#1F4D3A] transition hover:bg-[#F0FDF4]"
-                                          >
-                                            show more
-                                          </button>
-                                        </th>
-                                      )}
-                                      <th className="px-4 py-3 text-right font-medium">
-                                        Total
-                                      </th>
-                                    </tr>
-                                  </thead>
-                                  <tbody>
-                                    {awardRankingRows.map((item) => (
-                                      <tr
-                                        key={item.row.participant.id}
-                                        className="border-t border-[#E2E8F0] hover:bg-[#F8FAFC]"
-                                      >
-                                        <td className="px-4 py-3 align-middle text-sm font-semibold text-slate-700">
-                                          {item.rank ?? "—"}
-                                        </td>
-                                        <td className="px-4 py-3 align-middle text-sm text-slate-700">
-                                          {item.row.teamName ?? "—"}
-                                        </td>
-                                        <td className="px-4 py-3 align-middle">
-                                          <div className="text-sm font-semibold text-slate-800">
-                                            {item.row.participant.full_name}
-                                          </div>
-                                          <div className="text-xs text-slate-500">
-                                            Contestant #
-                                            {item.row.participant.contestant_number}
-                                          </div>
-                                        </td>
-                                        {judge && judge.role === "chairman" ? (
-                                          eventJudges.map((j) => (
-                                            <td
-                                              key={j.id}
-                                              className="px-4 py-3 align-middle text-center text-sm text-slate-600"
-                                            >
-                                              {item.judgeCriteriaScores[j.id] !== undefined
-                                                ? item.judgeCriteriaScores[j.id].toFixed(2)
-                                                : "—"}
-                                            </td>
-                                          ))
-                                        ) : (
-                                          <td className="px-4 py-3 align-middle text-center text-sm font-semibold text-[#1F4D3A]">
-                                            {item.criteriaTotal === null
-                                              ? "—"
-                                              : item.criteriaTotal.toFixed(2)}
-                                          </td>
-                                        )}
-                                        <td className="px-4 py-3 align-middle text-right text-sm font-semibold text-[#1F4D3A]">
-                                          {item.criteriaTotal === null
-                                            ? "—"
-                                            : item.criteriaTotal.toFixed(2)}
-                                        </td>
-                                      </tr>
-                                    ))}
-                                  </tbody>
-                                </table>
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
             </div>
           </div>
         </main>
-      </div>
 
-      {/* Judge Breakdown Modal */}
-      {selectedJudgeForBreakdown !== null && selectedAwardResult && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm">
-            <div className="flex max-h-[90vh] w-full max-w-5xl flex-col rounded-3xl bg-white shadow-2xl">
-              <div className="flex items-center justify-between border-b border-[#E2E8F0] p-6">
-                <div>
-                  <h3 className="text-lg font-semibold text-[#1F4D3A]">
-                    {judge?.role === 'chairman' ? (eventJudges.find(j => j.id === selectedJudgeForBreakdown)?.username || "Judge") : "My Scoring"} Breakdown
-                  </h3>
-                  <p className="text-sm text-slate-500">
-                    Detailed scoring for {selectedAwardResult.award.name}
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setSelectedJudgeForBreakdown(null)}
-                  className="rounded-full bg-[#F1F5F9] p-2 text-slate-500 hover:bg-[#E2E8F0]"
-                >
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    width="20"
-                    height="20"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  >
-                    <line x1="18" y1="6" x2="6" y2="18" />
-                    <line x1="6" y1="6" x2="18" y2="18" />
-                  </svg>
-                </button>
-              </div>
-              
-              <div className="flex-1 overflow-y-auto p-6">
-                <table className="min-w-full border-collapse text-left text-sm">
-                  <thead className="bg-[#F5F7FF] text-xs font-semibold uppercase tracking-wide text-[#1F4D3A]">
-                    <tr>
-                      <th className="px-4 py-3 font-medium">Contestant</th>
-                      {(() => {
-                        const originalAward = selectedAwardResult.award;
-                        // Determine categories involved
-                        let criteriaIds: number[] = [];
-                        const rawIds = originalAward?.criteria_ids;
-
-                        if (Array.isArray(rawIds)) {
-                          criteriaIds = rawIds.map(id => Number(id));
-                        } else if (typeof rawIds === 'string') {
-                          const s = rawIds as string;
-                          if (s.startsWith('{') && s.endsWith('}')) {
-                            criteriaIds = s.substring(1, s.length - 1).split(',').map(n => Number(n.trim()));
-                          } else {
-                            criteriaIds = s.split(',').map(n => Number(n.trim()));
-                          }
-                        } else if (originalAward?.criteria_id) {
-                          criteriaIds = [Number(originalAward.criteria_id)];
-                        }
-                        
-                        criteriaIds = criteriaIds.filter(n => !isNaN(n));
-                        
-                        // Expand to categories
-                        const selectedCriteria = criteriaList.filter(c => criteriaIds.includes(c.id));
-                        const categories = Array.from(new Set(selectedCriteria.map(c => c.category).filter(Boolean)));
-                        
-                        // If categories exist, show columns for each category
-                        if (categories.length > 0) {
-                            return categories.map(cat => (
-                                <th key={cat} className="px-4 py-3 text-center font-medium">
-                                    {cat}
-                                </th>
-                            ));
-                        } else {
-                            // If no categories, maybe just show criteria names? Or just one "Score" column
-                            return selectedCriteria.map(c => (
-                                <th key={c.id} className="px-4 py-3 text-center font-medium">
-                                    {c.name}
-                                </th>
-                            ));
-                        }
-                      })()}
-                      <th className="px-4 py-3 text-right font-medium">Total</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {selectedAwardResult.winners.map((row) => (
-                      <tr key={row.participant.id} className="border-t border-[#E2E8F0] hover:bg-[#F8FAFC]">
-                        <td className="px-4 py-3">
-                            <div className="font-semibold text-slate-800">{row.participant.full_name}</div>
-                            <div className="text-xs text-slate-500">#{row.participant.contestant_number} • {row.teamName ?? row.categoryName}</div>
-                        </td>
-                        {(() => {
-                            const originalAward = selectedAwardResult.award;
-                            // Re-calculate involved columns
-                            let criteriaIds: number[] = [];
-                            const rawIds = originalAward?.criteria_ids;
-
-                            if (Array.isArray(rawIds)) {
-                              criteriaIds = rawIds.map(id => Number(id));
-                            } else if (typeof rawIds === 'string') {
-                              const s = rawIds as string;
-                              if (s.startsWith('{') && s.endsWith('}')) {
-                                criteriaIds = s.substring(1, s.length - 1).split(',').map(n => Number(n.trim()));
-                              } else {
-                                criteriaIds = s.split(',').map(n => Number(n.trim()));
-                              }
-                            } else if (originalAward?.criteria_id) {
-                              criteriaIds = [Number(originalAward.criteria_id)];
-                            }
-                            
-                            criteriaIds = criteriaIds.filter(n => !isNaN(n));
-                            const selectedCriteria = criteriaList.filter(c => criteriaIds.includes(c.id));
-                            const categories = Array.from(new Set(selectedCriteria.map(c => c.category).filter(Boolean)));
-                            
-                            // Calculate scores for this participant and judge
-                            const judgeId = selectedJudgeForBreakdown!;
-                            
-                            if (categories.length > 0) {
-                                return categories.map(cat => {
-                                    // Sum all criteria in this category
-                                    const catCriteria = criteriaList.filter(c => c.category === cat);
-                                    let catTotal = 0;
-                                    let hasVal = false;
-                                    
-                                    for (const c of catCriteria) {
-                                        const s = scores.find(s => s.judge_id === judgeId && s.participant_id === row.participant.id && s.criteria_id === c.id);
-                                        if (s) {
-                                            catTotal += Number(s.score);
-                                            hasVal = true;
-                                        }
-                                    }
-                                    
-                                    return (
-                                        <td key={cat} className="px-4 py-3 text-center text-slate-600">
-                                            {hasVal ? catTotal.toFixed(2) : "—"}
-                                        </td>
-                                    );
-                                });
-                            } else {
-                                return selectedCriteria.map(c => {
-                                    const s = scores.find(s => s.judge_id === judgeId && s.participant_id === row.participant.id && s.criteria_id === c.id);
-                                    return (
-                                        <td key={c.id} className="px-4 py-3 text-center text-slate-600">
-                                            {s ? Number(s.score).toFixed(2) : "—"}
-                                        </td>
-                                    );
-                                });
-                            }
-                        })()}
-                        {(() => {
-                             // Calculate total again for this judge
-                             const originalAward = selectedAwardResult.award;
-                             let criteriaIds: number[] = [];
-                             const rawIds = originalAward?.criteria_ids;
- 
-                             if (Array.isArray(rawIds)) {
-                               criteriaIds = rawIds.map(id => Number(id));
-                             } else if (typeof rawIds === 'string') {
-                               const s = rawIds as string;
-                               if (s.startsWith('{') && s.endsWith('}')) {
-                                 criteriaIds = s.substring(1, s.length - 1).split(',').map(n => Number(n.trim()));
-                               } else {
-                                 criteriaIds = s.split(',').map(n => Number(n.trim()));
-                               }
-                             } else if (originalAward?.criteria_id) {
-                               criteriaIds = [Number(originalAward.criteria_id)];
-                             }
-                             
-                             criteriaIds = criteriaIds.filter(n => !isNaN(n));
- 
-                             // Include all criteria from categories
-                             if (criteriaIds.length > 0) {
-                               const selectedCriteria = criteriaList.filter(c => criteriaIds.includes(c.id));
-                               const categories = Array.from(new Set(selectedCriteria.map(c => c.category).filter(Boolean)));
-                               
-                               if (categories.length > 0) {
-                                   const allCriteriaInCategories = criteriaList.filter(c => categories.includes(c.category));
-                                   const allIds = allCriteriaInCategories.map(c => c.id);
-                                   criteriaIds = Array.from(new Set([...criteriaIds, ...allIds]));
-                               }
-                             }
-                             
-                             const judgeId = selectedJudgeForBreakdown!;
-                             let total = 0;
-                             let hasVal = false;
-                             for (const cId of criteriaIds) {
-                                 const s = scores.find(s => s.judge_id === judgeId && s.participant_id === row.participant.id && s.criteria_id === cId);
-                                 if (s) {
-                                     total += Number(s.score);
-                                     hasVal = true;
-                                 }
-                             }
-                             
-                            return (
-                                <td className="px-4 py-3 text-right font-semibold text-[#1F4D3A]">
-                                    {hasVal ? total.toFixed(2) : "—"}
-                                </td>
-                            );
-                        })()}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              
-              <div className="border-t border-[#E2E8F0] p-6 text-right">
-                <button
-                  type="button"
-                  onClick={() => setSelectedJudgeForBreakdown(null)}
-                  className="rounded-full bg-[#F1F5F9] px-6 py-2.5 text-sm font-medium text-slate-700 hover:bg-[#E2E8F0]"
-                >
-                  Close
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-      {isScoringModalOpen && activeContest && currentParticipant && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 px-4">
-          <div
-            className="flex w-full max-w-3xl max-h-[calc(100vh-3rem)] flex-col overflow-hidden rounded-3xl border border-[#E2E8F0] bg-white shadow-2xl"
+        {/* Scoring Modal */}
+        {isScoringModalOpen && activeContest && currentParticipant && (
+          <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 px-4">
+            <div
+              className="flex w-full max-w-3xl max-h-[calc(100vh-3rem)] flex-col overflow-hidden rounded-3xl border border-[#E2E8F0] bg-white shadow-2xl"
             style={
               contestLayoutTheme?.modalBodyBg
                 ? {
@@ -3250,20 +2782,6 @@ export default function JudgeDashboardPage() {
                               </tr>
                             );
                           })}
-                          {!isUncategorized && (
-                            <tr className="bg-[#F5F7FF]">
-                              <td
-                                className="px-4 py-3 text-right text-sm font-semibold text-slate-700"
-                              >
-                                Total
-                              </td>
-                              <td
-                                className="px-4 py-3 text-right text-sm font-semibold text-[#1F4D3A]"
-                              >
-                                {categorySubtotal > 0 ? categorySubtotal.toFixed(2) : "—"}
-                              </td>
-                            </tr>
-                          )}
                         </Fragment>
                       );
                     })}
@@ -3356,9 +2874,9 @@ export default function JudgeDashboardPage() {
               </div>
             </div>
           </div>
-        </div>
-      )}
-
+          </div>
+        )}
+      </div>
     </div>
   );
 }

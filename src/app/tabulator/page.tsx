@@ -253,6 +253,7 @@ export default function TabulatorPage() {
   const router = useRouter();
   const [tabulator, setTabulator] = useState<TabulatorRow | null>(null);
   const [event, setEvent] = useState<EventRow | null>(null);
+  const [events, setEvents] = useState<EventRow[]>([]); // for dropdown/filtering
   const [contests, setContests] = useState<ContestRow[]>([]);
   const [categories, setCategories] = useState<CategoryRow[]>([]);
   const [teams, setTeams] = useState<TeamRow[]>([]);
@@ -365,33 +366,43 @@ export default function TabulatorPage() {
       const tabulatorRow = tabulatorRows[0] as TabulatorRow;
       setTabulator(tabulatorRow);
 
+      // load every event so the filter dropdown works like admin's
       const {
-        data: activeEvents,
-        error: activeEventError,
+        data: eventRows,
+        error: eventError,
       } = await supabase
         .from("event")
-        .select("id, name, code, year, is_active, created_at")
-        .eq("id", tabulatorRow.event_id)
-        .limit(1);
+        .select("id, name, code, year, is_active, created_at");
 
-      if (activeEventError) {
+      if (eventError) {
         setError(
-          activeEventError.message ||
-            "Unable to load assigned event. Please contact the administrator.",
+          eventError.message ||
+            "Unable to load events. Please contact the administrator.",
         );
         setIsLoading(false);
         return;
       }
 
-      if (!activeEvents || activeEvents.length === 0) {
+      if (!eventRows || eventRows.length === 0) {
         setError(
-          "No event is assigned to this tabulator. Please contact the administrator.",
+          "No events found. Please contact the administrator.",
         );
         setIsLoading(false);
         return;
       }
 
-      const activeEvent = activeEvents[0] as EventRow;
+      // restrict list to the tabulator's assigned event only
+      const activeEvent = eventRows.find((e) => e.id === tabulatorRow.event_id);
+      if (activeEvent) {
+        setEvents([activeEvent]);
+      }
+      if (!activeEvent) {
+        setError(
+          "Assigned event not found. Please contact the administrator.",
+        );
+        setIsLoading(false);
+        return;
+      }
       setEvent(activeEvent);
 
       if (!activeEvent.is_active) {
@@ -405,7 +416,8 @@ export default function TabulatorPage() {
       } = await supabase
         .from("contest")
         .select("id, event_id, name, contest_code, created_at")
-        .eq("event_id", activeEvent.id)
+        // load contests for *all* events so the filter dropdown can switch
+        //.eq("event_id", activeEvent.id)
         .order("created_at", { ascending: false });
 
       if (contestError) {
@@ -607,6 +619,52 @@ export default function TabulatorPage() {
           {
             event: "*",
             schema: "public",
+            table: "judge_scoring_permission",
+          },
+          (payload) => {
+            // a full refetch would be simpler, but we can update incrementally like admin page
+            if (payload.eventType === "INSERT" || payload.eventType === "UPDATE") {
+              const newRow = payload.new as JudgeScoringPermissionRow;
+              setJudgeScoringPermissions((previous) => {
+                const exists = previous.some(
+                  (permission) =>
+                    permission.judge_id === newRow.judge_id &&
+                    permission.contest_id === newRow.contest_id &&
+                    permission.criteria_id === newRow.criteria_id,
+                );
+
+                if (payload.eventType === "INSERT" && !exists) {
+                  return [...previous, newRow];
+                }
+
+                return previous.map((permission) =>
+                  permission.judge_id === newRow.judge_id &&
+                  permission.contest_id === newRow.contest_id &&
+                  permission.criteria_id === newRow.criteria_id
+                    ? newRow
+                    : permission,
+                );
+              });
+            } else if (payload.eventType === "DELETE") {
+              const oldRow = payload.old as JudgeScoringPermissionRow;
+              setJudgeScoringPermissions((previous) =>
+                previous.filter(
+                  (permission) =>
+                    !(
+                      permission.judge_id === oldRow.judge_id &&
+                      permission.contest_id === oldRow.contest_id &&
+                      permission.criteria_id === oldRow.criteria_id
+                    ),
+                ),
+              );
+            }
+          },
+        )
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
             table: "score",
           },
           (payload) => {
@@ -651,8 +709,67 @@ export default function TabulatorPage() {
                 return previous.map((row) => (row.id === newRow.id ? newRow : row));
               });
             } else if (payload.eventType === "DELETE") {
-              const oldRow = payload.old as { id: number };
-              setAwards((previous) =>
+              const oldRow = payload.old as JudgeScoringPermissionRow;
+              setJudgeScoringPermissions((previous) =>
+                previous.filter(
+                  (permission) =>
+                    !(
+                      permission.judge_id === oldRow.judge_id &&
+                      permission.contest_id === oldRow.contest_id &&
+                      permission.criteria_id === oldRow.criteria_id
+                    ),
+                ),
+              );
+            }
+          },
+        )
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "judge_division_permission",
+          },
+          (payload) => {
+            if (payload.eventType === "INSERT" || payload.eventType === "UPDATE") {
+              const newRow = payload.new as JudgeDivisionPermissionRow;
+              setJudgeDivisionPermissions((previous) => {
+                const exists = previous.some((row) => row.id === newRow.id);
+                if (payload.eventType === "INSERT" && !exists) {
+                  return [...previous, newRow];
+                }
+                return previous.map((row) => (row.id === newRow.id ? newRow : row));
+              });
+            } else if (payload.eventType === "DELETE") {
+              const oldRow = payload.old as { id: number } | null;
+              if (!oldRow) return;
+              setJudgeDivisionPermissions((previous) =>
+                previous.filter((row) => row.id !== oldRow.id),
+              );
+            }
+          },
+        )
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "judge_participant_permission",
+          },
+          (payload) => {
+            if (payload.eventType === "INSERT" || payload.eventType === "UPDATE") {
+              const newRow = payload.new as JudgeParticipantPermissionRow;
+              setJudgeParticipantPermissions((previous) => {
+                const exists = previous.some((row) => row.id === newRow.id);
+                if (payload.eventType === "INSERT" && !exists) {
+                  return [...previous, newRow];
+                }
+                return previous.map((row) => (row.id === newRow.id ? newRow : row));
+              });
+            } else if (payload.eventType === "DELETE") {
+              const oldRow = payload.old as { id: number } | null;
+              if (!oldRow) return;
+              setJudgeParticipantPermissions((previous) =>
                 previous.filter((row) => row.id !== oldRow.id),
               );
             }
@@ -1018,15 +1135,124 @@ export default function TabulatorPage() {
     router.push("/");
   };
 
+  // selected event is always the one the tabulator is assigned to
+  const selectedEventId = event?.id ?? null;
+
   const judgesForActiveEvent = useMemo(
     () => (event ? judges.filter((j) => j.event_id === event.id) : []),
     [judges, event],
+  );
+
+  // lists that respect the optional event filter
+  // since selectedEventId === event?.id, this is effectively judgesForActiveEvent
+  const judgesForSelectedEvent = useMemo(
+    () =>
+      selectedEventId === null
+        ? []
+        : judges.filter((j) => j.event_id === selectedEventId),
+    [judges, selectedEventId],
   );
 
   const contestsForActiveEvent = useMemo(
     () => (event ? contests.filter((c) => c.event_id === event.id) : []),
     [contests, event],
   );
+
+  const contestsForSelectedEvent = useMemo(
+    () =>
+      selectedEventId === null
+        ? []
+        : contests.filter((c) => c.event_id === selectedEventId),
+    [contests, selectedEventId],
+  );
+
+  const categoriesForSelectedEvent = useMemo(
+    () =>
+      selectedEventId === null
+        ? []
+        : categories.filter((c) => c.event_id === selectedEventId),
+    [categories, selectedEventId],
+  );
+
+  const participantsForSelectedEvent = useMemo(() => {
+    if (selectedEventId === null) {
+      return participants;
+    }
+    const contestIds = contestsForSelectedEvent.map((c) => c.id);
+    return participants.filter((p) => contestIds.includes(p.contest_id));
+  }, [participants, contestsForSelectedEvent, selectedEventId]);
+
+
+  // Refs to table containers for printing only the rankings table
+  const overallTableRef = useRef<HTMLDivElement | null>(null);
+  const awardsTableRef = useRef<HTMLDivElement | null>(null);
+
+  function escapeHtml(unsafe: string) {
+    return unsafe
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/\"/g, "&quot;")
+      .replace(/'/g, "&#039;");
+  }
+
+  const handlePrint = () => {
+    if (typeof window === "undefined") return;
+
+    const contentEl = activeView === "overall" ? overallTableRef.current : awardsTableRef.current;
+
+    if (!contentEl) {
+      window.print();
+      return;
+    }
+
+    const titleText = headerTitle + (activeContest ? ` — ${activeContest.name}` : "");
+    const awardsText = awardsForActiveContest.map((a) => a.name).join("\n");
+
+    const html = `<!doctype html>
+      <html>
+      <head>
+        <meta charset="utf-8" />
+        <title>${escapeHtml(titleText)}</title>
+        <style>
+          html,body{margin:0;padding:0;font-family:Inter, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial; color:#111827}
+          .print-container{padding:20px;}
+          .header-space{height:80px}
+          .footer-space{height:60px}
+          .title{font-size:20px;font-weight:700;color:#1F4D3A;margin-bottom:6px}
+          .awards{font-size:12px;color:#374151;white-space:pre-wrap;margin-bottom:12px}
+          table{width:100%;border-collapse:collapse;font-size:12px}
+          thead{background:#F5F7FF;color:#1F4D3A;text-transform:uppercase;font-weight:700}
+          th,td{padding:10px;border-bottom:1px solid #E6EEF3;text-align:left}
+          td.text-right, th.text-right{text-align:right}
+        </style>
+      </head>
+      <body>
+        <div class="print-container">
+          <div class="header-space"></div>
+          <div class="title">${escapeHtml(titleText)}</div>
+          <div class="awards">${escapeHtml(awardsText)}</div>
+          <div class="table-root">${contentEl.innerHTML}</div>
+          <div class="footer-space"></div>
+        </div>
+        <script>
+          window.onload = function() { setTimeout(function(){ window.print(); window.close(); }, 100); };
+        </script>
+      </body>
+      </html>`;
+
+    const win = window.open("", "_blank", "width=1200,height=800");
+    if (!win) {
+      // fallback
+      window.print();
+      return;
+    }
+
+    win.document.open();
+    win.document.write(html);
+    win.document.close();
+  };
+  
 
   const judgeDivisionIdsForContest = useMemo(() => {
     if (selectedContestIdForPermissions === null) return [];
@@ -1061,6 +1287,7 @@ export default function TabulatorPage() {
   ]);
 
   useEffect(() => {
+    // always clear selections when contest is cleared
     if (selectedContestIdForPermissions === null) {
       setJudgeDivisionIds([]);
       setJudgeDivisionMode("all");
@@ -1073,44 +1300,76 @@ export default function TabulatorPage() {
 
     const relevantJudges =
       selectedJudgeIdsForPermissions.length === 0
-        ? judgesForActiveEvent.map((j) => j.id)
+        ? judgesForSelectedEvent.map((j) => j.id)
         : selectedJudgeIdsForPermissions;
 
-    if (relevantJudges.length === 1) {
-      const judgeId = relevantJudges[0];
-      
-      const divIds = judgeDivisionPermissions
-        .filter(p => p.judge_id === judgeId && p.contest_id === selectedContestIdForPermissions)
-        .map(p => p.division_id);
-      setJudgeDivisionIds(divIds);
-      setJudgeDivisionMode(divIds.length > 0 ? "custom" : "all");
-
-      const partIds = judgeParticipantPermissions
-        .filter(p => p.judge_id === judgeId && p.contest_id === selectedContestIdForPermissions)
-        .map(p => p.participant_id);
-      setJudgeParticipantIds(partIds);
-      setJudgeParticipantMode(partIds.length > 0 ? "custom" : "all");
-
-      const scoringPerms = judgeScoringPermissions.filter(
-        p => p.judge_id === judgeId && p.contest_id === selectedContestIdForPermissions
-      );
-      
-      const hasFullAccess = scoringPerms.some(p => p.criteria_id === null && p.can_edit === true);
-      if (hasFullAccess) {
-        setJudgePermissionsMode("all");
-        setJudgePermissionsCriteriaIds([]);
-      } else {
-        const critIds = scoringPerms.filter(p => p.criteria_id !== null && p.can_edit === true).map(p => p.criteria_id as number);
-        setJudgePermissionsMode("custom");
-        setJudgePermissionsCriteriaIds(critIds);
+    // helper to compute division/participant settings based on one or many judges
+    const computePermissionList = <T extends { judge_id: number; contest_id: number }>(
+      list: T[],
+      key: keyof T,
+    ) => {
+      const perms =
+        relevantJudges.length === 1
+          ? list.filter(
+              (p) => p.judge_id === relevantJudges[0] && p.contest_id === selectedContestIdForPermissions,
+            )
+          : list.filter((p) => p.contest_id === selectedContestIdForPermissions);
+      if (perms.length === 0) {
+        return { mode: "all" as const, ids: [] as number[] };
       }
-    } else {
-      setJudgeDivisionIds([]);
-      setJudgeDivisionMode("all");
-      setJudgeParticipantIds([]);
-      setJudgeParticipantMode("all");
-      setJudgePermissionsCriteriaIds([]);
+      return {
+        mode: "custom" as const,
+        ids: Array.from(new Set(perms.map((p) => (p as any)[key] as number))),
+      };
+    };
+
+    const divResult = computePermissionList(judgeDivisionPermissions, "division_id");
+    setJudgeDivisionMode(divResult.mode);
+    setJudgeDivisionIds(divResult.ids);
+
+    const partResult = computePermissionList(judgeParticipantPermissions, "participant_id");
+    setJudgeParticipantMode(partResult.mode);
+    setJudgeParticipantIds(partResult.ids);
+
+    // scoring permissions aggregation
+    const allCriteriaIdsForContest =
+      criteriaList
+        .filter((c) => c.contest_id === selectedContestIdForPermissions)
+        .map((c) => c.id);
+
+    const scoringPerms =
+      relevantJudges.length === 1
+        ? judgeScoringPermissions.filter(
+            (p) =>
+              p.judge_id === relevantJudges[0] &&
+              p.contest_id === selectedContestIdForPermissions,
+          )
+        : judgeScoringPermissions.filter(
+            (p) => p.contest_id === selectedContestIdForPermissions,
+          );
+
+    if (scoringPerms.length === 0) {
       setJudgePermissionsMode("all");
+      setJudgePermissionsCriteriaIds(allCriteriaIdsForContest);
+    } else {
+      const globalPermission = scoringPerms.find((p) => p.criteria_id === null);
+      const perCriteriaUnlocks = scoringPerms
+        .filter((p) => p.criteria_id !== null && p.can_edit)
+        .map((p) => p.criteria_id as number);
+      const uniqueCriteriaUnlocks = [...new Set(perCriteriaUnlocks)];
+
+      if (globalPermission) {
+        if (globalPermission.can_edit) {
+          setJudgePermissionsMode("all");
+          setJudgePermissionsCriteriaIds(allCriteriaIdsForContest);
+        } else {
+          setJudgePermissionsMode("custom");
+          setJudgePermissionsCriteriaIds(uniqueCriteriaUnlocks);
+        }
+      } else {
+        setJudgePermissionsMode("custom");
+        setJudgePermissionsCriteriaIds(uniqueCriteriaUnlocks);
+      }
     }
   }, [
     selectedContestIdForPermissions,
@@ -1118,8 +1377,10 @@ export default function TabulatorPage() {
     judgeDivisionPermissions,
     judgeParticipantPermissions,
     judgeScoringPermissions,
-    judgesForActiveEvent,
+    judgesForSelectedEvent,
+    criteriaList,
   ]);
+
 
   if (isLoading) {
     return (
@@ -1158,12 +1419,7 @@ export default function TabulatorPage() {
     );
   }
 
-  const handlePrint = () => {
-    if (typeof window === "undefined") {
-      return;
-    }
-    window.print();
-  };
+  
 
   const headerTitle =
     tabulator && event
@@ -1349,7 +1605,7 @@ export default function TabulatorPage() {
 
                   {activeView === "overall" && (
                     <div className="flex flex-col gap-6">
-                      <div className="overflow-hidden rounded-2xl border border-[#E2E8F0] bg-white">
+                      <div ref={overallTableRef} className="overflow-hidden rounded-2xl border border-[#E2E8F0] bg-white">
                         <table className="min-w-full border-collapse text-left text-sm">
                           <thead className="bg-[#F5F7FF] text-xs font-semibold uppercase tracking-wide text-[#1F4D3A]">
                             <tr>
@@ -1482,7 +1738,7 @@ export default function TabulatorPage() {
                             available.
                           </div>
                         ) : (
-                          <div className="overflow-hidden rounded-2xl border border-[#E2E8F0] bg-white">
+                          <div ref={awardsTableRef} className="overflow-hidden rounded-2xl border border-[#E2E8F0] bg-white">
                             <table className="min-w-full border-collapse text-left text-sm">
                               <thead className="bg-[#F5F7FF] text-xs font-semibold uppercase tracking-wide text-[#1F4D3A]">
                                 <tr>
@@ -1604,7 +1860,9 @@ export default function TabulatorPage() {
 
           {activeTab === "access" && (
             <section className="relative space-y-4 rounded-3xl border border-[#1F4D3A1F] bg-white/95 p-6 shadow-[0_18px_45_rgba(0,0,0,0.05)]">
-              <div className="mb-2">
+
+
+                  <div className="mb-2">
                 <h2 className="text-sm font-semibold tracking-tight text-[#1F4D3A]">
                   Judge scoring access
                 </h2>
@@ -1621,8 +1879,8 @@ export default function TabulatorPage() {
                     </div>
                     <MultiSelectDropdown
                       placeholder="Select judge(s)"
-                      disabled={judgesForActiveEvent.length === 0}
-                      options={judgesForActiveEvent.map((judge) => ({
+                      disabled={judgesForSelectedEvent.length === 0}
+                      options={judgesForSelectedEvent.map((judge) => ({
                         id: judge.id,
                         label: judge.full_name,
                       }))}
@@ -1654,7 +1912,7 @@ export default function TabulatorPage() {
                       className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
                     >
                       <option value="">Select contest</option>
-                      {contestsForActiveEvent.map((contest) => (
+                      {contestsForSelectedEvent.map((contest) => (
                         <option key={contest.id} value={contest.id}>
                           {contest.name}
                         </option>
@@ -1709,7 +1967,7 @@ export default function TabulatorPage() {
                       options={
                         selectedContestIdForPermissions === null
                           ? []
-                          : participants
+                          : participantsForSelectedEvent
                               .filter(
                                 (participant) =>
                                   participant.contest_id ===
@@ -1869,14 +2127,30 @@ export default function TabulatorPage() {
                           return;
                         }
                         const supabase = createClient(supabaseUrl, supabaseAnonKey);
-                        const judgeIds =
+                        // collect the judge IDs we plan to update
+                        let judgeIds =
                           selectedJudgeIdsForPermissions.length === 0
                             ? judgesForActiveEvent.map((judge) => judge.id)
-                            : selectedJudgeIdsForPermissions;
+                            : [...selectedJudgeIdsForPermissions];
+
+                        // guard against stale/invalid ids (e.g. judge has been deleted)
+                        const initialLength = judgeIds.length;
+                        judgeIds = judgeIds.filter((id) =>
+                          judgesForActiveEvent.some((j) => j.id === id),
+                        );
+
                         if (judgeIds.length === 0) {
-                          setJudgePermissionsError("There are no judges for this event.");
+                          setJudgePermissionsError(
+                            "There are no valid judges for this event.",
+                          );
                           setIsSavingJudgePermissions(false);
                           return;
+                        }
+                        if (judgeIds.length < initialLength) {
+                          // some selected judges were removed from the event list
+                          setJudgePermissionsError(
+                            "Some selected judges are no longer valid and were ignored.",
+                          );
                         }
 
                         // 1. Update Scoring Permissions
@@ -1912,20 +2186,13 @@ export default function TabulatorPage() {
                         }
 
                         if (scoringInserts.length > 0) {
-                          const { data: sData, error: sErr } = await supabase
+                          const { error: sErr } = await supabase
                             .from("judge_scoring_permission")
-                            .insert(scoringInserts)
-                            .select();
+                            .insert(scoringInserts);
                           if (sErr) {
                             setJudgePermissionsError(sErr.message);
                             setIsSavingJudgePermissions(false);
                             return;
-                          }
-                          if (sData) {
-                            setJudgeScoringPermissions(prev => [
-                              ...prev.filter(p => !(judgeIds.includes(p.judge_id) && p.contest_id === selectedContestIdForPermissions)),
-                              ...sData
-                            ]);
                           }
                         }
 
@@ -1944,20 +2211,13 @@ export default function TabulatorPage() {
                           const divInserts = judgeIds.flatMap(jId => judgeDivisionIds.map(dId => ({
                             judge_id: jId, contest_id: selectedContestIdForPermissions, division_id: dId
                           })));
-                          const { data: dData, error: dErr } = await supabase
+                          const { error: dErr } = await supabase
                             .from("judge_division_permission")
-                            .insert(divInserts)
-                            .select();
+                            .insert(divInserts);
                           if (dErr) {
                             setJudgePermissionsError(dErr.message);
                             setIsSavingJudgePermissions(false);
                             return;
-                          }
-                          if (dData) {
-                            setJudgeDivisionPermissions(prev => [
-                              ...prev.filter(p => !(judgeIds.includes(p.judge_id) && p.contest_id === selectedContestIdForPermissions)),
-                              ...dData
-                            ]);
                           }
                         }
 
@@ -1976,25 +2236,25 @@ export default function TabulatorPage() {
                           const partInserts = judgeIds.flatMap(jId => judgeParticipantIds.map(pId => ({
                             judge_id: jId, contest_id: selectedContestIdForPermissions, participant_id: pId
                           })));
-                          const { data: pData, error: pErr } = await supabase
+                          const { error: pErr } = await supabase
                             .from("judge_participant_permission")
-                            .insert(partInserts)
-                            .select();
+                            .insert(partInserts);
                           if (pErr) {
                             setJudgePermissionsError(pErr.message);
                             setIsSavingJudgePermissions(false);
                             return;
                           }
-                          if (pData) {
-                            setJudgeParticipantPermissions(prev => [
-                              ...prev.filter(p => !(judgeIds.includes(p.judge_id) && p.contest_id === selectedContestIdForPermissions)),
-                              ...pData
-                            ]);
-                          }
                         }
 
+                        // clear earlier validation errors now that save succeeded
+                        setJudgePermissionsError(null);
                         setJudgePermissionsSuccess("Access permissions updated successfully.");
                         setIsSavingJudgePermissions(false);
+                        
+                        // auto-clear success message after 3 seconds
+                        setTimeout(() => {
+                          setJudgePermissionsSuccess(null);
+                        }, 3000);
                       }}
                       className="inline-flex items-center rounded-full bg-[#1F4D3A] px-6 py-2 text-xs font-semibold text-white shadow-sm transition hover:bg-[#163528] disabled:opacity-50"
                     >
