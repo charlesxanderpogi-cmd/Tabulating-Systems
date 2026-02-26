@@ -90,7 +90,18 @@ export default function Home() {
           <div className="absolute -right-10 bottom-0 h-44 w-44 rounded-full bg-[#F4C43012] blur-3xl" />
         </div>
 
+        {/* display the custom logo instead of the default Vercel graphic */}
         <header className="relative mb-6 space-y-1 text-center">
+          <div className="flex justify-center mb-2">
+            <img
+              src="/logo.svg"
+              alt="Tabulating System logo"
+              width={120}
+              height={60}
+              className="inline-block"
+            />
+          </div>
+
           <h1 className="text-[28px] font-semibold tracking-tight text-[#1F4D3A]">
             Tabulating System
           </h1>
