@@ -308,6 +308,7 @@ export default function TabulatorPage() {
   const [judgeParticipantMode, setJudgeParticipantMode] =
     useState<"all" | "custom">("all");
   const [judgeParticipantIds, setJudgeParticipantIds] = useState<number[]>([]);
+  const [signatures, setSignatures] = useState<Array<{ title: string; name: string }>>([]);
 
   useEffect(() => {
     let channel: ReturnType<
@@ -1206,33 +1207,78 @@ export default function TabulatorPage() {
       return;
     }
 
-    const titleText = headerTitle + (activeContest ? ` — ${activeContest.name}` : "");
-    const awardsText = awardsForActiveContest.map((a) => a.name).join("\n");
+    const eventTitle = headerTitle;
+    
+    // Get division name if filtering by a specific division
+    let divisionName = "";
+    if (activeDivisionFilterId !== "all" && typeof activeDivisionFilterId === "number") {
+      const division = categoriesForActiveEvent.find(c => c.id === activeDivisionFilterId);
+      if (division) {
+        divisionName = ` (${division.name})`;
+      }
+    }
+    
+    // Get the selected award title if in awards view, otherwise show all awards
+    let awardTitle = "";
+    if (activeView === "awards") {
+      if (activeAwardFilterId !== "all" && selectedAwardResult) {
+        awardTitle = selectedAwardResult.award.name + divisionName;
+      } else if (activeAwardFilterId === "all") {
+        awardTitle = awardsForActiveContest.map((a) => a.name).join("\n") + divisionName;
+      }
+    }
+
+    // Generate signatures HTML
+    const signaturesHtml = signatures.length > 0 ? `
+      <div class="signatures-section">
+        <div class="signatures-grid">
+          ${signatures.map((sig) => `
+            <div class="signature-item">
+              <div class="signature-line"></div>
+              <div class="signature-name">${escapeHtml(sig.name)}</div>
+              <div class="signature-title">${escapeHtml(sig.title)}</div>
+            </div>
+          `).join("")}
+        </div>
+      </div>
+    ` : "";
 
     const html = `<!doctype html>
       <html>
       <head>
         <meta charset="utf-8" />
-        <title>${escapeHtml(titleText)}</title>
+        <title>${escapeHtml(eventTitle)}</title>
         <style>
+          @page { margin-top: 1.75in; margin-bottom: 0.5in; margin-left: 0.5in; margin-right: 0.5in; }
+          @media print { 
+            body { margin: 0; padding: 0; } 
+            .header-space { display: none; }
+          }
           html,body{margin:0;padding:0;font-family:Inter, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial; color:#111827}
           .print-container{padding:20px;}
-          .header-space{height:80px}
-          .footer-space{height:60px}
-          .title{font-size:20px;font-weight:700;color:#1F4D3A;margin-bottom:6px}
-          .awards{font-size:12px;color:#374151;white-space:pre-wrap;margin-bottom:12px}
+          .footer-space{height:40px}
+          .event-title{font-size:18px;font-weight:700;color:#1F4D3A;margin-bottom:12px;text-align:center}
+          .award-title{font-size:14px;font-weight:600;color:#1F4D3A;margin-bottom:12px;white-space:pre-wrap;border-top:1px solid #E2E8F0;padding-top:8px}
           table{width:100%;border-collapse:collapse;font-size:12px}
           thead{background:#F5F7FF;color:#1F4D3A;text-transform:uppercase;font-weight:700}
-          th,td{padding:10px;border-bottom:1px solid #E6EEF3;text-align:left}
+          th,td{padding:10px;border-bottom:1px solid #E6EEF3;text-align:left;text-decoration:none}
           td.text-right, th.text-right{text-align:right}
+          a{text-decoration:none;color:#111827}
+          button{display:none}
+          .signatures-section{margin-top:60px;padding-top:40px;border-top:2px solid #E2E8F0;display:flex;justify-content:center}
+          .signatures-grid{display:flex;flex-wrap:wrap;justify-content:center;gap:60px;margin-top:40px;max-width:100%}
+          .signature-item{text-align:center;width:140px;flex-shrink:0}
+          .signature-line{border-top:1px solid #111827;margin-bottom:2px;width:100%}
+          .signature-name{font-size:11px;font-weight:600;color:#111827;margin-bottom:2px;text-decoration:none}
+          .signature-title{font-size:10px;color:#6B7280;font-style:italic;text-decoration:none}
         </style>
       </head>
       <body>
         <div class="print-container">
-          <div class="header-space"></div>
-          <div class="title">${escapeHtml(titleText)}</div>
-          <div class="awards">${escapeHtml(awardsText)}</div>
+          <div class="event-title">${escapeHtml(eventTitle)}</div>
+          ${awardTitle ? `<div class="award-title">${escapeHtml(awardTitle)}</div>` : ""}
           <div class="table-root">${contentEl.innerHTML}</div>
+          ${signaturesHtml}
           <div class="footer-space"></div>
         </div>
         <script>
@@ -1850,6 +1896,76 @@ export default function TabulatorPage() {
                           </div>
                         )}
                       </div>
+                    </div>
+                  )}
+
+                  {/* Signature Management Section - appears under the rankings tables */}
+                  {rankings.length > 0 && (
+                    <div className="rounded-2xl border border-[#E2E8F0] bg-white p-6">
+                      <div className="mb-4 flex items-center justify-between">
+                        <h3 className="text-sm font-semibold text-[#1F4D3A]">Signatures</h3>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const newSig = { title: "", name: "" };
+                            setSignatures([...signatures, newSig]);
+                          }}
+                          className="rounded-full bg-[#1F4D3A] px-3 py-1.5 text-xs font-medium text-white hover:bg-[#1a3a2f]"
+                        >
+                          + Add signature
+                        </button>
+                      </div>
+                      {signatures.length === 0 ? (
+                        <div className="text-[11px] text-slate-500">
+                          No signatures added. They will appear at the bottom when you print.
+                        </div>
+                      ) : (
+                        <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+                          {signatures.map((sig, index) => (
+                            <div key={index} className="flex flex-col gap-3">
+                              <div className="flex gap-2">
+                                <input
+                                  type="text"
+                                  placeholder="Title"
+                                  value={sig.title}
+                                  onChange={(e) => {
+                                    const updated = [...signatures];
+                                    updated[index].title = e.target.value;
+                                    setSignatures(updated);
+                                  }}
+                                  className="flex-1 rounded-lg border border-[#E2E8F0] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const updated = signatures.filter((_, i) => i !== index);
+                                    setSignatures(updated);
+                                  }}
+                                  className="rounded-lg border border-[#C0392B] px-3 py-2 text-xs font-medium text-[#C0392B] hover:bg-[#FDECEA]"
+                                >
+                                  Remove
+                                </button>
+                              </div>
+                              <input
+                                type="text"
+                                placeholder="Name"
+                                value={sig.name}
+                                onChange={(e) => {
+                                  const updated = [...signatures];
+                                  updated[index].name = e.target.value;
+                                  setSignatures(updated);
+                                }}
+                                className="w-full rounded-lg border border-[#E2E8F0] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                              />
+                              {/* Preview of signature as it will appear in print */}
+                              <div className="mt-2 flex flex-col items-center border-t-2 border-slate-800 pt-2">
+                                <div className="text-xs font-medium text-slate-800">{sig.name}</div>
+                                <div className="text-[11px] text-slate-500">{sig.title}</div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>

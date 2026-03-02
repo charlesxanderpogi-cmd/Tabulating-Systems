@@ -571,6 +571,8 @@ type ParticipantRow = {
   contestant_number: string;
   created_at: string;
   avatar_url: string | null;
+  card_url: string | null;
+  gallery_photos: string | null;
 };
 
 type AdminRow = {
@@ -996,6 +998,14 @@ export default function AdminDashboard() {
     h: number;
   } | null>(null);
   const [isUploadingParticipantAvatar, setIsUploadingParticipantAvatar] =
+    useState(false);
+  const [participantCardUrl, setParticipantCardUrl] = useState("");
+  const [isUploadingParticipantCard, setIsUploadingParticipantCard] =
+    useState(false);
+  const [participantGalleryPhotos, setParticipantGalleryPhotos] = useState<
+    string[]
+  >([]);
+  const [isUploadingParticipantGallery, setIsUploadingParticipantGallery] =
     useState(false);
   const [isSavingParticipant, setIsSavingParticipant] = useState(false);
   const [participantError, setParticipantError] = useState<string | null>(null);
@@ -2176,6 +2186,8 @@ export default function AdminDashboard() {
     setParticipantFullName("");
     setParticipantNumber("");
     setParticipantAvatarUrl("");
+    setParticipantCardUrl("");
+    setParticipantGalleryPhotos([]);
     setParticipantAvatarZoom(1);
     setParticipantAvatarImageDims(null);
     setParticipantError(null);
@@ -2196,6 +2208,10 @@ export default function AdminDashboard() {
     setParticipantFullName(participant.full_name);
     setParticipantNumber(participant.contestant_number);
     setParticipantAvatarUrl(participant.avatar_url ?? "");
+    setParticipantCardUrl(participant.card_url ?? "");
+    setParticipantGalleryPhotos(
+      participant.gallery_photos ? JSON.parse(participant.gallery_photos) : []
+    );
     setParticipantAvatarZoom(1);
     setParticipantAvatarImageDims(null);
     setParticipantError(null);
@@ -4950,9 +4966,11 @@ export default function AdminDashboard() {
           full_name: participantFullName.trim(),
           contestant_number: normalizedNumber,
           avatar_url: participantAvatarUrl.trim() || null,
+          card_url: participantCardUrl.trim() || null,
+          gallery_photos: participantGalleryPhotos.length > 0 ? JSON.stringify(participantGalleryPhotos) : null,
         })
         .select(
-          "id, contest_id, division_id, team_id, full_name, contestant_number, created_at, avatar_url",
+          "id, contest_id, division_id, team_id, full_name, contestant_number, created_at, avatar_url, card_url, gallery_photos",
         );
 
       setIsSavingParticipant(false);
@@ -4987,10 +5005,12 @@ export default function AdminDashboard() {
           full_name: participantFullName.trim(),
           contestant_number: normalizedNumber,
           avatar_url: participantAvatarUrl.trim() || null,
+          card_url: participantCardUrl.trim() || null,
+          gallery_photos: participantGalleryPhotos.length > 0 ? JSON.stringify(participantGalleryPhotos) : null,
         })
         .eq("id", editingParticipantId)
         .select(
-          "id, contest_id, division_id, team_id, full_name, contestant_number, created_at, avatar_url",
+          "id, contest_id, division_id, team_id, full_name, contestant_number, created_at, avatar_url, card_url, gallery_photos",
         );
 
       setIsSavingParticipant(false);
@@ -5027,6 +5047,8 @@ export default function AdminDashboard() {
     setParticipantFullName("");
     setParticipantNumber("");
     setParticipantAvatarUrl("");
+    setParticipantCardUrl("");
+    setParticipantGalleryPhotos([]);
     setEditingParticipantId(null);
     setIsParticipantModalOpen(false);
   };
@@ -11444,6 +11466,305 @@ export default function AdminDashboard() {
                       </div>
                     </div>
                   </div>
+                  <div className="space-y-2">
+                    <div className="text-[10px] text-slate-500">Card Image</div>
+                    <div className="flex flex-col items-center gap-3 rounded-2xl border border-[#E2E8F0] bg-[#F8FAFC] px-4 py-3">
+                      <div className="flex h-48 w-48 items-center justify-center overflow-hidden rounded-lg bg-[#E3F2EA] text-[11px] font-semibold text-[#1F4D3A] shadow-sm">
+                        {participantCardUrl ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            src={participantCardUrl}
+                            alt={
+                              participantFullName ||
+                              "Participant card preview"
+                            }
+                            className="h-full w-full object-cover"
+                          />
+                        ) : (
+                          "No card image"
+                        )}
+                      </div>
+                      <div className="flex w-full flex-col gap-1 text-left">
+                        <input
+                          type="file"
+                          accept="image/*"
+                          disabled={isUploadingParticipantCard}
+                          onChange={async (event) => {
+                            let file = event.target.files?.[0];
+
+                            if (!file) {
+                              return;
+                            }
+
+                            // resize/compress client-side before upload
+                            const processImage = (file: File): Promise<Blob> =>
+                              new Promise((resolve, reject) => {
+                                const img = new Image();
+                                img.onload = () => {
+                                  const MAX_DIM = 1024;
+                                  let w = img.width;
+                                  let h = img.height;
+                                  if (w > MAX_DIM || h > MAX_DIM) {
+                                    const ratio = Math.min(
+                                      MAX_DIM / w,
+                                      MAX_DIM / h,
+                                    );
+                                    w = w * ratio;
+                                    h = h * ratio;
+                                  }
+                                  const canvas = document.createElement("canvas");
+                                  canvas.width = w;
+                                  canvas.height = h;
+                                  const ctx = canvas.getContext("2d");
+                                  if (!ctx) {
+                                    reject(new Error("Cannot get canvas context"));
+                                    return;
+                                  }
+                                  ctx.drawImage(img, 0, 0, w, h);
+                                  canvas.toBlob(
+                                    (blob) => {
+                                      if (blob) resolve(blob);
+                                      else reject(new Error("Blob creation failed"));
+                                    },
+                                    "image/jpeg",
+                                    0.8,
+                                  );
+                                };
+                                img.onerror = reject;
+                                img.src = URL.createObjectURL(file);
+                              });
+
+                            try {
+                              file = (await processImage(file)) as File;
+                            } catch (err) {
+                              // fallback to original if processing fails
+                            }
+
+                            const cloudName =
+                              process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME;
+                            const uploadPreset =
+                              process.env.NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET;
+
+                            if (!cloudName || !uploadPreset) {
+                              setParticipantError(
+                                "Cloudinary is not configured for uploads.",
+                              );
+                              return;
+                            }
+
+                            setParticipantError(null);
+                            setIsUploadingParticipantCard(true);
+
+                            try {
+                              const formData = new FormData();
+                              formData.append("file", file);
+                              formData.append("upload_preset", uploadPreset);
+
+                              const response = await fetch(
+                                `https://api.cloudinary.com/v1_1/${cloudName}/image/upload`,
+                                {
+                                  method: "POST",
+                                  body: formData,
+                                },
+                              );
+
+                              if (!response.ok) {
+                                setParticipantError(
+                                  "Unable to upload card. Please try again.",
+                                );
+                                setIsUploadingParticipantCard(false);
+                                return;
+                              }
+
+                              const json = (await response.json()) as {
+                                secure_url?: string;
+                              };
+
+                              if (!json.secure_url) {
+                                setParticipantError(
+                                  "Upload did not return an image URL.",
+                                );
+                                setIsUploadingParticipantCard(false);
+                                return;
+                              }
+
+                              setParticipantCardUrl(json.secure_url);
+                            } catch {
+                              setParticipantError(
+                                "Unexpected error while uploading card.",
+                              );
+                            } finally {
+                              setIsUploadingParticipantCard(false);
+                            }
+                          }}
+                          className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition file:mr-3 file:rounded-full file:border-0 file:bg-[#1F4D3A] file:px-3 file:py-1 file:text-[10px] file:font-medium file:text-white hover:file:bg-[#163528] focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                        />
+                        {participantCardUrl && (
+                          <div className="text-[10px] text-slate-500">
+                            Card image uploaded.
+                          </div>
+                        )}
+                        {isUploadingParticipantCard && (
+                          <div className="text-[10px] text-slate-500">
+                            Uploading card…
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <div className="text-[10px] text-slate-500">Gallery Photos</div>
+                    <div className="flex flex-col gap-3 rounded-2xl border border-[#E2E8F0] bg-[#F8FAFC] px-4 py-3">
+                      <div className="flex flex-wrap gap-2">
+                        {participantGalleryPhotos.map((photo, index) => (
+                          <div
+                            key={index}
+                            className="relative h-24 w-24 rounded-lg overflow-hidden border border-[#E2E8F0]"
+                          >
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img
+                              src={photo}
+                              alt={`Gallery photo ${index + 1}`}
+                              className="h-full w-full object-cover"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setParticipantGalleryPhotos((prev) =>
+                                  prev.filter((_, i) => i !== index)
+                                );
+                              }}
+                              className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full bg-red-500/80 text-[10px] text-white hover:bg-red-600"
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        disabled={isUploadingParticipantGallery}
+                        onChange={async (event) => {
+                          let file = event.target.files?.[0];
+
+                          if (!file) {
+                            return;
+                          }
+
+                          // resize/compress client-side before upload
+                          const processImage = (file: File): Promise<Blob> =>
+                            new Promise((resolve, reject) => {
+                              const img = new Image();
+                              img.onload = () => {
+                                const MAX_DIM = 1024;
+                                let w = img.width;
+                                let h = img.height;
+                                if (w > MAX_DIM || h > MAX_DIM) {
+                                  const ratio = Math.min(
+                                    MAX_DIM / w,
+                                    MAX_DIM / h,
+                                  );
+                                  w = w * ratio;
+                                  h = h * ratio;
+                                }
+                                const canvas = document.createElement("canvas");
+                                canvas.width = w;
+                                canvas.height = h;
+                                const ctx = canvas.getContext("2d");
+                                if (!ctx) {
+                                  reject(new Error("Cannot get canvas context"));
+                                  return;
+                                }
+                                ctx.drawImage(img, 0, 0, w, h);
+                                canvas.toBlob(
+                                  (blob) => {
+                                    if (blob) resolve(blob);
+                                    else reject(new Error("Blob creation failed"));
+                                  },
+                                  "image/jpeg",
+                                  0.8,
+                                );
+                              };
+                              img.onerror = reject;
+                              img.src = URL.createObjectURL(file);
+                            });
+
+                          try {
+                            file = (await processImage(file)) as File;
+                          } catch (err) {
+                            // fallback to original if processing fails
+                          }
+
+                          const cloudName =
+                            process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME;
+                          const uploadPreset =
+                            process.env.NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET;
+
+                          if (!cloudName || !uploadPreset) {
+                            setParticipantError(
+                              "Cloudinary is not configured for uploads.",
+                            );
+                            return;
+                          }
+
+                          setParticipantError(null);
+                          setIsUploadingParticipantGallery(true);
+
+                          try {
+                            const formData = new FormData();
+                            formData.append("file", file);
+                            formData.append("upload_preset", uploadPreset);
+
+                            const response = await fetch(
+                              `https://api.cloudinary.com/v1_1/${cloudName}/image/upload`,
+                              {
+                                method: "POST",
+                                body: formData,
+                              },
+                            );
+
+                            if (!response.ok) {
+                              setParticipantError(
+                                "Unable to upload gallery photo. Please try again.",
+                              );
+                              setIsUploadingParticipantGallery(false);
+                              return;
+                            }
+
+                            const json = (await response.json()) as {
+                              secure_url?: string;
+                            };
+
+                            if (!json.secure_url) {
+                              setParticipantError(
+                                "Upload did not return an image URL.",
+                              );
+                              setIsUploadingParticipantGallery(false);
+                              return;
+                            }
+
+                              setParticipantGalleryPhotos((prev) => [
+                                ...prev,
+                                json.secure_url as string,
+                              ]);
+                          } catch {
+                            setParticipantError(
+                              "Unexpected error while uploading gallery photo.",
+                            );
+                          } finally {
+                            setIsUploadingParticipantGallery(false);
+                          }
+                        }}
+                        className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition file:mr-3 file:rounded-full file:border-0 file:bg-[#1F4D3A] file:px-3 file:py-1 file:text-[10px] file:font-medium file:text-white hover:file:bg-[#163528] focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                      />
+                      {isUploadingParticipantGallery && (
+                        <div className="text-[10px] text-slate-500">
+                          Uploading gallery photo…
+                        </div>
+                      )}
+                    </div>
+                  </div>
                 </div>
                 {(participantError || participantSuccess) && (
                   <div
@@ -12421,6 +12742,215 @@ export default function AdminDashboard() {
             </div>
           </section>
         )}
+        {/* Add Participant Modal Content */}
+        {isParticipantModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30">
+            <div className="w-full max-w-3xl rounded-2xl bg-white shadow-lg">
+              <div className="flex items-center justify-between border-b px-6 py-4">
+                <div className="text-[13px] font-semibold text-[#1F4D3A]">
+                  {editingParticipantId === null ? "Add Participant" : "Edit Participant"}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsParticipantModalOpen(false)}
+                  className="text-[13px] text-slate-500 hover:text-[#1F4D3A]"
+                >
+                  ✕
+                </button>
+              </div>
+              <div className="px-6 py-4 text-[11px]">
+                <div className="grid items-start gap-6 md:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
+                  <div className="space-y-3">
+                    <div className="space-y-1">
+                      <div className="text-[10px] text-slate-500">Select Event</div>
+                      <select
+                        value={selectedEventIdForParticipant ?? ""}
+                        onChange={(event) => {
+                          const value = event.target.value;
+                          setSelectedEventIdForParticipant(value ? Number(value) : null);
+                          setSelectedContestIdForParticipant(null);
+                        }}
+                        className="w-full max-w-[420px] rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                      >
+                        <option value="">-- Choose an event --</option>
+                        {events.filter((e) => e.is_active).map((event) => (
+                          <option key={event.id} value={event.id}>
+                            {event.name} ({event.year})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="space-y-1">
+                      <div className="text-[10px] text-slate-500">Select contest</div>
+                      <select
+                        value={selectedContestIdForParticipant ?? ""}
+                        onChange={(event) => {
+                          const value = event.target.value;
+                          setSelectedContestIdForParticipant(
+                            value ? Number(value) : null,
+                          );
+                        }}
+                        className="w-full max-w-[420px] rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                      >
+                        <option value="">Select contest</option>
+                        {contests
+                          .filter((contest) =>
+                            (selectedEventIdForParticipant ?? activeEventId) === null
+                              ? true
+                              : contest.event_id === (selectedEventIdForParticipant ?? activeEventId),
+                          )
+                          .map((contest) => (
+                            <option key={contest.id} value={contest.id}>
+                              {contest.name}
+                            </option>
+                          ))}
+                      </select>
+                    </div>
+                    <div className="space-y-1">
+                      <div className="text-[10px] text-slate-500">
+                        Full name
+                      </div>
+                      <input
+                        value={participantFullName}
+                        onChange={(event) =>
+                          setParticipantFullName(event.target.value)
+                        }
+                        className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                        placeholder="Full name"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <div className="text-[10px] text-slate-500">
+                        Contestant number
+                      </div>
+                      <input
+                        value={participantNumber}
+                        onChange={(event) =>
+                          setParticipantNumber(event.target.value)
+                        }
+                        className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                        placeholder="Contestant number"
+                      />
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <div className="text-[10px] text-slate-500">Avatar</div>
+                    <div className="flex flex-col items-center gap-3 rounded-2xl border border-[#E2E8F0] bg-[#F8FAFC] px-4 py-3">
+                      <div className="flex h-48 w-48 items-center justify-center overflow-hidden rounded-lg bg-[#E3F2EA] text-[11px] font-semibold text-[#1F4D3A] shadow-sm">
+                        {participantAvatarUrl ? (
+                          <img
+                            src={participantAvatarUrl}
+                            alt={
+                              participantFullName ||
+                              "Participant avatar preview"
+                            }
+                            className="h-full w-full object-cover"
+                          />
+                        ) : (
+                          "Preview"
+                        )}
+                      </div>
+                      <div className="flex w-full flex-col gap-1 text-left">
+                        <input
+                          type="file"
+                          accept="image/*"
+                          disabled={isUploadingParticipantAvatar}
+                          onChange={handleAvatarUpload}
+                          className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition file:mr-3 file:rounded-full file:border-0 file:bg-[#1F4D3A] file:px-3 file:py-1 file:text-[10px] file:font-medium file:text-white hover:file:bg-[#163528] focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                        />
+                        {participantAvatarUrl && (
+                          <button
+                            type="button"
+                            onClick={() => setParticipantAvatarUrl("")}
+                            className="text-[10px] text-red-500 hover:underline"
+                          >
+                            Remove
+                          </button>
+                        )}
+                        {isUploadingParticipantAvatar && (
+                          <div className="text-[10px] text-slate-500">
+                            Uploading avatar…
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <div className="text-[10px] text-slate-500">Card Image</div>
+                    <div className="flex flex-col items-center gap-3 rounded-2xl border border-[#E2E8F0] bg-[#F8FAFC] px-4 py-3">
+                      <div className="flex h-48 w-48 items-center justify-center overflow-hidden rounded-lg bg-[#E3F2EA] text-[11px] font-semibold text-[#1F4D3A] shadow-sm">
+                        {participantCardUrl ? (
+                          <img
+                            src={participantCardUrl}
+                            alt={
+                              participantFullName ||
+                              "Participant card preview"
+                            }
+                            className="h-full w-full object-cover"
+                          />
+                        ) : (
+                          "No card image"
+                        )}
+                      </div>
+                      <div className="flex w-full flex-col gap-1 text-left">
+                        <input
+                          type="file"
+                          accept="image/*"
+                          disabled={isUploadingParticipantCard}
+                          onChange={handleCardUpload}
+                          className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition file:mr-3 file:rounded-full file:border-0 file:bg-[#1F4D3A] file:px-3 file:py-1 file:text-[10px] file:font-medium file:text-white hover:file:bg-[#163528] focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                        />
+                        {participantCardUrl && (
+                          <button
+                            type="button"
+                            onClick={() => setParticipantCardUrl("")}
+                            className="text-[10px] text-red-500 hover:underline"
+                          >
+                            Remove
+                          </button>
+                        )}
+                        {isUploadingParticipantCard && (
+                          <div className="text-[10px] text-slate-500">
+                            Uploading card image…
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                {/* Add validation and error display here if needed */}
+                {participantError && (
+                  <div className="mt-4 text-[11px] text-red-500">{participantError}</div>
+                )}
+                {participantSuccess && (
+                  <div className="mt-4 text-[11px] text-green-600">{participantSuccess}</div>
+                )}
+                <div className="mt-6 flex justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={handleSaveParticipant}
+                    disabled={isSavingParticipant}
+                    className="rounded-xl bg-[#1F4D3A] px-4 py-2 text-[12px] font-semibold text-white transition hover:bg-[#163528] disabled:opacity-50"
+                  >
+                    {isSavingParticipant
+                      ? "Saving…"
+                      : editingParticipantId === null
+                      ? "Add Participant"
+                      : "Update Participant"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setIsParticipantModalOpen(false)}
+                    className="rounded-xl bg-slate-200 px-4 py-2 text-[12px] font-semibold text-slate-700 transition hover:bg-slate-300"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
       </main>
     </div>
   );

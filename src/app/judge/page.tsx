@@ -147,6 +147,8 @@ type ParticipantRow = {
   contestant_number: string;
   created_at: string;
   avatar_url: string | null;
+  card_url: string | null;
+  gallery_photos: string | null;
   gender: string | null;
   team_id: number | null;
 };
@@ -284,6 +286,9 @@ export default function JudgeDashboardPage() {
   const [activeAwardFilterId, setActiveAwardFilterId] = useState<
     number | "all"
   >("all");
+  const [isGalleryModalOpen, setIsGalleryModalOpen] = useState(false);
+  const [galleryPhotos, setGalleryPhotos] = useState<string[]>([]);
+  const [currentGalleryPhotoIndex, setCurrentGalleryPhotoIndex] = useState(0);
   const activeContestIdRef = useRef<number | null>(null);
 
   useEffect(() => {
@@ -495,7 +500,7 @@ export default function JudgeDashboardPage() {
           supabase
             .from("participant")
             .select(
-              "id, contest_id, division_id, full_name, contestant_number, created_at, avatar_url, gender, team_id",
+              "id, contest_id, division_id, full_name, contestant_number, created_at, avatar_url, card_url, gallery_photos, gender, team_id",
             )
             .in("contest_id", contestIds),
           supabase
@@ -1450,6 +1455,17 @@ export default function JudgeDashboardPage() {
     [categories],
   );
 
+  const participantTeamName = useCallback(
+    (participant: ParticipantRow) => {
+      if (!participant.team_id) {
+        return null;
+      }
+      const team = teams.find((team) => team.id === participant.team_id);
+      return team ? team.name : null;
+    },
+    [teams],
+  );
+
   const participantInitials = (fullName: string) => {
     const parts = fullName.split(" ").filter(Boolean);
 
@@ -2246,7 +2262,13 @@ export default function JudgeDashboardPage() {
                                         : undefined
                                     }
                                   >
-                                    {participant.avatar_url ? (
+                                    {participant.card_url ? (
+                                      <img
+                                        src={participant.card_url}
+                                        alt={participant.full_name}
+                                        className="h-full w-full object-cover transition duration-200 group-hover:scale-105"
+                                      />
+                                    ) : participant.avatar_url ? (
                                       <img
                                         src={participant.avatar_url}
                                         alt={participant.full_name}
@@ -2361,7 +2383,25 @@ export default function JudgeDashboardPage() {
               }
             >
               <div className="flex items-center gap-3 md:gap-4">
-                <div className="flex h-20 w-20 items-center justify-center overflow-hidden rounded-full bg-[#E2F3EC] text-lg font-semibold text-[#1F4D3A] shadow-sm md:h-24 md:w-24 md:text-xl">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (currentParticipant.gallery_photos) {
+                      const photos = JSON.parse(currentParticipant.gallery_photos) as string[];
+                      if (photos.length > 0) {
+                        setGalleryPhotos(photos);
+                        setCurrentGalleryPhotoIndex(0);
+                        setIsGalleryModalOpen(true);
+                      }
+                    }
+                  }}
+                  className={`flex h-20 w-20 items-center justify-center overflow-hidden rounded-full text-lg font-semibold text-[#1F4D3A] shadow-sm md:h-24 md:w-24 md:text-xl transition ${
+                    currentParticipant.gallery_photos 
+                      ? "bg-[#D4EBE5] hover:bg-[#C5E3DB] cursor-pointer" 
+                      : "bg-[#E2F3EC]"
+                  }`}
+                  title={currentParticipant.gallery_photos ? "Click to view gallery" : undefined}
+                >
                   {currentParticipant.avatar_url ? (
                     // eslint-disable-next-line @next/next/no-img-element
                     <img
@@ -2372,7 +2412,7 @@ export default function JudgeDashboardPage() {
                   ) : (
                     participantInitials(currentParticipant.full_name)
                   )}
-                </div>
+                </button>
                 <div className="flex flex-col gap-1 text-sm font-semibold text-slate-800 md:text-base">
                   <div className="flex flex-wrap items-center gap-2">
                     <span
@@ -2442,39 +2482,25 @@ export default function JudgeDashboardPage() {
                       {participantCategoryName(currentParticipant)}
                     </span>
                   </div>
-                  <div className="flex flex-wrap items-center gap-2 text-xs font-normal md:text-sm text-slate-500">
-                    <span
-                      style={
-                        contestLayoutTheme?.modalHeaderSecondaryTextColor
-                          ? {
-                              color: hexWithOpacity(
-                                contestLayoutTheme.modalHeaderSecondaryTextColor,
-                                (contestLayoutTheme
-                                  .modalHeaderSecondaryTextColorOpacity ?? 100) /
-                                  100,
-                              ),
-                            }
-                          : undefined
-                      }
-                    >
-                      Contest:
-                    </span>
-                    <span
-                      style={
-                        contestLayoutTheme?.modalHeaderPrimaryTextColor
-                          ? {
-                              color: hexWithOpacity(
-                                contestLayoutTheme.modalHeaderPrimaryTextColor,
-                                (contestLayoutTheme
-                                  .modalHeaderPrimaryTextColorOpacity ?? 100) / 100,
-                              ),
-                            }
-                          : undefined
-                      }
-                    >
-                      {activeContest.name}
-                    </span>
-                  </div>
+                  {participantTeamName(currentParticipant) && (
+                    <div className="flex flex-wrap items-center gap-2 text-xs font-normal md:text-sm text-slate-500">
+                      <span
+                        style={
+                          contestLayoutTheme?.modalHeaderPrimaryTextColor
+                            ? {
+                                color: hexWithOpacity(
+                                  contestLayoutTheme.modalHeaderPrimaryTextColor,
+                                  (contestLayoutTheme
+                                    .modalHeaderPrimaryTextColorOpacity ?? 100) / 100,
+                                ),
+                              }
+                            : undefined
+                        }
+                      >
+                        {participantTeamName(currentParticipant)}
+                      </span>
+                    </div>
+                  )}
                 </div>
               </div>
               <div className="flex items-center gap-4">
@@ -2874,6 +2900,84 @@ export default function JudgeDashboardPage() {
               </div>
             </div>
           </div>
+
+          {/* Gallery Modal */}
+          {isGalleryModalOpen && galleryPhotos.length > 0 && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 px-4">
+              <div className="relative w-full max-w-2xl rounded-2xl bg-white shadow-2xl overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => setIsGalleryModalOpen(false)}
+                  className="absolute right-4 top-4 z-10 flex h-8 w-8 items-center justify-center rounded-full bg-slate-800/80 text-white hover:bg-slate-900 transition"
+                >
+                  ✕
+                </button>
+                
+                <div className="relative">
+                  <img
+                    src={galleryPhotos[currentGalleryPhotoIndex]}
+                    alt={`Gallery photo ${currentGalleryPhotoIndex + 1}`}
+                    className="w-full h-auto max-h-[75vh] object-contain"
+                  />
+                </div>
+
+                {galleryPhotos.length > 1 && (
+                  <div className="flex items-center justify-between gap-4 border-t border-slate-200 bg-slate-50 px-6 py-4">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setCurrentGalleryPhotoIndex((prev) =>
+                          prev === 0 ? galleryPhotos.length - 1 : prev - 1,
+                        )
+                      }
+                      className="flex h-10 w-10 items-center justify-center rounded-full border border-slate-300 text-slate-600 hover:bg-white transition"
+                    >
+                      ‹
+                    </button>
+
+                    <div className="text-center text-sm text-slate-600">
+                      {currentGalleryPhotoIndex + 1} / {galleryPhotos.length}
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setCurrentGalleryPhotoIndex((prev) =>
+                          prev === galleryPhotos.length - 1 ? 0 : prev + 1,
+                        )
+                      }
+                      className="flex h-10 w-10 items-center justify-center rounded-full border border-slate-300 text-slate-600 hover:bg-white transition"
+                    >
+                      ›
+                    </button>
+                  </div>
+                )}
+
+                {galleryPhotos.length > 1 && (
+                  <div className="flex gap-2 overflow-x-auto bg-slate-100 px-4 py-3">
+                    {galleryPhotos.map((photo, index) => (
+                      <button
+                        key={index}
+                        type="button"
+                        onClick={() => setCurrentGalleryPhotoIndex(index)}
+                        className={`flex-shrink-0 h-16 w-16 rounded-lg overflow-hidden border-2 transition ${
+                          currentGalleryPhotoIndex === index
+                            ? "border-[#1F4D3A]"
+                            : "border-slate-300 hover:border-slate-400"
+                        }`}
+                      >
+                        <img
+                          src={photo}
+                          alt={`Thumbnail ${index + 1}`}
+                          className="h-full w-full object-cover"
+                        />
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
           </div>
         )}
       </div>
