@@ -147,6 +147,8 @@ type ParticipantRow = {
   contestant_number: string;
   created_at: string;
   avatar_url: string | null;
+  card_url: string | null;
+  gallery_photos: string | null;
   gender: string | null;
   team_id: number | null;
 };
@@ -276,6 +278,8 @@ export default function JudgeDashboardPage() {
   const [contestLayoutTheme, setContestLayoutTheme] =
     useState<ContestLayoutTheme | null>(null);
   const [isScoringModalOpen, setIsScoringModalOpen] = useState(false);
+  const [isGalleryModalOpen, setIsGalleryModalOpen] = useState(false);
+  const [gallerySlideIndex, setGallerySlideIndex] = useState(0);
   const [selectedJudgeForBreakdown, setSelectedJudgeForBreakdown] = useState<number | null>(null);
   const [activeTab, setActiveTab] = useState<"score" | "tabulation">("score");
   const [activeTabulationView, setActiveTabulationView] = useState<
@@ -495,7 +499,7 @@ export default function JudgeDashboardPage() {
           supabase
             .from("participant")
             .select(
-              "id, contest_id, division_id, full_name, contestant_number, created_at, avatar_url, gender, team_id",
+              "id, contest_id, division_id, full_name, contestant_number, created_at, avatar_url, card_url, gallery_photos, gender, team_id",
             )
             .in("contest_id", contestIds),
           supabase
@@ -1467,6 +1471,49 @@ export default function JudgeDashboardPage() {
     return `${first}${last}`;
   };
 
+  const scoringAvatarRef = useRef<HTMLButtonElement | null>(null);
+  const [scoringAvatarSize, setScoringAvatarSize] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
+  useEffect(() => {
+    const el = scoringAvatarRef.current;
+    if (!el) return;
+    const measure = () => {
+      setScoringAvatarSize({ w: el.offsetWidth, h: el.offsetHeight });
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [isScoringModalOpen]);
+
+  const imageTransformFromUrl = (
+    url: string | null,
+    containerW?: number,
+    containerH?: number,
+  ): React.CSSProperties => {
+    let scale = 1;
+    let txPx = 0;
+    let tyPx = 0;
+    try {
+      if (url) {
+        const u = new URL(url);
+        const tz = u.searchParams.get("tz");
+        const txStr = u.searchParams.get("tx");
+        const tyStr = u.searchParams.get("ty");
+        const txpStr = u.searchParams.get("txp");
+        const typStr = u.searchParams.get("typ");
+        scale = tz ? Number(tz) : 1;
+        if (txpStr && typStr && containerW && containerH) {
+          txPx = Number(txpStr) * containerW;
+          tyPx = Number(typStr) * containerH;
+        } else {
+          txPx = txStr ? Number(txStr) : 0;
+          tyPx = tyStr ? Number(tyStr) : 0;
+        }
+      }
+    } catch {}
+    return { transform: `translate(${txPx}px, ${tyPx}px) scale(${scale})` };
+  };
+
   const canEditCriteria = useCallback(
     (contestId: number | null, criteriaId: number): boolean => {
       if (contestId === null) {
@@ -2246,11 +2293,12 @@ export default function JudgeDashboardPage() {
                                         : undefined
                                     }
                                   >
-                                    {participant.avatar_url ? (
+                                    {(participant.card_url || participant.avatar_url) ? (
                                       <img
-                                        src={participant.avatar_url}
+                                        src={participant.card_url || participant.avatar_url || ""}
                                         alt={participant.full_name}
                                         className="h-full w-full object-cover transition duration-200 group-hover:scale-105"
+                                        style={imageTransformFromUrl(participant.card_url || participant.avatar_url || null)}
                                       />
                                     ) : (
                                       participantInitials(participant.full_name)
@@ -2361,18 +2409,34 @@ export default function JudgeDashboardPage() {
               }
             >
               <div className="flex items-center gap-3 md:gap-4">
-                <div className="flex h-20 w-20 items-center justify-center overflow-hidden rounded-full bg-[#E2F3EC] text-lg font-semibold text-[#1F4D3A] shadow-sm md:h-24 md:w-24 md:text-xl">
-                  {currentParticipant.avatar_url ? (
-                    // eslint-disable-next-line @next/next/no-img-element
+                <button
+                  type="button"
+                  ref={scoringAvatarRef}
+                  onClick={() => {
+                    let photos: string[] = [];
+                    try { photos = currentParticipant.gallery_photos ? JSON.parse(currentParticipant.gallery_photos) : []; } catch { photos = []; }
+                    if (photos.length > 0) {
+                      setGallerySlideIndex(0);
+                      setIsGalleryModalOpen(true);
+                    }
+                  }}
+                  className={`flex h-20 w-20 items-center justify-center overflow-hidden rounded-full bg-[#E2F3EC] text-lg font-semibold text-[#1F4D3A] shadow-sm md:h-24 md:w-24 md:text-xl ${(() => { let p: string[] = []; try { p = currentParticipant.gallery_photos ? JSON.parse(currentParticipant.gallery_photos) : []; } catch { p = []; } return p.length > 0 ? "cursor-pointer ring-2 ring-[#1F4D3A]/30 hover:ring-[#1F4D3A]/60 transition" : "cursor-default"; })()}`}
+                >
+                  {currentParticipant.avatar_url || currentParticipant.card_url ? (
                     <img
-                      src={currentParticipant.avatar_url}
+                      src={currentParticipant.avatar_url || currentParticipant.card_url || ""}
                       alt={currentParticipant.full_name}
-                      className="h-full w-full object-cover"
+                      className="h-full w-full object-contain"
+                      style={imageTransformFromUrl(
+                        currentParticipant.avatar_url || currentParticipant.card_url || null,
+                        scoringAvatarSize.w,
+                        scoringAvatarSize.h,
+                      )}
                     />
                   ) : (
                     participantInitials(currentParticipant.full_name)
                   )}
-                </div>
+                </button>
                 <div className="flex flex-col gap-1 text-sm font-semibold text-slate-800 md:text-base">
                   <div className="flex flex-wrap items-center gap-2">
                     <span
@@ -2876,6 +2940,63 @@ export default function JudgeDashboardPage() {
           </div>
           </div>
         )}
+
+        {isGalleryModalOpen && currentParticipant && (() => {
+          let galleryPhotos: string[] = [];
+          try { galleryPhotos = currentParticipant.gallery_photos ? JSON.parse(currentParticipant.gallery_photos) : []; } catch { galleryPhotos = []; }
+          if (galleryPhotos.length === 0) return null;
+          return (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 px-4" onClick={() => setIsGalleryModalOpen(false)}>
+              <div className="relative flex w-full max-w-3xl flex-col items-center gap-4" onClick={(e) => e.stopPropagation()}>
+                <button
+                  type="button"
+                  onClick={() => setIsGalleryModalOpen(false)}
+                  className="absolute -top-2 right-0 z-10 flex h-8 w-8 items-center justify-center rounded-full bg-white/20 text-sm font-bold text-white backdrop-blur hover:bg-white/40 transition"
+                >
+                  X
+                </button>
+                <div className="relative w-full overflow-hidden rounded-2xl bg-black/40 shadow-2xl">
+                  <img
+                    src={galleryPhotos[gallerySlideIndex]}
+                    alt={`${currentParticipant.full_name} gallery ${gallerySlideIndex + 1}`}
+                    className="mx-auto max-h-[75vh] w-auto object-contain"
+                  />
+                </div>
+                <div className="flex items-center gap-4">
+                  <button
+                    type="button"
+                    onClick={() => setGallerySlideIndex((prev) => (prev - 1 + galleryPhotos.length) % galleryPhotos.length)}
+                    className="flex h-10 w-10 items-center justify-center rounded-full bg-white/20 text-lg font-bold text-white backdrop-blur hover:bg-white/40 transition"
+                  >
+                    &lt;
+                  </button>
+                  <span className="text-sm font-medium text-white/80">{gallerySlideIndex + 1} / {galleryPhotos.length}</span>
+                  <button
+                    type="button"
+                    onClick={() => setGallerySlideIndex((prev) => (prev + 1) % galleryPhotos.length)}
+                    className="flex h-10 w-10 items-center justify-center rounded-full bg-white/20 text-lg font-bold text-white backdrop-blur hover:bg-white/40 transition"
+                  >
+                    &gt;
+                  </button>
+                </div>
+                {galleryPhotos.length > 1 && (
+                  <div className="flex gap-2 overflow-x-auto pb-1">
+                    {galleryPhotos.map((url, idx) => (
+                      <button
+                        key={idx}
+                        type="button"
+                        onClick={() => setGallerySlideIndex(idx)}
+                        className={`h-14 w-14 flex-shrink-0 overflow-hidden rounded-lg border-2 transition ${idx === gallerySlideIndex ? "border-white shadow-lg" : "border-transparent opacity-60 hover:opacity-100"}`}
+                      >
+                        <img src={url} alt={`Thumb ${idx + 1}`} className="h-full w-full object-cover" />
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })()}
       </div>
     </div>
   );

@@ -571,6 +571,8 @@ type ParticipantRow = {
   contestant_number: string;
   created_at: string;
   avatar_url: string | null;
+  card_url: string | null;
+  gallery_photos: string | null;
 };
 
 type AdminRow = {
@@ -995,7 +997,26 @@ export default function AdminDashboard() {
     w: number;
     h: number;
   } | null>(null);
+  const [participantAvatarOffset, setParticipantAvatarOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const [isDraggingAvatar, setIsDraggingAvatar] = useState(false);
+  const [lastAvatarPointer, setLastAvatarPointer] = useState<{ x: number; y: number } | null>(null);
   const [isUploadingParticipantAvatar, setIsUploadingParticipantAvatar] =
+    useState(false);
+  const [participantCardUrl, setParticipantCardUrl] = useState("");
+  const [participantCardZoom, setParticipantCardZoom] = useState(1);
+  const [participantCardImageDims, setParticipantCardImageDims] = useState<{
+    w: number;
+    h: number;
+  } | null>(null);
+  const avatarFrameRef = useRef<HTMLDivElement | null>(null);
+  const [participantCardOffset, setParticipantCardOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const [isDraggingCard, setIsDraggingCard] = useState(false);
+  const [lastCardPointer, setLastCardPointer] = useState<{ x: number; y: number } | null>(null);
+  const [isUploadingParticipantCard, setIsUploadingParticipantCard] =
+    useState(false);
+  const cardFrameRef = useRef<HTMLDivElement | null>(null);
+  const [participantGalleryPhotos, setParticipantGalleryPhotos] = useState<string[]>([]);
+  const [isUploadingParticipantGallery, setIsUploadingParticipantGallery] =
     useState(false);
   const [isSavingParticipant, setIsSavingParticipant] = useState(false);
   const [participantError, setParticipantError] = useState<string | null>(null);
@@ -1019,6 +1040,26 @@ export default function AdminDashboard() {
   >("all");
   const [judgePermissionsCriteriaIds, setJudgePermissionsCriteriaIds] =
     useState<number[]>([]);
+
+  const parseTransform = (url: string) => {
+    try {
+      const u = new URL(url);
+      const tz = u.searchParams.get("tz");
+      const tx = u.searchParams.get("tx");
+      const ty = u.searchParams.get("ty");
+      const txp = u.searchParams.get("txp");
+      const typ = u.searchParams.get("typ");
+      return {
+        tz: tz ? Number(tz) : null,
+        tx: tx ? Number(tx) : null,
+        ty: ty ? Number(ty) : null,
+        txp: txp ? Number(txp) : null,
+        typ: typ ? Number(typ) : null,
+      };
+    } catch {
+      return { tz: null, tx: null, ty: null, txp: null, typ: null };
+    }
+  };
   const [judgePermissionsError, setJudgePermissionsError] = useState<
     string | null
   >(null);
@@ -1193,7 +1234,7 @@ export default function AdminDashboard() {
     supabase
       .from("participant")
       .select(
-        "id, contest_id, division_id, team_id, full_name, contestant_number, created_at, avatar_url",
+        "id, contest_id, division_id, team_id, full_name, contestant_number, created_at, avatar_url, card_url, gallery_photos",
       )
       .order("created_at", { ascending: false })
       .then(({ data }) => {
@@ -2178,6 +2219,10 @@ export default function AdminDashboard() {
     setParticipantAvatarUrl("");
     setParticipantAvatarZoom(1);
     setParticipantAvatarImageDims(null);
+    setParticipantCardUrl("");
+    setParticipantCardZoom(1);
+    setParticipantCardImageDims(null);
+    setParticipantGalleryPhotos([]);
     setParticipantError(null);
     setParticipantSuccess(null);
     setIsParticipantModalOpen(true);
@@ -2198,6 +2243,14 @@ export default function AdminDashboard() {
     setParticipantAvatarUrl(participant.avatar_url ?? "");
     setParticipantAvatarZoom(1);
     setParticipantAvatarImageDims(null);
+    setParticipantCardUrl(participant.card_url ?? "");
+    setParticipantCardZoom(1);
+    setParticipantCardImageDims(null);
+    try {
+      setParticipantGalleryPhotos(participant.gallery_photos ? JSON.parse(participant.gallery_photos) : []);
+    } catch {
+      setParticipantGalleryPhotos([]);
+    }
     setParticipantError(null);
     setParticipantSuccess(null);
     setIsParticipantModalOpen(true);
@@ -4949,10 +5002,40 @@ export default function AdminDashboard() {
           team_id: selectedTeamIdForParticipant,
           full_name: participantFullName.trim(),
           contestant_number: normalizedNumber,
-          avatar_url: participantAvatarUrl.trim() || null,
+          avatar_url: (() => {
+            const raw = participantAvatarUrl.trim();
+            if (!raw) return null;
+            try {
+              const u = new URL(raw);
+              u.searchParams.set("tz", String(Number(participantAvatarZoom.toFixed(2))));
+              const frameW = avatarFrameRef.current?.offsetWidth ?? 1;
+              const frameH = avatarFrameRef.current?.offsetHeight ?? 1;
+              const txp = frameW ? participantAvatarOffset.x / frameW : 0;
+              const typ = frameH ? participantAvatarOffset.y / frameH : 0;
+              u.searchParams.set("txp", String(Number(txp.toFixed(4))));
+              u.searchParams.set("typ", String(Number(typ.toFixed(4))));
+              return u.toString();
+            } catch { return raw; }
+          })(),
+          card_url: (() => {
+            const raw = participantCardUrl.trim();
+            if (!raw) return null;
+            try {
+              const u = new URL(raw);
+              u.searchParams.set("tz", String(Number(participantCardZoom.toFixed(2))));
+              const frameW = cardFrameRef.current?.offsetWidth ?? 1;
+              const frameH = cardFrameRef.current?.offsetHeight ?? 1;
+              const txp = frameW ? participantCardOffset.x / frameW : 0;
+              const typ = frameH ? participantCardOffset.y / frameH : 0;
+              u.searchParams.set("txp", String(Number(txp.toFixed(4))));
+              u.searchParams.set("typ", String(Number(typ.toFixed(4))));
+              return u.toString();
+            } catch { return raw; }
+          })(),
+          gallery_photos: participantGalleryPhotos.length > 0 ? JSON.stringify(participantGalleryPhotos) : null,
         })
         .select(
-          "id, contest_id, division_id, team_id, full_name, contestant_number, created_at, avatar_url",
+          "id, contest_id, division_id, team_id, full_name, contestant_number, created_at, avatar_url, card_url, gallery_photos",
         );
 
       setIsSavingParticipant(false);
@@ -4986,11 +5069,41 @@ export default function AdminDashboard() {
           team_id: selectedTeamIdForParticipant,
           full_name: participantFullName.trim(),
           contestant_number: normalizedNumber,
-          avatar_url: participantAvatarUrl.trim() || null,
+          avatar_url: (() => {
+            const raw = participantAvatarUrl.trim();
+            if (!raw) return null;
+            try {
+              const u = new URL(raw);
+              u.searchParams.set("tz", String(Number(participantAvatarZoom.toFixed(2))));
+              const frameW = avatarFrameRef.current?.offsetWidth ?? 1;
+              const frameH = avatarFrameRef.current?.offsetHeight ?? 1;
+              const txp = frameW ? participantAvatarOffset.x / frameW : 0;
+              const typ = frameH ? participantAvatarOffset.y / frameH : 0;
+              u.searchParams.set("txp", String(Number(txp.toFixed(4))));
+              u.searchParams.set("typ", String(Number(typ.toFixed(4))));
+              return u.toString();
+            } catch { return raw; }
+          })(),
+          card_url: (() => {
+            const raw = participantCardUrl.trim();
+            if (!raw) return null;
+            try {
+              const u = new URL(raw);
+              u.searchParams.set("tz", String(Number(participantCardZoom.toFixed(2))));
+              const frameW = cardFrameRef.current?.offsetWidth ?? 1;
+              const frameH = cardFrameRef.current?.offsetHeight ?? 1;
+              const txp = frameW ? participantCardOffset.x / frameW : 0;
+              const typ = frameH ? participantCardOffset.y / frameH : 0;
+              u.searchParams.set("txp", String(Number(txp.toFixed(4))));
+              u.searchParams.set("typ", String(Number(typ.toFixed(4))));
+              return u.toString();
+            } catch { return raw; }
+          })(),
+          gallery_photos: participantGalleryPhotos.length > 0 ? JSON.stringify(participantGalleryPhotos) : null,
         })
         .eq("id", editingParticipantId)
         .select(
-          "id, contest_id, division_id, team_id, full_name, contestant_number, created_at, avatar_url",
+          "id, contest_id, division_id, team_id, full_name, contestant_number, created_at, avatar_url, card_url, gallery_photos",
         );
 
       setIsSavingParticipant(false);
@@ -5027,6 +5140,8 @@ export default function AdminDashboard() {
     setParticipantFullName("");
     setParticipantNumber("");
     setParticipantAvatarUrl("");
+    setParticipantCardUrl("");
+    setParticipantGalleryPhotos([]);
     setEditingParticipantId(null);
     setIsParticipantModalOpen(false);
   };
@@ -8581,9 +8696,9 @@ export default function AdminDashboard() {
                                                     : undefined
                                                 }
                                               >
-                                                {participant.avatar_url ? (
+                                                {(participant.card_url || participant.avatar_url) ? (
                                                   <img
-                                                    src={participant.avatar_url}
+                                                    src={participant.card_url || participant.avatar_url || ""}
                                                     alt={participant.full_name}
                                                     className="h-full w-full object-cover transition duration-200 group-hover:scale-105"
                                                   />
@@ -11231,103 +11346,322 @@ export default function AdminDashboard() {
                       />
                     </div>
                   </div>
-                  <div className="space-y-2">
-                    <div className="text-[10px] text-slate-500">Avatar</div>
-                    <div className="flex flex-col items-center gap-3 rounded-2xl border border-[#E2E8F0] bg-[#F8FAFC] px-4 py-3">
-                      <div className="flex h-48 w-48 items-center justify-center overflow-hidden rounded-lg bg-[#E3F2EA] text-[11px] font-semibold text-[#1F4D3A] shadow-sm">
-                        {participantAvatarUrl ? (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img
-                            src={participantAvatarUrl}
-                            alt={
-                              participantFullName ||
-                              "Participant avatar preview"
-                            }
-                            className="h-full w-full object-cover"
-                            style={{
-                              transform: `scale(${participantAvatarZoom})`,
-                            }}
-                            onLoad={(e) => {
-                              const img = e.target as HTMLImageElement;
-                              setParticipantAvatarImageDims({
-                                w: img.naturalWidth,
-                                h: img.naturalHeight,
-                              });
-                            }}
-                          />
-                        ) : (
-                          "Preview"
-                        )}
-                      </div>
-                      <div className="flex w-full flex-col gap-1 text-left">
-                        <div className="flex items-center gap-2">
-                          {participantAvatarImageDims ? (
-                            <>
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  setParticipantAvatarZoom((previous) =>
-                                    Math.max(
-                                      1,
-                                      Number((previous - 0.1).toFixed(2)),
-                                    ),
-                                  )
-                                }
-                                className="flex h-6 w-6 items-center justify-center rounded-full border border-[#CBD5E1] text-[11px] text-slate-600 hover:bg-white"
-                              >
-                                −
-                              </button>
-                              <div className="text-left flex-1">
-                                <input
-                                  type="range"
-                                  min="1"
-                                  max="3"
-                                  step="0.05"
-                                  value={participantAvatarZoom}
-                                  onChange={(event) =>
-                                    setParticipantAvatarZoom(
-                                      Number(event.target.value),
-                                    )
+                  <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-1">
+                    <div className="space-y-2">
+                      <div className="text-[10px] font-semibold text-slate-600">Card Image</div>
+                      <div className="flex flex-col items-center gap-2 rounded-2xl border border-[#E2E8F0] bg-[#F8FAFC] px-3 py-2">
+                        <div
+                          className="flex w-full items-center justify-center overflow-hidden rounded-lg bg-[#E3F2EA] text-[11px] font-semibold text-[#1F4D3A] shadow-sm select-none"
+                          style={{
+                            aspectRatio: participantCardImageDims ? `${participantCardImageDims.w}/${participantCardImageDims.h}` : undefined,
+                            touchAction: "none",
+                            cursor: isDraggingCard ? "grabbing" : "grab",
+                          }}
+                          onMouseDown={(e) => { setIsDraggingCard(true); setLastCardPointer({ x: e.clientX, y: e.clientY }); }}
+                          onMouseMove={(e) => {
+                            if (!isDraggingCard || !lastCardPointer) return;
+                            const dx = e.clientX - lastCardPointer.x;
+                            const dy = e.clientY - lastCardPointer.y;
+                            setParticipantCardOffset((prev) => ({ x: prev.x + dx, y: prev.y + dy }));
+                            setLastCardPointer({ x: e.clientX, y: e.clientY });
+                          }}
+                          onMouseUp={() => { setIsDraggingCard(false); setLastCardPointer(null); }}
+                          onMouseLeave={() => { setIsDraggingCard(false); setLastCardPointer(null); }}
+                          onTouchStart={(e) => {
+                            const t = e.touches[0];
+                            setIsDraggingCard(true);
+                            setLastCardPointer({ x: t.clientX, y: t.clientY });
+                          }}
+                          onTouchMove={(e) => {
+                            if (!isDraggingCard || !lastCardPointer) return;
+                            const t = e.touches[0];
+                            const dx = t.clientX - lastCardPointer.x;
+                            const dy = t.clientY - lastCardPointer.y;
+                            setParticipantCardOffset((prev) => ({ x: prev.x + dx, y: prev.y + dy }));
+                            setLastCardPointer({ x: t.clientX, y: t.clientY });
+                          }}
+                          onTouchEnd={() => { setIsDraggingCard(false); setLastCardPointer(null); }}
+                        >
+                          {participantCardUrl ? (
+                            <img
+                              src={participantCardUrl}
+                              alt="Card preview"
+                              className="h-full w-full object-contain select-none"
+                              style={{ transform: `translate(${participantCardOffset.x}px, ${participantCardOffset.y}px) scale(${participantCardZoom})` }}
+                              onLoad={(e) => {
+                                const img = e.target as HTMLImageElement;
+                                setParticipantCardImageDims({ w: img.naturalWidth, h: img.naturalHeight });
+                                const t = parseTransform(participantCardUrl);
+                                if (t.tz !== null) setParticipantCardZoom(t.tz);
+                                const frameW = cardFrameRef.current?.offsetWidth ?? 0;
+                                const frameH = cardFrameRef.current?.offsetHeight ?? 0;
+                                if (frameW && frameH) {
+                                  if (t.txp !== null && t.typ !== null) {
+                                    setParticipantCardOffset({ x: t.txp * frameW, y: t.typ * frameH });
+                                  } else if (t.tx !== null && t.ty !== null) {
+                                    setParticipantCardOffset({ x: t.tx, y: t.ty });
                                   }
-                                  className="w-full"
-                                />
-                                <div className="text-[9px] text-slate-400 mt-1">
-                                  {participantAvatarImageDims.w}×{participantAvatarImageDims.h}px
-                                </div>
-                              </div>
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  setParticipantAvatarZoom((previous) =>
-                                    Math.min(
-                                      3,
-                                      Number((previous + 0.1).toFixed(2)),
-                                    ),
-                                  )
                                 }
-                                className="flex h-6 w-6 items-center justify-center rounded-full border border-[#CBD5E1] text-[11px] text-slate-600 hover:bg-white"
-                              >
-                                +
-                              </button>
-                            </>
+                              }}
+                            />
                           ) : (
-                            <div className="text-[10px] text-slate-500">
-                              Upload an image to enable zoom controls
-                            </div>
+                            "Card Preview"
                           )}
                         </div>
+                        <div className="flex w-full flex-col gap-1">
+                          <div className="flex items-center gap-2">
+                            {participantCardImageDims ? (
+                              <>
+                                <button type="button" onClick={() => setParticipantCardZoom((p) => Math.max(1, Number((p - 0.1).toFixed(2))))} className="flex h-6 w-6 items-center justify-center rounded-full border border-[#CBD5E1] text-[11px] text-slate-600 hover:bg-white">-</button>
+                                <div className="text-left flex-1">
+                                  <input type="range" min="1" max="3" step="0.05" value={participantCardZoom} onChange={(event) => setParticipantCardZoom(Number(event.target.value))} className="w-full" />
+                                  <div className="text-[9px] text-slate-400 mt-1">{participantCardImageDims.w}x{participantCardImageDims.h}px</div>
+                                </div>
+                                <button type="button" onClick={() => setParticipantCardZoom((p) => Math.min(3, Number((p + 0.1).toFixed(2))))} className="flex h-6 w-6 items-center justify-center rounded-full border border-[#CBD5E1] text-[11px] text-slate-600 hover:bg-white">+</button>
+                              </>
+                            ) : (
+                              <div className="text-[10px] text-slate-500">Upload an image to enable zoom controls</div>
+                            )}
+                          </div>
+                          <input
+                            type="file"
+                            accept="image/*"
+                            disabled={isUploadingParticipantCard}
+                            onChange={async (event) => {
+                              let file = event.target.files?.[0];
+                              if (!file) return;
+                              const processImage = (file: File): Promise<Blob> =>
+                                new Promise((resolve, reject) => {
+                                  const img = new Image();
+                                  img.onload = () => {
+                                    const MAX_DIM = 1024;
+                                    let w = img.width;
+                                    let h = img.height;
+                                    if (w > MAX_DIM || h > MAX_DIM) {
+                                      const ratio = Math.min(MAX_DIM / w, MAX_DIM / h);
+                                      w = w * ratio;
+                                      h = h * ratio;
+                                    }
+                                    const canvas = document.createElement("canvas");
+                                    canvas.width = w;
+                                    canvas.height = h;
+                                    const ctx = canvas.getContext("2d");
+                                    if (!ctx) { reject(new Error("Cannot get canvas context")); return; }
+                                    ctx.drawImage(img, 0, 0, w, h);
+                                    canvas.toBlob(
+                                      (blob) => { if (blob) resolve(blob); else reject(new Error("Blob creation failed")); },
+                                      "image/jpeg", 0.8,
+                                    );
+                                  };
+                                  img.onerror = reject;
+                                  img.src = URL.createObjectURL(file);
+                                });
+                              try { file = (await processImage(file)) as File; } catch { /* fallback */ }
+                              const cloudName = process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME;
+                              const uploadPreset = process.env.NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET;
+                              if (!cloudName || !uploadPreset) { setParticipantError("Cloudinary is not configured for uploads."); return; }
+                              setParticipantError(null);
+                              setIsUploadingParticipantCard(true);
+                              try {
+                                const formData = new FormData();
+                                formData.append("file", file);
+                                formData.append("upload_preset", uploadPreset);
+                                const response = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/image/upload`, { method: "POST", body: formData });
+                                if (!response.ok) { setParticipantError("Unable to upload card image."); setIsUploadingParticipantCard(false); return; }
+                                const json = (await response.json()) as { secure_url?: string };
+                                if (!json.secure_url) { setParticipantError("Upload did not return an image URL."); setIsUploadingParticipantCard(false); return; }
+                                setParticipantCardUrl(json.secure_url);
+                                setParticipantCardZoom(1);
+                                setParticipantCardOffset({ x: 0, y: 0 });
+                                setParticipantCardImageDims(null);
+                              } catch { setParticipantError("Unexpected error while uploading card image."); } finally { setIsUploadingParticipantCard(false); }
+                            }}
+                            className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition file:mr-3 file:rounded-full file:border-0 file:bg-[#1F4D3A] file:px-3 file:py-1 file:text-[10px] file:font-medium file:text-white hover:file:bg-[#163528] focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                          />
+                          {participantCardUrl && (
+                            <div className="text-[10px] text-slate-500">Card image uploaded. Shown on the participant card.</div>
+                          )}
+                          {isUploadingParticipantCard && (
+                            <div className="text-[10px] text-slate-500">Uploading card image...</div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <div className="text-[10px] font-semibold text-slate-600">Avatar</div>
+                      <div className="flex flex-col items-center gap-3 rounded-2xl border border-[#E2E8F0] bg-[#F8FAFC] px-4 py-3">
+                        <div
+                          ref={avatarFrameRef}
+                          className="flex w-full items-center justify-center overflow-hidden rounded-full bg-[#E3F2EA] text-[11px] font-semibold text-[#1F4D3A] shadow-sm select-none"
+                          style={{
+                            aspectRatio: "1 / 1",
+                            touchAction: "none",
+                            cursor: isDraggingAvatar ? "grabbing" : "grab",
+                          }}
+                          onMouseDown={(e) => { setIsDraggingAvatar(true); setLastAvatarPointer({ x: e.clientX, y: e.clientY }); }}
+                          onMouseMove={(e) => {
+                            if (!isDraggingAvatar || !lastAvatarPointer) return;
+                            const dx = e.clientX - lastAvatarPointer.x;
+                            const dy = e.clientY - lastAvatarPointer.y;
+                            setParticipantAvatarOffset((prev) => ({ x: prev.x + dx, y: prev.y + dy }));
+                            setLastAvatarPointer({ x: e.clientX, y: e.clientY });
+                          }}
+                          onMouseUp={() => { setIsDraggingAvatar(false); setLastAvatarPointer(null); }}
+                          onMouseLeave={() => { setIsDraggingAvatar(false); setLastAvatarPointer(null); }}
+                          onTouchStart={(e) => {
+                            const t = e.touches[0];
+                            setIsDraggingAvatar(true);
+                            setLastAvatarPointer({ x: t.clientX, y: t.clientY });
+                          }}
+                          onTouchMove={(e) => {
+                            if (!isDraggingAvatar || !lastAvatarPointer) return;
+                            const t = e.touches[0];
+                            const dx = t.clientX - lastAvatarPointer.x;
+                            const dy = t.clientY - lastAvatarPointer.y;
+                            setParticipantAvatarOffset((prev) => ({ x: prev.x + dx, y: prev.y + dy }));
+                            setLastAvatarPointer({ x: t.clientX, y: t.clientY });
+                          }}
+                          onTouchEnd={() => { setIsDraggingAvatar(false); setLastAvatarPointer(null); }}
+                        >
+                          {participantAvatarUrl ? (
+                            <img
+                              src={participantAvatarUrl}
+                              alt={participantFullName || "Participant avatar preview"}
+                              className="h-full w-full object-contain select-none"
+                              style={{ transform: `translate(${participantAvatarOffset.x}px, ${participantAvatarOffset.y}px) scale(${participantAvatarZoom})` }}
+                              onLoad={(e) => {
+                                const img = e.target as HTMLImageElement;
+                                setParticipantAvatarImageDims({ w: img.naturalWidth, h: img.naturalHeight });
+                                const t = parseTransform(participantAvatarUrl);
+                                if (t.tz !== null) setParticipantAvatarZoom(t.tz);
+                                const frameW = avatarFrameRef.current?.offsetWidth ?? 0;
+                                const frameH = avatarFrameRef.current?.offsetHeight ?? 0;
+                                if (frameW && frameH) {
+                                  if (t.txp !== null && t.typ !== null) {
+                                    setParticipantAvatarOffset({ x: t.txp * frameW, y: t.typ * frameH });
+                                  } else if (t.tx !== null && t.ty !== null) {
+                                    setParticipantAvatarOffset({ x: t.tx, y: t.ty });
+                                  }
+                                }
+                              }}
+                            />
+                          ) : (
+                            "Avatar"
+                          )}
+                        </div>
+                        <div className="flex w-full flex-col gap-1 text-left">
+                          <div className="flex items-center gap-2">
+                            {participantAvatarImageDims ? (
+                              <>
+                                <button type="button" onClick={() => setParticipantAvatarZoom((p) => Math.max(1, Number((p - 0.1).toFixed(2))))} className="flex h-6 w-6 items-center justify-center rounded-full border border-[#CBD5E1] text-[11px] text-slate-600 hover:bg-white">−</button>
+                                <div className="text-left flex-1">
+                                  <input type="range" min="1" max="3" step="0.05" value={participantAvatarZoom} onChange={(event) => setParticipantAvatarZoom(Number(event.target.value))} className="w-full" />
+                                  <div className="text-[9px] text-slate-400 mt-1">{participantAvatarImageDims.w}x{participantAvatarImageDims.h}px</div>
+                                </div>
+                                <button type="button" onClick={() => setParticipantAvatarZoom((p) => Math.min(3, Number((p + 0.1).toFixed(2))))} className="flex h-6 w-6 items-center justify-center rounded-full border border-[#CBD5E1] text-[11px] text-slate-600 hover:bg-white">+</button>
+                              </>
+                            ) : (
+                              <div className="text-[10px] text-slate-500">Upload an image to enable zoom controls</div>
+                            )}
+                          </div>
+                          <input
+                            type="file"
+                            accept="image/*"
+                            disabled={isUploadingParticipantAvatar}
+                            onChange={async (event) => {
+                              let file = event.target.files?.[0];
+                              if (!file) return;
+                              const processImage = (file: File): Promise<Blob> =>
+                                new Promise((resolve, reject) => {
+                                  const img = new Image();
+                                  img.onload = () => {
+                                    const MAX_DIM = 1024;
+                                    let w = img.width;
+                                    let h = img.height;
+                                    if (w > MAX_DIM || h > MAX_DIM) {
+                                      const ratio = Math.min(MAX_DIM / w, MAX_DIM / h);
+                                      w = w * ratio;
+                                      h = h * ratio;
+                                    }
+                                    const canvas = document.createElement("canvas");
+                                    canvas.width = w;
+                                    canvas.height = h;
+                                    const ctx = canvas.getContext("2d");
+                                    if (!ctx) { reject(new Error("Cannot get canvas context")); return; }
+                                    ctx.drawImage(img, 0, 0, w, h);
+                                    canvas.toBlob(
+                                      (blob) => { if (blob) resolve(blob); else reject(new Error("Blob creation failed")); },
+                                      "image/jpeg", 0.8,
+                                    );
+                                  };
+                                  img.onerror = reject;
+                                  img.src = URL.createObjectURL(file);
+                                });
+                              try { file = (await processImage(file)) as File; } catch { /* fallback */ }
+                              const cloudName = process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME;
+                              const uploadPreset = process.env.NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET;
+                              if (!cloudName || !uploadPreset) { setParticipantError("Cloudinary is not configured for uploads."); return; }
+                              setParticipantError(null);
+                              setIsUploadingParticipantAvatar(true);
+                              try {
+                                const formData = new FormData();
+                                formData.append("file", file);
+                                formData.append("upload_preset", uploadPreset);
+                                const response = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/image/upload`, { method: "POST", body: formData });
+                                if (!response.ok) { setParticipantError("Unable to upload avatar."); setIsUploadingParticipantAvatar(false); return; }
+                                const json = (await response.json()) as { secure_url?: string };
+                                if (!json.secure_url) { setParticipantError("Upload did not return an image URL."); setIsUploadingParticipantAvatar(false); return; }
+                                setParticipantAvatarUrl(json.secure_url);
+                                setParticipantAvatarZoom(1);
+                                setParticipantAvatarOffset({ x: 0, y: 0 });
+                                setParticipantAvatarImageDims(null);
+                              } catch { setParticipantError("Unexpected error while uploading avatar."); } finally { setIsUploadingParticipantAvatar(false); }
+                            }}
+                            className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition file:mr-3 file:rounded-full file:border-0 file:bg-[#1F4D3A] file:px-3 file:py-1 file:text-[10px] file:font-medium file:text-white hover:file:bg-[#163528] focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                          />
+                          {participantAvatarUrl && (
+                            <div className="text-[10px] text-slate-500">Avatar uploaded. Shown in the scoring modal.</div>
+                          )}
+                          {isUploadingParticipantAvatar && (
+                            <div className="text-[10px] text-slate-500">Uploading avatar…</div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <div className="text-[10px] font-semibold text-slate-600">Gallery Photos</div>
+                      <div className="flex flex-col gap-2 rounded-2xl border border-[#E2E8F0] bg-[#F8FAFC] px-3 py-2">
+                        {participantGalleryPhotos.length > 0 && (
+                          <div className="grid grid-cols-3 gap-2">
+                            {participantGalleryPhotos.map((url, idx) => (
+                              <div key={idx} className="group relative">
+                                <img src={url} alt={`Gallery ${idx + 1}`} className="h-20 w-full rounded-lg object-cover" />
+                                <button
+                                  type="button"
+                                  onClick={() => setParticipantGalleryPhotos((prev) => prev.filter((_, i) => i !== idx))}
+                                  className="absolute -right-1 -top-1 flex h-5 w-5 items-center justify-center rounded-full bg-red-500 text-[9px] font-bold text-white opacity-0 shadow transition group-hover:opacity-100"
+                                >
+                                  x
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
                         <input
                           type="file"
                           accept="image/*"
-                          disabled={isUploadingParticipantAvatar}
+                          multiple
+                          disabled={isUploadingParticipantGallery}
                           onChange={async (event) => {
-                            let file = event.target.files?.[0];
-
-                            if (!file) {
-                              return;
-                            }
-
-                            // resize/compress client-side before upload to keep payload small
+                            const files = event.target.files;
+                            if (!files || files.length === 0) return;
+                            const cloudName = process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME;
+                            const uploadPreset = process.env.NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET;
+                            if (!cloudName || !uploadPreset) { setParticipantError("Cloudinary is not configured for uploads."); return; }
+                            setParticipantError(null);
+                            setIsUploadingParticipantGallery(true);
                             const processImage = (file: File): Promise<Blob> =>
                               new Promise((resolve, reject) => {
                                 const img = new Image();
@@ -11336,10 +11670,7 @@ export default function AdminDashboard() {
                                   let w = img.width;
                                   let h = img.height;
                                   if (w > MAX_DIM || h > MAX_DIM) {
-                                    const ratio = Math.min(
-                                      MAX_DIM / w,
-                                      MAX_DIM / h,
-                                    );
+                                    const ratio = Math.min(MAX_DIM / w, MAX_DIM / h);
                                     w = w * ratio;
                                     h = h * ratio;
                                   }
@@ -11347,99 +11678,44 @@ export default function AdminDashboard() {
                                   canvas.width = w;
                                   canvas.height = h;
                                   const ctx = canvas.getContext("2d");
-                                  if (!ctx) {
-                                    reject(new Error("Cannot get canvas context"));
-                                    return;
-                                  }
+                                  if (!ctx) { reject(new Error("Cannot get canvas context")); return; }
                                   ctx.drawImage(img, 0, 0, w, h);
                                   canvas.toBlob(
-                                    (blob) => {
-                                      if (blob) resolve(blob);
-                                      else reject(new Error("Blob creation failed"));
-                                    },
-                                    "image/jpeg",
-                                    0.8,
+                                    (blob) => { if (blob) resolve(blob); else reject(new Error("Blob creation failed")); },
+                                    "image/jpeg", 0.8,
                                   );
                                 };
                                 img.onerror = reject;
                                 img.src = URL.createObjectURL(file);
                               });
-
                             try {
-                              file = (await processImage(file)) as File;
-                            } catch (err) {
-                              // fallback to original if processing fails
-                            }
-
-                            const cloudName =
-                              process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME;
-                            const uploadPreset =
-                              process.env.NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET;
-
-                            if (!cloudName || !uploadPreset) {
-                              setParticipantError(
-                                "Cloudinary is not configured for uploads.",
-                              );
-                              return;
-                            }
-
-                            setParticipantError(null);
-                            setIsUploadingParticipantAvatar(true);
-
-                            try {
-                              const formData = new FormData();
-                              formData.append("file", file);
-                              formData.append("upload_preset", uploadPreset);
-
-                              const response = await fetch(
-                                `https://api.cloudinary.com/v1_1/${cloudName}/image/upload`,
-                                {
-                                  method: "POST",
-                                  body: formData,
-                                },
-                              );
-
-                              if (!response.ok) {
-                                setParticipantError(
-                                  "Unable to upload avatar. Please try again.",
-                                );
-                                setIsUploadingParticipantAvatar(false);
-                                return;
+                              const newUrls: string[] = [];
+                              for (let i = 0; i < files.length; i++) {
+                                let file: File | Blob = files[i];
+                                try { file = await processImage(files[i]); } catch { /* fallback */ }
+                                const formData = new FormData();
+                                formData.append("file", file);
+                                formData.append("upload_preset", uploadPreset);
+                                const response = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/image/upload`, { method: "POST", body: formData });
+                                if (!response.ok) continue;
+                                const json = (await response.json()) as { secure_url?: string };
+                                if (json.secure_url) newUrls.push(json.secure_url);
                               }
-
-                              const json = (await response.json()) as {
-                                secure_url?: string;
-                              };
-
-                              if (!json.secure_url) {
-                                setParticipantError(
-                                  "Upload did not return an image URL.",
-                                );
-                                setIsUploadingParticipantAvatar(false);
-                                return;
+                              if (newUrls.length > 0) {
+                                setParticipantGalleryPhotos((prev) => [...prev, ...newUrls]);
+                              } else {
+                                setParticipantError("Unable to upload gallery photos.");
                               }
-
-                              setParticipantAvatarUrl(json.secure_url);
-                            } catch {
-                              setParticipantError(
-                                "Unexpected error while uploading avatar.",
-                              );
-                            } finally {
-                              setIsUploadingParticipantAvatar(false);
-                            }
+                            } catch { setParticipantError("Unexpected error while uploading gallery photos."); } finally { setIsUploadingParticipantGallery(false); }
+                            event.target.value = "";
                           }}
                           className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition file:mr-3 file:rounded-full file:border-0 file:bg-[#1F4D3A] file:px-3 file:py-1 file:text-[10px] file:font-medium file:text-white hover:file:bg-[#163528] focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
                         />
-                        {participantAvatarUrl && (
-                          <div className="text-[10px] text-slate-500">
-                            Avatar uploaded. This picture will be visible to
-                            judges.
-                          </div>
+                        {participantGalleryPhotos.length > 0 && (
+                          <div className="text-[10px] text-slate-500">{participantGalleryPhotos.length} photo(s) in gallery. Shown when avatar is clicked.</div>
                         )}
-                        {isUploadingParticipantAvatar && (
-                          <div className="text-[10px] text-slate-500">
-                            Uploading avatar…
-                          </div>
+                        {isUploadingParticipantGallery && (
+                          <div className="text-[10px] text-slate-500">Uploading gallery photos…</div>
                         )}
                       </div>
                     </div>

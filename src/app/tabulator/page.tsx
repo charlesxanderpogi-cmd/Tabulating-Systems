@@ -1186,6 +1186,9 @@ export default function TabulatorPage() {
   // Refs to table containers for printing only the rankings table
   const overallTableRef = useRef<HTMLDivElement | null>(null);
   const awardsTableRef = useRef<HTMLDivElement | null>(null);
+  const [signatures, setSignatures] = useState<{ title: string; name: string }[]>([]);
+  const [signatureTitleInput, setSignatureTitleInput] = useState("");
+  const [signatureNameInput, setSignatureNameInput] = useState("");
 
   function escapeHtml(unsafe: string) {
     return unsafe
@@ -1206,33 +1209,71 @@ export default function TabulatorPage() {
       return;
     }
 
-    const titleText = headerTitle + (activeContest ? ` — ${activeContest.name}` : "");
-    const awardsText = awardsForActiveContest.map((a) => a.name).join("\n");
+    const eventTitle = headerTitle;
+    const divisionName =
+      activeDivisionFilterId === "all"
+        ? null
+        : categoriesForActiveEvent.find((c) => c.id === activeDivisionFilterId)?.name ?? null;
+    const selectedAwardName =
+      activeView === "awards"
+        ? activeAwardFilterId === "all"
+          ? "All awards"
+          : (selectedAwardResult?.award.name ?? null)
+        : null;
+    const subtitleText =
+      activeView === "awards"
+        ? `${selectedAwardName ? `${selectedAwardName}` : ""}${divisionName ? ` (${divisionName})` : ""}`
+        : `${activeContest ? activeContest.name : ""}${divisionName ? ` (${divisionName})` : ""}`;
 
     const html = `<!doctype html>
       <html>
       <head>
         <meta charset="utf-8" />
-        <title>${escapeHtml(titleText)}</title>
+        <title>${escapeHtml(eventTitle)}</title>
         <style>
           html,body{margin:0;padding:0;font-family:Inter, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial; color:#111827}
           .print-container{padding:20px;}
-          .header-space{height:80px}
+          .header-space{height:100px}
           .footer-space{height:60px}
-          .title{font-size:20px;font-weight:700;color:#1F4D3A;margin-bottom:6px}
-          .awards{font-size:12px;color:#374151;white-space:pre-wrap;margin-bottom:12px}
+          .event{font-size:20px;font-weight:700;color:#1F4D3A;margin-bottom:6px;text-align:center}
+          .subtitle{font-size:12px;color:#374151;margin-bottom:18px;text-align:center}
           table{width:100%;border-collapse:collapse;font-size:12px}
           thead{background:#F5F7FF;color:#1F4D3A;text-transform:uppercase;font-weight:700}
-          th,td{padding:10px;border-bottom:1px solid #E6EEF3;text-align:left}
+          th,td{padding:12px 10px;border-bottom:1px solid #E6EEF3;text-align:left}
           td.text-right, th.text-right{text-align:right}
+          .table-root{margin-top:8px;margin-bottom:48px}
+          .table-root button{display:none}
+          .divider{width:85%;margin:0 auto 36px;border-top:1px solid #E6EEF3}
+          .signatures{margin-top:30px}
+          .sig-grid{display:flex;flex-wrap:wrap;gap:36px;max-width:780px;margin:0 auto;justify-content:center}
+          .sig{width:220px;display:flex;flex-direction:column;align-items:center;gap:6px}
+          .sig .line{width:200px;height:0;border-top:1px solid #374151}
+          .sig .name{font-weight:600;color:#111827;font-size:12px;text-align:center}
+          .sig .title{color:#6B7280;font-size:11px;text-align:center}
         </style>
       </head>
       <body>
         <div class="print-container">
           <div class="header-space"></div>
-          <div class="title">${escapeHtml(titleText)}</div>
-          <div class="awards">${escapeHtml(awardsText)}</div>
+          <div class="event">${escapeHtml(eventTitle)}</div>
+          <div class="subtitle">${escapeHtml(subtitleText)}</div>
           <div class="table-root">${contentEl.innerHTML}</div>
+          <div class="divider"></div>
+          <div class="signatures">
+            <div class="sig-grid">
+              ${signatures
+                .map(
+                  (s) => `
+                <div class="sig">
+                  <div class="line"></div>
+                  <div class="name">${escapeHtml(s.name || "")}</div>
+                  <div class="title">${escapeHtml(s.title || "")}</div>
+                </div>
+              `,
+                )
+                .join("")}
+            </div>
+          </div>
           <div class="footer-space"></div>
         </div>
         <script>
@@ -1512,6 +1553,65 @@ export default function TabulatorPage() {
                     Print rankings
                   </button>
                 </div>
+              </div>
+
+              <div className="mb-4 rounded-2xl border border-[#E2E8F0] bg-[#F8FAFC] p-4">
+                <div className="mb-2 text-xs font-semibold text-[#1F4D3A]">Signatures</div>
+                <div className="flex flex-col gap-2 md:flex-row md:items-end">
+                  <div className="flex-1">
+                    <div className="text-[11px] text-slate-500">Title</div>
+                    <input
+                      value={signatureTitleInput}
+                      onChange={(e) => setSignatureTitleInput(e.target.value)}
+                      className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                      placeholder="Chairman / Tabulator / Judge"
+                    />
+                  </div>
+                  <div className="flex-1">
+                    <div className="text-[11px] text-slate-500">Name</div>
+                    <input
+                      value={signatureNameInput}
+                      onChange={(e) => setSignatureNameInput(e.target.value)}
+                      className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                      placeholder="e.g., Juan Dela Cruz"
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const t = signatureTitleInput.trim();
+                      const n = signatureNameInput.trim();
+                      if (!t && !n) return;
+                      setSignatures((prev) => [...prev, { title: t, name: n }]);
+                      setSignatureTitleInput("");
+                      setSignatureNameInput("");
+                    }}
+                    className="rounded-full bg-[#1F4D3A] px-4 py-2 text-xs font-semibold text-white shadow-sm transition hover:bg-[#163528]"
+                  >
+                    Add signature
+                  </button>
+                </div>
+                {signatures.length > 0 && (
+                  <div className="mt-3 grid grid-cols-1 gap-3 text-[11px] sm:grid-cols-2 lg:grid-cols-3">
+                    {signatures.map((s, idx) => (
+                      <div key={idx} className="flex items-center justify-between rounded-xl border border-[#E2E8F0] bg-white px-3 py-2">
+                        <div>
+                          <div className="font-semibold text-slate-700">{s.name || "\u00A0"}</div>
+                          <div className="text-slate-500">{s.title || "\u00A0"}</div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setSignatures((prev) => prev.filter((_, i) => i !== idx))
+                          }
+                          className="rounded-full border border-[#E2E8F0] px-2 py-1 text-[10px] text-slate-600 hover:bg-[#F8FAFC]"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
 
               {error && (
