@@ -62,18 +62,21 @@ export default function Home() {
     if (role === "admin") {
       try {
         window.localStorage.setItem("admin_username", username);
+        document.cookie = `admin_username=${encodeURIComponent(username)}; path=/`;
       } catch {}
       setSuccess("Welcome back, administrator. Redirecting to admin console...");
       router.push("/admin");
     } else if (role === "tabulator") {
       try {
         window.localStorage.setItem("tabulator_username", username);
+        document.cookie = `tabulator_username=${encodeURIComponent(username)}; path=/`;
       } catch {}
       setSuccess("Welcome tabulator. Redirecting to tabulation workspace...");
       router.push("/tabulator");
     } else {
       try {
         window.localStorage.setItem("judge_username", username);
+        document.cookie = `judge_username=${encodeURIComponent(username)}; path=/`;
       } catch {}
       setSuccess("Welcome judge. Redirecting to scoring dashboard...");
       router.push("/judge");

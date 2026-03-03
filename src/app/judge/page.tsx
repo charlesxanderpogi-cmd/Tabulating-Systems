@@ -255,6 +255,7 @@ export default function JudgeDashboardPage() {
   const [scores, setScores] = useState<ScoreRow[]>([]);
   const [judgeTotals, setJudgeTotals] = useState<JudgeParticipantTotalRow[]>([]);
   const [awards, setAwards] = useState<AwardRow[]>([]);
+  const [activeAwardFilterId, setActiveAwardFilterId] = useState<number | "all">("all");
   const [assignedContestIds, setAssignedContestIds] = useState<number[]>([]);
   const [activeContestId, setActiveContestId] = useState<number | null>(null);
   const [activeDivisionFilterId, setActiveDivisionFilterId] = useState<
@@ -281,13 +282,10 @@ export default function JudgeDashboardPage() {
   const [isGalleryModalOpen, setIsGalleryModalOpen] = useState(false);
   const [gallerySlideIndex, setGallerySlideIndex] = useState(0);
   const [selectedJudgeForBreakdown, setSelectedJudgeForBreakdown] = useState<number | null>(null);
-  const [activeTab, setActiveTab] = useState<"score" | "tabulation">("score");
+  const [activeTab, setActiveTab] = useState<"score" | "tabulation" | "monitoring">("score");
   const [activeTabulationView, setActiveTabulationView] = useState<
     "overall" | "awards"
   >("awards");
-  const [activeAwardFilterId, setActiveAwardFilterId] = useState<
-    number | "all"
-  >("all");
   const activeContestIdRef = useRef<number | null>(null);
 
   useEffect(() => {
@@ -351,19 +349,12 @@ export default function JudgeDashboardPage() {
       setJudge(judgeRow);
 
       const totalQuery =
-        judgeRow.role === "chairman"
-          ? supabase
-              .from("judge_participant_total")
-              .select(
-                "id, judge_id, participant_id, contest_id, total_score, created_at, contest!inner(event_id)",
-              )
-              .eq("contest.event_id", judgeRow.event_id)
-          : supabase
-              .from("judge_participant_total")
-              .select(
-                "id, judge_id, participant_id, contest_id, total_score, created_at",
-              )
-              .eq("judge_id", judgeRow.id);
+        supabase
+          .from("judge_participant_total")
+          .select(
+            "id, judge_id, participant_id, contest_id, total_score, created_at, contest!inner(event_id)",
+          )
+          .eq("contest.event_id", judgeRow.event_id);
 
       const [
         { data: eventRows, error: eventError },
@@ -1454,6 +1445,14 @@ export default function JudgeDashboardPage() {
     [categories],
   );
 
+  const participantTeamName = useCallback(
+    (participant: ParticipantRow) => {
+      const team = teams.find((t) => t.id === participant.team_id);
+      return team ? team.name : "—";
+    },
+    [teams],
+  );
+
   const participantInitials = (fullName: string) => {
     const parts = fullName.split(" ").filter(Boolean);
 
@@ -1842,6 +1841,7 @@ export default function JudgeDashboardPage() {
   const handleSignOut = () => {
     if (typeof window !== "undefined") {
       window.localStorage.removeItem("judge_username");
+      document.cookie = "judge_username=; path=/; max-age=0";
     }
     router.push("/");
   };
@@ -1936,6 +1936,203 @@ export default function JudgeDashboardPage() {
 
     return Array.from(groups.entries());
   }, [activeContestCriteria]);
+
+  const judgeTotalsForActiveContest = useMemo(
+    () =>
+      judgeTotals.filter(
+        (t) => (activeContest ? t.contest_id === activeContest.id : false),
+      ),
+    [judgeTotals, activeContest],
+  );
+
+  const judgeIdsForActiveContest = useMemo(() => {
+    const ids = judgeTotalsForActiveContest.map((t) => t.judge_id);
+    return Array.from(new Set(ids)).sort((a, b) => a - b);
+  }, [judgeTotalsForActiveContest]);
+
+  const totalsByJudgeAndParticipant = useMemo(() => {
+    const outer = new Map<number, Map<number, number>>();
+    for (const t of judgeTotalsForActiveContest) {
+      const pmap =
+        outer.get(t.judge_id) ?? new Map<number, number>();
+      pmap.set(t.participant_id, Number(t.total_score));
+      outer.set(t.judge_id, pmap);
+    }
+    return outer;
+  }, [judgeTotalsForActiveContest]);
+
+  const criteriaScoreByJudgeAndParticipant = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const row of scores) {
+      const key = `${row.criteria_id}-${row.judge_id}-${row.participant_id}`;
+      map.set(key, Number(row.score));
+    }
+    return map;
+  }, [scores]);
+
+  const selectedAwardCriteriaIds = useMemo(() => {
+    if (activeAwardFilterId === "all") return [];
+    const award = awards.find((a) => a.id === activeAwardFilterId);
+    if (!award) return [];
+    let ids: number[] = [];
+    const rawIds = award.criteria_ids ?? (award.criteria_id ? [award.criteria_id] : []);
+    if (Array.isArray(rawIds)) {
+      ids = rawIds.map((id) => Number(id));
+    } else if (typeof rawIds === "string") {
+      const s = rawIds as string;
+      if (s.startsWith("{") && s.endsWith("}")) {
+        ids = s.substring(1, s.length - 1).split(",").map((n) => Number(n.trim()));
+      } else {
+        ids = s.split(",").map((n) => Number(n.trim()));
+      }
+    }
+    ids = ids.filter((n) => !isNaN(n));
+    if (ids.length > 0) {
+      const selected = criteriaList.filter((c) => ids.includes(c.id));
+      const cats = Array.from(new Set(selected.map((c) => c.category).filter(Boolean)));
+      if (cats.length > 0) {
+        const allInCats = criteriaList.filter((c) => cats.includes(c.category));
+        const extra = allInCats.map((c) => c.id);
+        ids = Array.from(new Set([...ids, ...extra]));
+      }
+    }
+    return ids;
+  }, [activeAwardFilterId, awards, criteriaList]);
+
+  const awardTotalsByJudge = useMemo(() => {
+    const outer = new Map<number, Map<number, number>>();
+    if (activeAwardFilterId === "all") return outer;
+    for (const judgeId of judgeIdsForActiveContest) {
+      const pmap = new Map<number, number>();
+      for (const p of activeContestParticipants) {
+        let total = 0;
+        let hasVal = false;
+        for (const cId of selectedAwardCriteriaIds) {
+          const key = `${cId}-${judgeId}-${p.id}`;
+          const val = criteriaScoreByJudgeAndParticipant.get(key);
+          if (val !== undefined) {
+            total += val;
+            hasVal = true;
+          }
+        }
+        if (hasVal) {
+          pmap.set(p.id, total);
+        }
+      }
+      outer.set(judgeId, pmap);
+    }
+    return outer;
+  }, [activeAwardFilterId, judgeIdsForActiveContest, activeContestParticipants, selectedAwardCriteriaIds, criteriaScoreByJudgeAndParticipant]);
+
+  const effectiveTotalsByJudgeAndParticipant = useMemo(() => {
+    return activeAwardFilterId === "all"
+      ? totalsByJudgeAndParticipant
+      : awardTotalsByJudge;
+  }, [activeAwardFilterId, totalsByJudgeAndParticipant, awardTotalsByJudge]);
+
+  const currentJudgeTotals = useMemo(() => {
+    const id = judge?.id ?? null;
+    const map = new Map<number, number>();
+    if (id === null) return map;
+    const pmap = effectiveTotalsByJudgeAndParticipant.get(id);
+    if (pmap) {
+      for (const [pid, total] of pmap.entries()) {
+        map.set(pid, total);
+      }
+    }
+    return map;
+  }, [judge, effectiveTotalsByJudgeAndParticipant]);
+
+  const currentJudgeRankByParticipant = useMemo(() => {
+    const res = new Map<number, number>();
+    // group by division so ranks are computed per-division even when "All divisions" is selected
+    const divisionByPid = new Map<number, number | null>();
+    for (const p of activeContestParticipants) {
+      divisionByPid.set(p.id, p.division_id ?? null);
+    }
+    const groups = new Map<number | null, Array<[number, number]>>();
+    for (const [pid, total] of currentJudgeTotals.entries()) {
+      const div = divisionByPid.get(pid) ?? null;
+      const arr = groups.get(div) ?? [];
+      arr.push([pid, total]);
+      groups.set(div, arr);
+    }
+    for (const arr of groups.values()) {
+      arr.sort((a, b) => b[1] - a[1]);
+      let rank = 0;
+      let index = 0;
+      let prevScore: number | null = null;
+      for (const [pid, total] of arr) {
+        index += 1;
+        if (prevScore === null || total < prevScore) {
+          rank = index;
+        }
+        res.set(pid, rank);
+        prevScore = total;
+      }
+    }
+    return res;
+  }, [currentJudgeTotals, activeContestParticipants]);
+
+  const averageRankByParticipant = useMemo(() => {
+    const avg = new Map<number, number | null>();
+    // compute per-judge ranks, per-division
+    const divisionByPid = new Map<number, number | null>();
+    for (const p of activeContestParticipants) {
+      divisionByPid.set(p.id, p.division_id ?? null);
+    }
+    const perJudgeRank = new Map<number, Map<number, number>>();
+    for (const judgeId of judgeIdsForActiveContest) {
+      const totals = effectiveTotalsByJudgeAndParticipant.get(judgeId);
+      if (!totals) continue;
+      const entries = Array.from(totals.entries());
+      const groups = new Map<number | null, Array<[number, number]>>();
+      for (const [pid, score] of entries) {
+        const div = divisionByPid.get(pid) ?? null;
+        const arr = groups.get(div) ?? [];
+        arr.push([pid, score]);
+        groups.set(div, arr);
+      }
+      const rmap = new Map<number, number>();
+      for (const arr of groups.values()) {
+        arr.sort((a, b) => b[1] - a[1]);
+        let r = 0;
+        let i = 0;
+        let prev: number | null = null;
+        for (const [pid, score] of arr) {
+          i += 1;
+          if (prev === null || score < prev) {
+            r = i;
+          }
+          rmap.set(pid, r);
+          prev = score;
+        }
+      }
+      perJudgeRank.set(judgeId, rmap);
+    }
+    // compute average across all judges (divide by total judge count for contest)
+    const expected = judgeIdsForActiveContest.length;
+    for (const p of activeContestParticipants) {
+      let sum = 0;
+      for (const judgeId of judgeIdsForActiveContest) {
+        const rmap = perJudgeRank.get(judgeId);
+        const r = rmap?.get(p.id);
+        if (r != null) sum += r;
+      }
+      avg.set(p.id, expected > 0 ? sum / expected : null);
+    }
+    return avg;
+  }, [activeContestParticipants, judgeIdsForActiveContest, effectiveTotalsByJudgeAndParticipant]);
+
+  // Ensure an award is selected by default when viewing tabulation
+  useEffect(() => {
+    if (!event) return;
+    if (activeAwardFilterId !== "all") return;
+    const first = awards.find((a) => a.event_id === event.id && a.is_active) ?? null;
+    if (first) {
+      setActiveAwardFilterId(first.id);
+    }
+  }, [event, awards, activeAwardFilterId]);
 
   const handleBackToContestSelection = () => {
     if (
@@ -2144,6 +2341,44 @@ export default function JudgeDashboardPage() {
                 </div>
               </div>
 
+              <div className="flex items-center justify-between">
+                <div className="flex gap-2 rounded-full bg-[#E3F2EA] p-1 text-[11px] font-medium text-[#1F4D3A]">
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab("score")}
+                    className={`rounded-full px-4 py-2.5 transition ${
+                      activeTab === "score"
+                        ? "bg-[#1F4D3A] text-white shadow-sm"
+                        : "hover:bg-[#1F4D3A0D]"
+                    }`}
+                  >
+                    Scoring
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab("tabulation")}
+                    className={`rounded-full px-4 py-2.5 transition ${
+                      activeTab === "tabulation"
+                        ? "bg-[#1F4D3A] text-white shadow-sm"
+                        : "hover:bg-[#1F4D3A0D]"
+                    }`}
+                  >
+                    Ranking
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab("monitoring")}
+                    className={`rounded-full px-4 py-2.5 transition ${
+                      activeTab === "monitoring"
+                        ? "bg-[#1F4D3A] text-white shadow-sm"
+                        : "hover:bg-[#1F4D3A0D]"
+                    }`}
+                  >
+                    Monitoring
+                  </button>
+                </div>
+              </div>
+
               <div
                 className="w-full rounded-2xl border border-[#E2E8F0] bg-[#F8FAFC] p-6"
                 style={
@@ -2157,7 +2392,8 @@ export default function JudgeDashboardPage() {
                     : undefined
                 }
               >
-                  {!activeContest || activeContestParticipants.length === 0 ? (
+                {activeTab === "score" ? (
+                  !activeContest || activeContestParticipants.length === 0 ? (
                     <div className="flex h-full flex-col items-center justify-center gap-2 text-center text-sm text-slate-500">
                       <div className="rounded-full bg-white px-4 py-2 text-xs font-medium text-[#1F4D3A] shadow-sm">
                         Scoring workspace
@@ -2365,6 +2601,9 @@ export default function JudgeDashboardPage() {
                                     >
                                       {participant.full_name}
                                     </div>
+                                    <div className="text-[10px] text-slate-500">
+                                      {participantTeamName(participant)}
+                                    </div>
                                   </div>
                                 </button>
                               ))}
@@ -2373,7 +2612,221 @@ export default function JudgeDashboardPage() {
                         );
                       })}
                     </div>
-                  )}
+                  )
+                ) : activeTab === "tabulation" ? (
+                  <div className="space-y-3">
+                    <div className="grid gap-3 text-xs md:grid-cols-2">
+                      <div className="flex flex-col gap-1">
+                        <span className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
+                          Division filter
+                        </span>
+                        <select
+                          className="w-full rounded-full border border-[#E2E8F0] bg-white px-4 py-2.5 text-xs font-medium text-slate-800 outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                          value={
+                            activeDivisionFilterId === "all"
+                              ? "all"
+                              : String(activeDivisionFilterId)
+                          }
+                          onChange={(event) => {
+                            const value = event.target.value;
+                            if (value === "all") {
+                              setActiveDivisionFilterId("all");
+                            } else {
+                              setActiveDivisionFilterId(
+                                Number.parseInt(value, 10),
+                              );
+                            }
+                          }}
+                          disabled={!activeContest}
+                        >
+                          <option value="all">All divisions</option>
+                          {categoriesForActiveEvent.map((category) => (
+                            <option key={category.id} value={category.id}>
+                              {category.name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="flex flex-col gap-1">
+                        <span className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
+                          Award
+                        </span>
+                        <select
+                          className="w-full rounded-full border border-[#E2E8F0] bg-white px-4 py-2.5 text-xs font-medium text-slate-800 outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                          value={String(activeAwardFilterId)}
+                          onChange={(event) => {
+                            const value = event.target.value;
+                            if (value) {
+                              setActiveAwardFilterId(Number.parseInt(value, 10));
+                            }
+                          }}
+                        >
+                          {awards
+                            .filter(
+                              (award) =>
+                                event && award.event_id === event.id && award.is_active,
+                            )
+                            .map((award) => (
+                              <option key={award.id} value={award.id}>
+                                {award.name}
+                              </option>
+                            ))}
+                        </select>
+                      </div>
+                    </div>
+                    {!activeContest ? (
+                      <div className="text-sm text-slate-500">
+                        Select a contest above to view ranking.
+                      </div>
+                    ) : (
+                      <div className="overflow-hidden rounded-2xl border border-[#E2E8F0] bg-white">
+                        <table className="min-w-full border-collapse text-left text-sm">
+                          <thead className="bg-[#F5F7FF] text-xs font-semibold uppercase tracking-wide text-[#1F4D3A]">
+                            <tr>
+                              <th className="px-4 py-3 font-medium">College/University</th>
+                              <th className="px-4 py-3 font-medium">Contestant</th>
+                              <th className="px-4 py-3 text-center font-medium" colSpan={2}>
+                                Your scores
+                              </th>
+                              <th className="px-4 py-3 text-right font-medium">Rank total</th>
+                            </tr>
+                            <tr className="bg-[#F5F7FF] text-[10px] font-semibold uppercase tracking-wide text-[#1F4D3A]">
+                              <th className="px-4 py-2"></th>
+                              <th className="px-4 py-2"></th>
+                              <th className="px-4 py-2 text-center">Score</th>
+                              <th className="px-4 py-2 text-center">Rank</th>
+                              <th className="px-4 py-2"></th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {(() => {
+                              const ordered = [...activeContestParticipants].sort((a, b) => {
+                                const ar = averageRankByParticipant.get(a.id);
+                                const br = averageRankByParticipant.get(b.id);
+                                if (ar != null && br != null && ar !== br) {
+                                  return ar - br; // lowest average first
+                                }
+                                const at = currentJudgeTotals.get(a.id);
+                                const bt = currentJudgeTotals.get(b.id);
+                                if (at !== undefined && bt !== undefined && at !== bt) {
+                                  return bt - at; // higher total first as tie-breaker
+                                }
+                                return a.contestant_number.localeCompare(b.contestant_number);
+                              });
+                              return ordered.map((p) => {
+                              const division = categories.find((c) => c.id === p.division_id);
+                              const college = division?.name ?? "";
+                              const total = currentJudgeTotals.get(p.id);
+                              const rank = currentJudgeRankByParticipant.get(p.id) ?? null;
+                              const avg = averageRankByParticipant.get(p.id);
+                              return (
+                                <tr key={p.id} className="border-t border-[#E2E8F0] hover:bg-[#F8FAFC]">
+                                  <td className="px-4 py-3 align-middle text-sm text-slate-700">{college}</td>
+                                  <td className="px-4 py-3 align-middle">
+                                    <div className="text-sm font-semibold text-slate-800">
+                                      {p.full_name}
+                                    </div>
+                                    <div className="text-xs text-slate-500">
+                                      Contestant #{p.contestant_number}
+                                    </div>
+                                  </td>
+                                  <td className="px-4 py-3 align-middle text-center text-sm text-slate-700">
+                                    {total !== undefined ? total.toFixed(2) : "—"}
+                                  </td>
+                                  <td className="px-4 py-3 align-middle text-center text-sm font-semibold text-[#1F4D3A]">
+                                    {rank ?? "—"}
+                                  </td>
+                                  <td className="px-4 py-3 align-middle text-right text-sm font-semibold text-[#1F4D3A]">
+                                    {typeof avg === "number" ? avg.toFixed(2) : "—"}
+                                  </td>
+                                </tr>
+                              );});
+                            })()}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    {!activeContest ? (
+                      <div className="text-sm text-slate-500">
+                        Select a contest above to view monitoring.
+                      </div>
+                    ) : (
+                      <div className="rounded-2xl border border-[#E2E8F0] bg-white p-4">
+                        <div className="mb-3 flex items-center justify-between">
+                          <div className="space-y-0.5">
+                            <div className="text-[11px] font-medium text-slate-600">
+                              Your score completion
+                            </div>
+                            <div className="text-[10px] text-slate-400">
+                              Expected entries = participants × criteria for this contest.
+                            </div>
+                          </div>
+                        </div>
+                        {(() => {
+                          const criteriaIds = new Set(
+                            criteriaList.filter((c) => c.contest_id === activeContest.id).map((c) => c.id),
+                          );
+                          const participantIds = new Set(activeContestParticipants.map((p) => p.id));
+                          const expected = participantIds.size * criteriaIds.size;
+                          const judgeId = judge?.id ?? null;
+                          const filled =
+                            judgeId === null
+                              ? 0
+                              : scores.filter(
+                                  (s) =>
+                                    s.judge_id === judgeId &&
+                                    participantIds.has(s.participant_id) &&
+                                    criteriaIds.has(s.criteria_id),
+                                ).length;
+                          const missing = Math.max(0, expected - filled);
+                          const percent = expected === 0 ? 0 : Math.min(100, Math.round((filled / expected) * 100));
+                          return (
+                            <div className="overflow-x-auto">
+                              <table className="min-w-full border-collapse text-left text-[11px]">
+                                <thead>
+                                  <tr className="border-b border-[#E2E8F0] bg-[#F5F7FF] text-[10px] uppercase tracking-wide text-slate-500">
+                                    <th className="px-3 py-2 font-medium">Contest</th>
+                                    <th className="px-3 py-2 font-medium text-right">Participants</th>
+                                    <th className="px-3 py-2 font-medium text-right">Criteria</th>
+                                    <th className="px-3 py-2 font-medium text-right">Filled</th>
+                                    <th className="px-3 py-2 font-medium text-right">Expected</th>
+                                    <th className="px-3 py-2 font-medium text-right">Missing</th>
+                                    <th className="px-3 py-2 font-medium text-right">Status</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  <tr className="border-b border-[#F1F5F9]">
+                                    <td className="px-3 py-2 text-slate-700">{activeContest.name}</td>
+                                    <td className="px-3 py-2 text-right text-slate-700">{participantIds.size.toLocaleString()}</td>
+                                    <td className="px-3 py-2 text-right text-slate-700">{criteriaIds.size.toLocaleString()}</td>
+                                    <td className="px-3 py-2 text-right text-slate-700">{filled.toLocaleString()}</td>
+                                    <td className="px-3 py-2 text-right text-slate-700">{expected.toLocaleString()}</td>
+                                    <td className="px-3 py-2 text-right text-slate-700">{missing.toLocaleString()}</td>
+                                    <td className="px-3 py-2 text-right">
+                                      <span
+                                        className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] ${
+                                          missing === 0 && expected > 0
+                                            ? "bg-[#ECFDF5] text-[#065F46] border border-[#A7F3D0]"
+                                            : "bg-[#FEF2F2] text-[#991B1B] border border-[#FECACA]"
+                                        }`}
+                                        title={`${percent}% complete`}
+                                      >
+                                        {missing === 0 && expected > 0 ? "Complete" : `${percent}%`}
+                                      </span>
+                                    </td>
+                                  </tr>
+                                </tbody>
+                              </table>
+                            </div>
+                          );
+                        })()}
+                      </div>
+                    )}
+                  </div>
+                )}
                 </div>
             </div>
           </div>
@@ -2509,22 +2962,6 @@ export default function JudgeDashboardPage() {
                   <div className="flex flex-wrap items-center gap-2 text-xs font-normal md:text-sm text-slate-500">
                     <span
                       style={
-                        contestLayoutTheme?.modalHeaderSecondaryTextColor
-                          ? {
-                              color: hexWithOpacity(
-                                contestLayoutTheme.modalHeaderSecondaryTextColor,
-                                (contestLayoutTheme
-                                  .modalHeaderSecondaryTextColorOpacity ?? 100) /
-                                  100,
-                              ),
-                            }
-                          : undefined
-                      }
-                    >
-                      Contest:
-                    </span>
-                    <span
-                      style={
                         contestLayoutTheme?.modalHeaderPrimaryTextColor
                           ? {
                               color: hexWithOpacity(
@@ -2536,7 +2973,7 @@ export default function JudgeDashboardPage() {
                           : undefined
                       }
                     >
-                      {activeContest.name}
+                      {participantTeamName(currentParticipant)}
                     </span>
                   </div>
                 </div>

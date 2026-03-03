@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, useRef } from "react";
+import { useEffect, useMemo, useState, useRef, Fragment } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@supabase/supabase-js";
 
@@ -342,6 +342,7 @@ export default function TabulatorPage() {
       if (!storedUsername) {
         setError("No tabulator session found. Please sign in again.");
         setIsLoading(false);
+        router.push("/");
         return;
       }
 
@@ -1016,6 +1017,90 @@ export default function TabulatorPage() {
     );
   }, [awardsResults, activeAwardFilterId]);
 
+  const selectedAwardCriteriaIds = useMemo(() => {
+    if (!selectedAwardResult) return [];
+    let criteriaIds: number[] = [];
+    const rawIds = selectedAwardResult.award.criteria_ids;
+    if (Array.isArray(rawIds)) {
+      criteriaIds = rawIds.map((id) => Number(id));
+    } else if (typeof rawIds === "string") {
+      const s = rawIds as string;
+      if (s.startsWith("{") && s.endsWith("}")) {
+        criteriaIds = s
+          .substring(1, s.length - 1)
+          .split(",")
+          .map((n) => Number(n.trim()));
+      } else {
+        criteriaIds = s.split(",").map((n) => Number(n.trim()));
+      }
+    } else if (selectedAwardResult.award.criteria_id) {
+      criteriaIds = [Number(selectedAwardResult.award.criteria_id)];
+    }
+    criteriaIds = criteriaIds.filter((n) => !isNaN(n));
+    if (criteriaIds.length > 0) {
+      const selectedCriteria = criteriaList.filter((c) =>
+        criteriaIds.includes(c.id),
+      );
+      const categories = Array.from(
+        new Set(selectedCriteria.map((c) => c.category).filter(Boolean)),
+      );
+      if (categories.length > 0) {
+        const allCriteriaInCategories = criteriaList.filter((c) =>
+          categories.includes(c.category),
+        );
+        const allIds = allCriteriaInCategories.map((c) => c.id);
+        criteriaIds = Array.from(new Set([...criteriaIds, ...allIds]));
+      }
+    }
+    return criteriaIds;
+  }, [selectedAwardResult, criteriaList]);
+
+  const awardTotalsByJudge = useMemo(() => {
+    const outer = new Map<number, Map<number, number>>();
+    if (!selectedAwardResult) return outer;
+    for (const judgeId of judgeIdsForActiveContest) {
+      const pmap = new Map<number, number>();
+      for (const item of selectedAwardResult.winners) {
+        let total = 0;
+        let hasVal = false;
+        for (const cId of selectedAwardCriteriaIds) {
+          const key = `${cId}-${judgeId}-${item.participant.id}`;
+          const val = criteriaScoreByJudgeAndParticipant.get(key);
+          if (val !== undefined) {
+            total += val;
+            hasVal = true;
+          }
+        }
+        if (hasVal) {
+          pmap.set(item.participant.id, total);
+        }
+      }
+      outer.set(judgeId, pmap);
+    }
+    return outer;
+  }, [selectedAwardResult, judgeIdsForActiveContest, selectedAwardCriteriaIds, criteriaScoreByJudgeAndParticipant]);
+
+  const awardRankByJudgeAndParticipant = useMemo(() => {
+    const rankMap = new Map<string, number>();
+    for (const [judgeId, pmap] of awardTotalsByJudge.entries()) {
+      const entries = Array.from(pmap.entries());
+      entries.sort((a, b) => b[1] - a[1]);
+      let currentRank = 1;
+      for (let i = 0; i < entries.length; i++) {
+        if (i > 0) {
+          const prev = entries[i - 1][1];
+          const curr = entries[i][1];
+          if (curr < prev) {
+            currentRank = i + 1;
+          }
+        }
+        const participantId = entries[i][0];
+        rankMap.set(`${judgeId}-${participantId}`, currentRank);
+      }
+    }
+    return rankMap;
+  }, [awardTotalsByJudge]);
+
   const awardRankingRows = useMemo<AwardRankingRow[]>(() => {
     if (!selectedAwardResult) {
       return [];
@@ -1090,34 +1175,54 @@ export default function TabulatorPage() {
       },
     );
 
-    const ranked = rowsWithTotals
-      .filter((item) => item.criteriaTotal !== null)
-      .sort((a, b) => (b.criteriaTotal! - a.criteriaTotal!));
-
-    let previousScore: number | null = null;
-    let currentRank = 0;
-    let index = 0;
-
-    for (const item of ranked) {
-      index += 1;
-      if (previousScore === null || item.criteriaTotal! < previousScore) {
-        currentRank = index;
+    // Compute average rank across judges for each participant
+    const averageByParticipant = new Map<number, number | null>();
+    for (const item of rowsWithTotals) {
+      let sum = 0;
+      let count = 0;
+      for (const judgeId of judgeIdsForActiveContest) {
+        const r = awardRankByJudgeAndParticipant.get(
+          `${judgeId}-${item.row.participant.id}`,
+        );
+        if (r != null) {
+          sum += r;
+          count += 1;
+        }
       }
-      item.rank = currentRank;
-      previousScore = item.criteriaTotal!;
+      averageByParticipant.set(
+        item.row.participant.id,
+        count > 0 ? sum / count : null,
+      );
     }
 
+    // Assign overall rank based on lowest average rank (Rank 1 = smallest average)
+    const sortable = rowsWithTotals
+      .map((it) => [it, averageByParticipant.get(it.row.participant.id)] as const)
+      .filter((pair) => pair[1] !== null)
+      .sort((a, b) => (a[1]! - b[1]!));
+
+    let prevAvg: number | null = null;
+    let overallRank = 0;
+    let overallIndex = 0;
+    for (const [it, avg] of sortable) {
+      overallIndex += 1;
+      if (prevAvg === null || avg! > prevAvg) {
+        overallRank = overallIndex;
+      }
+      it.rank = overallRank;
+      prevAvg = avg!;
+    }
+
+    // Sort winners by lowest average rank (winner on top). Fallback to criteriaTotal if averages are equal/missing.
     rowsWithTotals.sort((a, b) => {
-      if (a.criteriaTotal === null && b.criteriaTotal === null) {
-        return 0;
+      const aAvg = averageByParticipant.get(a.row.participant.id);
+      const bAvg = averageByParticipant.get(b.row.participant.id);
+      if (aAvg != null && bAvg != null && aAvg !== bAvg) {
+        return aAvg - bAvg; // ascending: lowest average first
       }
-      if (a.criteriaTotal === null) {
-        return 1;
-      }
-      if (b.criteriaTotal === null) {
-        return -1;
-      }
-      return b.criteriaTotal - a.criteriaTotal;
+      const aTot = a.criteriaTotal ?? -Infinity;
+      const bTot = b.criteriaTotal ?? -Infinity;
+      return bTot - aTot; // tie-breaker: higher total first
     });
 
     return rowsWithTotals;
@@ -1126,11 +1231,13 @@ export default function TabulatorPage() {
     judgeIdsForActiveContest,
     criteriaScoreByJudgeAndParticipant,
     criteriaList,
+    awardRankByJudgeAndParticipant,
   ]);
 
   const handleSignOut = () => {
     if (typeof window !== "undefined") {
       window.localStorage.removeItem("tabulator_username");
+      document.cookie = "tabulator_username=; path=/; max-age=0";
     }
     router.push("/");
   };
@@ -1709,8 +1816,7 @@ export default function TabulatorPage() {
                         <table className="min-w-full border-collapse text-left text-sm">
                           <thead className="bg-[#F5F7FF] text-xs font-semibold uppercase tracking-wide text-[#1F4D3A]">
                             <tr>
-                              <th className="px-4 py-3 font-medium">Rank</th>
-                              <th className="px-4 py-3 font-medium">Represent</th>
+                              <th className="px-4 py-3 font-medium">College/University</th>
                               <th className="px-4 py-3 font-medium">Contestant</th>
                               {judgeIdsForActiveContest.map((_, index) => (
                                 <th
@@ -1731,9 +1837,6 @@ export default function TabulatorPage() {
                                 key={row.participant.id}
                                 className="border-t border-[#E2E8F0] hover:bg-[#F8FAFC]"
                               >
-                                <td className="px-4 py-3 align-middle text-sm font-semibold text-slate-700">
-                                  {row.rank}
-                                </td>
                                 <td className="px-4 py-3 align-middle text-sm text-slate-700">
                                   {row.teamName ?? row.categoryName}
                                 </td>
@@ -1842,27 +1945,25 @@ export default function TabulatorPage() {
                             <table className="min-w-full border-collapse text-left text-sm">
                               <thead className="bg-[#F5F7FF] text-xs font-semibold uppercase tracking-wide text-[#1F4D3A]">
                                 <tr>
-                                  <th className="px-4 py-3 font-medium">Rank</th>
-                                  <th className="px-4 py-3 font-medium">Represent</th>
+                                  <th className="px-4 py-3 font-medium">College/University</th>
                                   <th className="px-4 py-3 font-medium">Contestant</th>
                                   {judgeIdsForActiveContest.map((judgeId, index) => (
-                                    <th
-                                      key={judgeId}
-                                      className="px-4 py-3 text-center font-medium"
-                                    >
-                                      <div>Judge {index + 1}</div>
-                                      <button
-                                        type="button"
-                                        onClick={() => setSelectedJudgeForBreakdown(judgeId)}
-                                        className="mt-1 rounded-full border border-[#1F4D3A33] bg-white px-2 py-0.5 text-[9px] font-medium text-[#1F4D3A] transition hover:bg-[#F0FDF4]"
-                                      >
-                                        show more
-                                      </button>
+                                    <th key={judgeId} className="px-4 py-3 text-center font-medium" colSpan={2}>
+                                      Judge {index + 1}
                                     </th>
                                   ))}
-                                  <th className="px-4 py-3 text-right font-medium">
-                                    Total score
-                                  </th>
+                                  <th className="px-4 py-3 text-right font-medium">Rank total</th>
+                                </tr>
+                                <tr className="bg-[#F5F7FF] text-[10px] font-semibold uppercase tracking-wide text-[#1F4D3A]">
+                                  <th className="px-4 py-2"></th>
+                                  <th className="px-4 py-2"></th>
+                                  {judgeIdsForActiveContest.map((judgeId) => (
+                                    <Fragment key={`hdr-${judgeId}`}>
+                                      <th className="px-4 py-2 text-center">Score</th>
+                                      <th className="px-4 py-2 text-center">Rank</th>
+                                    </Fragment>
+                                  ))}
+                                  <th className="px-4 py-2"></th>
                                 </tr>
                               </thead>
                               <tbody>
@@ -1871,9 +1972,6 @@ export default function TabulatorPage() {
                                     key={item.row.participant.id}
                                     className="border-t border-[#E2E8F0] hover:bg-[#F8FAFC]"
                                   >
-                                    <td className="px-4 py-3 align-middle text-sm font-semibold text-slate-700">
-                                      {item.rank ?? "—"}
-                                    </td>
                                     <td className="px-4 py-3 align-middle text-sm text-slate-700">
                                       {item.row.teamName ?? item.row.categoryName}
                                     </td>
@@ -1886,62 +1984,40 @@ export default function TabulatorPage() {
                                       </div>
                                     </td>
                                     {judgeIdsForActiveContest.map((judgeId) => {
-                                      // Logic to calculate total judge score for this award
-                                      let criteriaIds: number[] = [];
-                                      const rawIds = selectedAwardResult.award.criteria_ids;
-
-                                      if (Array.isArray(rawIds)) {
-                                        criteriaIds = rawIds.map(id => Number(id));
-                                      } else if (typeof rawIds === 'string') {
-                                        const s = rawIds as string;
-                                        if (s.startsWith('{') && s.endsWith('}')) {
-                                          criteriaIds = s.substring(1, s.length - 1).split(',').map(n => Number(n.trim()));
-                                        } else {
-                                          criteriaIds = s.split(',').map(n => Number(n.trim()));
-                                        }
-                                      } else if (selectedAwardResult.award.criteria_id) {
-                                        criteriaIds = [Number(selectedAwardResult.award.criteria_id)];
-                                      }
-                                      
-                                      criteriaIds = criteriaIds.filter(n => !isNaN(n));
-
-                                      // Include all criteria from categories
-                                      if (criteriaIds.length > 0) {
-                                        const selectedCriteria = criteriaList.filter(c => criteriaIds.includes(c.id));
-                                        const categories = Array.from(new Set(selectedCriteria.map(c => c.category).filter(Boolean)));
-                                        
-                                        if (categories.length > 0) {
-                                            const allCriteriaInCategories = criteriaList.filter(c => categories.includes(c.category));
-                                            const allIds = allCriteriaInCategories.map(c => c.id);
-                                            criteriaIds = Array.from(new Set([...criteriaIds, ...allIds]));
-                                        }
-                                      }
-
-                                      let total = 0;
-                                      let hasVal = false;
-                                      for (const cId of criteriaIds) {
-                                          const key = `${cId}-${judgeId}-${item.row.participant.id}`;
-                                          const value = criteriaScoreByJudgeAndParticipant.get(key);
-                                          if (value !== undefined) {
-                                              total += value;
-                                              hasVal = true;
-                                          }
-                                      }
+                                      const totalMap = awardTotalsByJudge.get(judgeId);
+                                      const total = totalMap?.get(item.row.participant.id);
+                                      const rank =
+                                        awardRankByJudgeAndParticipant.get(
+                                          `${judgeId}-${item.row.participant.id}`,
+                                        ) ?? null;
                                       return (
-                                        <td
-                                          key={judgeId}
-                                          className="px-4 py-3 align-middle text-center text-sm text-slate-700"
-                                        >
-                                          {hasVal
-                                            ? total.toFixed(2)
-                                            : "—"}
-                                        </td>
+                                        <Fragment key={`row-${judgeId}`}>
+                                          <td className="px-4 py-3 align-middle text-center text-sm text-slate-700">
+                                            {total !== undefined ? total.toFixed(2) : "—"}
+                                          </td>
+                                          <td className="px-4 py-3 align-middle text-center text-sm font-semibold text-[#1F4D3A]">
+                                            {rank ?? "—"}
+                                          </td>
+                                        </Fragment>
                                       );
                                     })}
                                     <td className="px-4 py-3 align-middle text-right text-sm font-semibold text-[#1F4D3A]">
-                                      {item.criteriaTotal === null
-                                        ? "—"
-                                        : item.criteriaTotal.toFixed(2)}
+                                      {(() => {
+                                        let sum = 0;
+                                        let count = 0;
+                                        for (const judgeId of judgeIdsForActiveContest) {
+                                          const r = awardRankByJudgeAndParticipant.get(
+                                            `${judgeId}-${item.row.participant.id}`,
+                                          );
+                                          if (r != null) {
+                                            sum += r;
+                                            count += 1;
+                                          }
+                                        }
+                                        return count === judgeIdsForActiveContest.length
+                                          ? (sum / count).toFixed(2)
+                                          : "—";
+                                      })()}
                                     </td>
                                   </tr>
                                 ))}

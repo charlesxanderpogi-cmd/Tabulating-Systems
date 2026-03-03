@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { createClient } from "@supabase/supabase-js";
 import {
   type ReactNode,
@@ -41,7 +42,7 @@ type EventSubTab =
   | "addCriteria"
   | "awards"
   | "template";
-type ParticipantSubTab = "category" | "participant" | "judge";
+type ParticipantSubTab = "category" | "participant" | "judge" | "monitoring";
 type UserSubTab = "admin" | "judge" | "tabulator";
 
 type EventRow = {
@@ -756,6 +757,7 @@ type AdminPendingAction =
   | { type: "delete"; adminId: number };
 
 export default function AdminDashboard() {
+  const router = useRouter();
   const [activeTab, setActiveTab] = useState<AdminTab>("home");
   const [eventTab, setEventTab] = useState<EventSubTab>("addEvent");
   const [participantTab, setParticipantTab] =
@@ -781,6 +783,13 @@ export default function AdminDashboard() {
   const [editingCriteriaId, setEditingCriteriaId] = useState<number | null>(
     null,
   );
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const username = window.localStorage.getItem("admin_username");
+    if (!username) {
+      router.push("/");
+    }
+  }, [router]);
   const [editingCriteriaCategory, setEditingCriteriaCategory] = useState<string>("");
   const [editingContestId, setEditingContestId] = useState<number | null>(null);
   const [editingEventId, setEditingEventId] = useState<number | null>(null);
@@ -976,6 +985,8 @@ export default function AdminDashboard() {
   const [selectedTemplateId, setSelectedTemplateId] = useState<number | null>(
     null,
   );
+  const [editingDivisionIdForEvent, setEditingDivisionIdForEvent] = useState<number | null>(null);
+  const [editingDivisionNameForEvent, setEditingDivisionNameForEvent] = useState("");
   const [categoryName, setCategoryName] = useState("");
   const [isSavingCategory, setIsSavingCategory] = useState(false);
   const [categoryError, setCategoryError] = useState<string | null>(null);
@@ -3798,26 +3809,46 @@ export default function AdminDashboard() {
       }
 
       if (divisionsToDelete.length > 0) {
-        const idsToDelete = divisionsToDelete.map((division) => division.id);
+        const contestIdsForEvent = contests
+          .filter((c) => c.event_id === selectedEventIdForContest)
+          .map((c) => c.id);
+        const usedDivisionIds = new Set(
+          participants
+            .filter((p) => contestIdsForEvent.includes(p.contest_id))
+            .map((p) => p.division_id),
+        );
+        const deletableIds = divisionsToDelete
+          .map((d) => d.id)
+          .filter((id) => !usedDivisionIds.has(id));
+        const keptIds = divisionsToDelete
+          .map((d) => d.id)
+          .filter((id) => usedDivisionIds.has(id));
 
-        const { data: deleted, error: deleteError } = await supabase
-          .from("division")
-          .delete()
-          .in("id", idsToDelete)
-          .select("id");
+        if (deletableIds.length > 0) {
+          const { data: deleted, error: deleteError } = await supabase
+            .from("division")
+            .delete()
+            .in("id", deletableIds)
+            .select("id");
 
-        if (deleteError) {
-          setContestError(
-            deleteError.message ||
-              "Some divisions could not be deleted. They may already be used by participants.",
-          );
-        } else if (deleted && deleted.length > 0) {
-          const deletedIds = new Set(
-            (deleted as { id: number }[]).map((row) => row.id),
-          );
+          if (deleteError) {
+            setContestError(
+              deleteError.message ||
+                "Some divisions could not be deleted.",
+            );
+          } else if (deleted && deleted.length > 0) {
+            const deletedIds = new Set(
+              (deleted as { id: number }[]).map((row) => row.id),
+            );
+            setCategories((previous) =>
+              previous.filter((division) => !deletedIds.has(division.id)),
+            );
+          }
+        }
 
-          setCategories((previous) =>
-            previous.filter((division) => !deletedIds.has(division.id)),
+        if (keptIds.length > 0) {
+          setContestSuccess(
+            "Some divisions were kept because participants are already assigned to them. You can rename them below.",
           );
         }
       }
@@ -3958,6 +3989,44 @@ export default function AdminDashboard() {
     setContestCategoryText("");
     setEditingContestId(null);
     setIsContestModalOpen(false);
+  };
+
+  const handleSaveDivisionNameForEvent = async () => {
+    setContestError(null);
+    setContestSuccess(null);
+    if (selectedEventIdForContest === null || editingDivisionIdForEvent === null) {
+      return;
+    }
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+    if (!supabaseUrl || !supabaseAnonKey) {
+      setContestError("Supabase is not configured.");
+      return;
+    }
+    const supabase = createClient(supabaseUrl, supabaseAnonKey);
+    const newName = editingDivisionNameForEvent.trim();
+    if (!newName) {
+      setContestError("Division name cannot be empty.");
+      return;
+    }
+    const { data, error } = await supabase
+      .from("division")
+      .update({ name: newName })
+      .eq("id", editingDivisionIdForEvent)
+      .select("id, event_id, name, created_at");
+    if (error) {
+      setContestError(error.message || "Unable to rename division.");
+      return;
+    }
+    const updated = (data as CategoryRow[] | null) ?? null;
+    if (updated && updated.length > 0) {
+      setCategories((prev) =>
+        prev.map((d) => (d.id === updated[0].id ? updated[0] : d)),
+      );
+      setContestSuccess("Division name has been updated.");
+    }
+    setEditingDivisionIdForEvent(null);
+    setEditingDivisionNameForEvent("");
   };
 
   const handleSaveTemplate = async () => {
@@ -5547,33 +5616,50 @@ export default function AdminDashboard() {
 
     const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
-    const { data, error } = await supabase
-      .from("user_judge")
-      .delete()
-      .eq("id", id)
-      .select("id");
+    try {
+      // Remove dependent rows to avoid foreign key or RLS issues
+      await supabase.from("judge_assignment").delete().eq("judge_id", id);
+      await supabase.from("judge_scoring_permission").delete().eq("judge_id", id);
+      await supabase.from("judge_division_permission").delete().eq("judge_id", id);
+      await supabase.from("judge_participant_permission").delete().eq("judge_id", id);
+      await supabase.from("judge_contest_submission").delete().eq("judge_id", id);
+      await supabase.from("judge_participant_total").delete().eq("judge_id", id);
+      await supabase.from("score").delete().eq("judge_id", id);
 
-    setIsDeletingJudgeId(null);
+      const { data, error } = await supabase
+        .from("user_judge")
+        .delete()
+        .eq("id", id)
+        .select("id");
 
-    if (error) {
-      setJudgeError(
-        error.message ||
+      if (error) {
+        setJudgeError(
+          error.message ||
+            "Unable to delete judge. Check your database row-level security policies.",
+        );
+        return;
+      }
+
+      if (!data || data.length === 0) {
+        setJudgeError(
           "Unable to delete judge. Check your database row-level security policies.",
-      );
-      return;
-    }
+        );
+        return;
+      }
 
-    if (!data || data.length === 0) {
-      setJudgeError(
-        "Unable to delete judge. Check your database row-level security policies.",
+      setJudges((previous) => previous.filter((judge) => judge.id !== id));
+      setJudgeAssignments((previous) =>
+        previous.filter((assignment) => assignment.judge_id !== id),
       );
-      return;
+    } catch (e: any) {
+      const message =
+        typeof e?.message === "string"
+          ? e.message
+          : "Unable to delete judge due to an unexpected error.";
+      setJudgeError(message);
+    } finally {
+      setIsDeletingJudgeId(null);
     }
-
-    setJudges((previous) => previous.filter((judge) => judge.id !== id));
-    setJudgeAssignments((previous) =>
-      previous.filter((assignment) => assignment.judge_id !== id),
-    );
   };
 
   const handleDeleteAdmin = async (id: number) => {
@@ -9738,6 +9824,68 @@ export default function AdminDashboard() {
                         Add one division at a time and click +. They appear in
                         the participant division dropdown.
                       </div>
+                      {selectedEventIdForContest !== null && (
+                        <div className="mt-3 space-y-2">
+                          <div className="text-[10px] font-semibold text-slate-600">
+                            Existing divisions for this event
+                          </div>
+                          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                            {categories
+                              .filter((d) => d.event_id === selectedEventIdForContest)
+                              .map((division) => (
+                                <div
+                                  key={division.id}
+                                  className="flex items-center justify-between rounded-xl border border-[#E2E8F0] bg-white px-3 py-2 text-[11px]"
+                                >
+                                  {editingDivisionIdForEvent === division.id ? (
+                                    <div className="flex w-full items-center gap-2">
+                                      <input
+                                        value={editingDivisionNameForEvent}
+                                        onChange={(e) =>
+                                          setEditingDivisionNameForEvent(e.target.value)
+                                        }
+                                        className="flex-1 rounded-lg border border-[#D0D7E2] bg-white px-2 py-1 outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                                      />
+                                      <button
+                                        type="button"
+                                        onClick={handleSaveDivisionNameForEvent}
+                                        className="rounded-full bg-[#1F4D3A] px-3 py-1 text-[10px] font-semibold text-white hover:bg-[#163528]"
+                                      >
+                                        Save
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setEditingDivisionIdForEvent(null);
+                                          setEditingDivisionNameForEvent("");
+                                        }}
+                                        className="rounded-full border border-[#E2E8F0] px-3 py-1 text-[10px] text-slate-600 hover:bg-[#F8FAFC]"
+                                      >
+                                        Cancel
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <>
+                                      <div className="font-medium text-slate-700">
+                                        {division.name}
+                                      </div>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setEditingDivisionIdForEvent(division.id);
+                                          setEditingDivisionNameForEvent(division.name);
+                                        }}
+                                        className="rounded-full border border-[#E2E8F0] px-3 py-1 text-[10px] text-slate-600 hover:bg-[#F8FAFC]"
+                                      >
+                                        Edit
+                                      </button>
+                                    </>
+                                  )}
+                                </div>
+                              ))}
+                          </div>
+                        </div>
+                      )}
                     </div>
                     {(contestError || contestSuccess) && (
                       <div
@@ -10356,6 +10504,17 @@ export default function AdminDashboard() {
                 }`}
               >
                 Judge
+              </button>
+              <button
+                type="button"
+                onClick={() => setParticipantTab("monitoring")}
+                className={`rounded-full border px-3 py-1.5 transition ${
+                  participantTab === "monitoring"
+                    ? "border-[#1F4D3A] bg-[#1F4D3A] text-white shadow-sm"
+                    : "border-transparent bg-[#F5F7FF] text-[#1F4D3A] hover:bg-[#E3F2EA]"
+                }`}
+              >
+                Score Monitoring
               </button>
             </div>
 
@@ -11112,6 +11271,163 @@ export default function AdminDashboard() {
                       </button>
                     </div>
 
+                  </div>
+                </div>
+              )}
+
+              {participantTab === "monitoring" && (
+                <div className="space-y-4">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+                    <div className="flex-1">
+                      <div className="mb-2 text-[11px] font-medium text-slate-600">
+                        Select Event
+                      </div>
+                      <select
+                        value={participantsTabEventFilterId ?? ""}
+                        onChange={(e) =>
+                          setParticipantsTabEventFilterId(
+                            e.target.value ? Number(e.target.value) : null,
+                          )
+                        }
+                        className="w-full max-w-[420px] rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                      >
+                        <option value="">-- Choose an event --</option>
+                        {events.map((event) => (
+                          <option key={event.id} value={event.id}>
+                            {event.name} ({event.year})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl border border-[#1F4D3A1F] bg-white p-4">
+                    <div className="mb-3 flex items-center justify-between">
+                      <div className="space-y-0.5">
+                        <div className="text-[11px] font-medium text-slate-600">
+                          Judge score completion
+                        </div>
+                        <div className="text-[10px] text-slate-400">
+                          Tracks if judges filled all criteria per contest.
+                        </div>
+                      </div>
+                    </div>
+                    <div className="overflow-x-auto">
+                      <table className="min-w-full border-collapse text-left text-[11px]">
+                        <thead>
+                          <tr className="border-b border-[#E2E8F0] bg-[#F5F7FF] text-[10px] uppercase tracking-wide text-slate-500">
+                            <th className="px-3 py-2 font-medium">Contest</th>
+                            <th className="px-3 py-2 font-medium">Judge</th>
+                            <th className="px-3 py-2 font-medium text-right">Participants</th>
+                            <th className="px-3 py-2 font-medium text-right">Criteria</th>
+                            <th className="px-3 py-2 font-medium text-right">Filled entries</th>
+                            <th className="px-3 py-2 font-medium text-right">Expected entries</th>
+                            <th className="px-3 py-2 font-medium text-right">Status</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(() => {
+                            const effectiveEventId = participantsTabEventFilterId ?? activeEventId;
+                            const contestRows = contestsForParticipantsTab;
+                            const rows: Array<{
+                              contestId: number;
+                              contestName: string;
+                              judgeId: number;
+                              judgeName: string;
+                              participantCount: number;
+                              criteriaCount: number;
+                              filled: number;
+                              expected: number;
+                            }> = [];
+
+                            for (const contest of contestRows) {
+                              if (effectiveEventId !== null && contest.event_id !== effectiveEventId) {
+                                continue;
+                              }
+                              const criteriaIds = new Set(
+                                criteriaList.filter((c) => c.contest_id === contest.id).map((c) => c.id),
+                              );
+                              const participantIds = new Set(
+                                participants
+                                  .filter((p) => p.contest_id === contest.id)
+                                  .map((p) => p.id),
+                              );
+                              const participantCount = participantIds.size;
+                              const criteriaCount = criteriaIds.size;
+                              const expected = participantCount * criteriaCount;
+                              if (expected === 0) {
+                                continue;
+                              }
+                              const assignedJudgeIds = new Set(
+                                judgeAssignments
+                                  .filter((ja) => ja.contest_id === contest.id)
+                                  .map((ja) => ja.judge_id),
+                              );
+                              for (const judge of judgesForActiveEvent) {
+                                if (!assignedJudgeIds.has(judge.id)) continue;
+                                const filled = scores.filter(
+                                  (s) =>
+                                    s.judge_id === judge.id &&
+                                    participantIds.has(s.participant_id) &&
+                                    criteriaIds.has(s.criteria_id),
+                                ).length;
+                                rows.push({
+                                  contestId: contest.id,
+                                  contestName: contest.name,
+                                  judgeId: judge.id,
+                                  judgeName: judge.full_name,
+                                  participantCount,
+                                  criteriaCount,
+                                  filled,
+                                  expected,
+                                });
+                              }
+                            }
+
+                            if (rows.length === 0) {
+                              return (
+                                <tr className="border-b border-[#F1F5F9]">
+                                  <td className="px-3 py-2 text-slate-400" colSpan={7}>
+                                    No monitoring data yet.
+                                  </td>
+                                </tr>
+                              );
+                            }
+
+                            return rows.map((row, idx) => {
+                              const complete = row.filled >= row.expected && row.expected > 0;
+                              const percent =
+                                row.expected === 0 ? 0 : Math.min(100, Math.round((row.filled / row.expected) * 100));
+                              return (
+                                <tr key={`${row.contestId}-${row.judgeId}-${idx}`} className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC]">
+                                  <td className="px-3 py-2 text-slate-700">{row.contestName}</td>
+                                  <td className="px-3 py-2 text-slate-700">{row.judgeName}</td>
+                                  <td className="px-3 py-2 text-right text-slate-700">{row.participantCount.toLocaleString()}</td>
+                                  <td className="px-3 py-2 text-right text-slate-700">{row.criteriaCount.toLocaleString()}</td>
+                                  <td className="px-3 py-2 text-right text-slate-700">{row.filled.toLocaleString()}</td>
+                                  <td className="px-3 py-2 text-right text-slate-700">{row.expected.toLocaleString()}</td>
+                                  <td className="px-3 py-2 text-right">
+                                    <span
+                                      className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] ${
+                                        complete
+                                          ? "bg-[#ECFDF5] text-[#065F46] border border-[#A7F3D0]"
+                                          : "bg-[#FEF2F2] text-[#991B1B] border border-[#FECACA]"
+                                      }`}
+                                      title={`${percent}% complete`}
+                                    >
+                                      {complete ? "Complete" : `${percent}%`}
+                                    </span>
+                                  </td>
+                                </tr>
+                              );
+                            });
+                          })()}
+                        </tbody>
+                      </table>
+                      <div className="mt-2 text-[10px] text-slate-400">
+                        Expected entries = participants × criteria for each contest.
+                      </div>
+                    </div>
                   </div>
                 </div>
               )}
