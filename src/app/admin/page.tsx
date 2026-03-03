@@ -1143,6 +1143,9 @@ export default function AdminDashboard() {
 
   const [scores, setScores] = useState<ScoreRow[]>([]);
 
+  const cleanText = (value: string) =>
+    value.replace(/[\u0000-\u001F<>]/g, "").trim();
+
   useEffect(() => {
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
     const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
@@ -5405,6 +5408,18 @@ export default function AdminDashboard() {
       return;
     }
 
+    const fullNameSanitized = cleanText(judgeFullName);
+    const usernameSanitized = cleanText(judgeUsername).toLowerCase();
+    const usernameOk = /^[a-z0-9_]{3,32}$/.test(usernameSanitized);
+    if (!usernameOk) {
+      setJudgeError("Username must be 3-32 characters, lowercase letters, digits or _");
+      return;
+    }
+    if (judgePassword.length < 8) {
+      setJudgeError("Password must be at least 8 characters.");
+      return;
+    }
+
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
     const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
@@ -5425,8 +5440,8 @@ export default function AdminDashboard() {
         .from("user_judge")
         .insert({
           event_id: selectedEventIdForJudge,
-          full_name: judgeFullName.trim(),
-          username: judgeUsername.trim(),
+          full_name: fullNameSanitized,
+          username: usernameSanitized,
           password_hash: judgePassword,
           role: judgeRole,
         })
@@ -5463,8 +5478,8 @@ export default function AdminDashboard() {
       const response = await supabase
         .from("user_judge")
         .update({
-          full_name: judgeFullName.trim(),
-          username: judgeUsername.trim(),
+          full_name: fullNameSanitized,
+          username: usernameSanitized,
           password_hash: judgePassword,
           role: judgeRole,
         })
@@ -5535,6 +5550,17 @@ export default function AdminDashboard() {
       return;
     }
 
+    const adminUser = cleanText(adminUsername).toLowerCase();
+    const userOk = /^[a-z0-9_]{3,32}$/.test(adminUser);
+    if (!userOk) {
+      setAdminError("Username must be 3-32 characters, lowercase letters, digits or _");
+      return;
+    }
+    if (adminPassword.length < 8) {
+      setAdminError("Password must be at least 8 characters.");
+      return;
+    }
+
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
     const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
@@ -5551,7 +5577,7 @@ export default function AdminDashboard() {
       const { data, error } = await supabase
         .from("user_admin")
         .insert({
-          username: adminUsername.trim(),
+          username: adminUser,
           password_hash: adminPassword,
         })
         .select("id, username, created_at");
@@ -5572,7 +5598,7 @@ export default function AdminDashboard() {
       const { data, error } = await supabase
         .from("user_admin")
         .update({
-          username: adminUsername.trim(),
+          username: adminUser,
           password_hash: adminPassword,
         })
         .eq("id", editingAdminId)
