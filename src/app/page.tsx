@@ -93,14 +93,21 @@ export default function Home() {
           <div className="absolute -right-10 bottom-0 h-44 w-44 rounded-full bg-[#F4C43012] blur-3xl" />
         </div>
 
-        {/* display the custom logo instead of the default Vercel graphic */}
+        {/* display the custom logo and cite image side by side */}
         <header className="relative mb-6 space-y-1 text-center">
-          <div className="flex justify-center mb-2">
+          <div className="flex justify-center items-center gap-4 mb-2">
             <img
               src="/logo.svg"
               alt="Tabulating System logo"
               width={120}
               height={60}
+              className="inline-block"
+            />
+            <img
+              src="/cite.png"
+              alt="Cite logo"
+              width={80}
+              height={80}
               className="inline-block"
             />
           </div>

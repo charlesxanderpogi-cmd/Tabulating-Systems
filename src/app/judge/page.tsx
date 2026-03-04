@@ -286,7 +286,41 @@ export default function JudgeDashboardPage() {
   const [activeTabulationView, setActiveTabulationView] = useState<
     "overall" | "awards"
   >("awards");
+  const [lastSubmittedParticipantId, setLastSubmittedParticipantId] = useState<number | null>(null);
   const activeContestIdRef = useRef<number | null>(null);
+  const isCriteriaSaved = useCallback(
+    (participantId: number, criteriaId: number) => {
+      if (!judge) return false;
+      return scores.some(
+        (s) =>
+          s.judge_id === judge.id &&
+          s.participant_id === participantId &&
+          s.criteria_id === criteriaId,
+      );
+    },
+    [scores, judge],
+  );
+  const scoresBroadcastRef = useRef<any>(null);
+
+  useEffect(() => {
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+    if (!supabaseUrl || !supabaseAnonKey) return;
+    if (!event) return;
+    const supabase = createClient(supabaseUrl, supabaseAnonKey);
+    const ch = supabase
+      .channel(`event-${event.id}-scores`, {
+        config: { broadcast: { ack: true } },
+      })
+      .subscribe();
+    scoresBroadcastRef.current = ch;
+    return () => {
+      try {
+        supabase.removeChannel(ch);
+      } catch {}
+      scoresBroadcastRef.current = null;
+    };
+  }, [event?.id]);
 
   useEffect(() => {
     activeContestIdRef.current = activeContestId;
@@ -306,6 +340,8 @@ export default function JudgeDashboardPage() {
 
     const supabase = createClient(supabaseUrl, supabaseAnonKey);
     let channel: ReturnType<typeof supabase.channel> | null = null;
+    let scoringPermChannel: ReturnType<typeof supabase.channel> | null = null;
+    let broadcastChannel: ReturnType<typeof supabase.channel> | null = null;
 
     const loadJudgeData = async () => {
       setIsLoading(true);
@@ -822,26 +858,6 @@ export default function JudgeDashboardPage() {
           {
             event: "*",
             schema: "public",
-            table: "judge_scoring_permission",
-          },
-          () => {
-            // Re-fetch all permissions on any change (DELETE events may not include full row data)
-            supabase
-              .from("judge_scoring_permission")
-              .select("judge_id, contest_id, criteria_id, can_edit")
-              .eq("judge_id", judgeRow.id)
-              .then(({ data }) => {
-                if (data) {
-                  setJudgeScoringPermissions(data as JudgeScoringPermissionRow[]);
-                }
-              });
-          },
-        )
-        .on(
-          "postgres_changes",
-          {
-            event: "*",
-            schema: "public",
             table: "contest_layout",
           },
           (payload) => {
@@ -876,16 +892,83 @@ export default function JudgeDashboardPage() {
             }
           },
         )
-        .subscribe();
+        .subscribe((status, err) => {
+          console.log('Main judge-changes channel status:', status, err);
+        });
+
+      // Separate channel for judge_scoring_permission with dedicated listener
+      scoringPermChannel = supabase
+        .channel(`judge-scoring-perms-${judgeRow.event_id}`)
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "judge_scoring_permission",
+          },
+          async (payload) => {
+            // Re-fetch all permissions on any change (DELETE events may not include full row data)
+            console.log('[REALTIME] Judge scoring permission change detected:', payload.eventType, payload);
+            try {
+              const { data, error } = await supabase
+                .from("judge_scoring_permission")
+                .select("judge_id, contest_id, criteria_id, can_edit")
+                .eq("judge_id", judgeRow.id);
+              if (!error && data) {
+                console.log('[REALTIME] Updated judge scoring permissions from postgres_changes');
+                setJudgeScoringPermissions(data as JudgeScoringPermissionRow[]);
+              } else {
+                console.warn('[REALTIME] Error fetching permissions:', error);
+              }
+            } catch (error) {
+              console.warn('[REALTIME] Failed to refresh permissions from postgres_changes:', error);
+            }
+          },
+        )
+        .subscribe((status, err) => {
+          console.log('[REALTIME] Judge scoring permission channel status:', status, err);
+        });
+
+      // Listen for broadcast notifications from admin about permission updates
+      broadcastChannel = supabase
+        .channel(`permissions-update-${judgeRow.event_id}`, { config: { broadcast: { ack: true } } })
+        .on('broadcast', { event: 'permissions-updated' }, async (message) => {
+          console.log('[BROADCAST-LISTENER] Permission update broadcast received:', message.payload);
+          try {
+            const { data, error } = await supabase
+              .from("judge_scoring_permission")
+              .select("judge_id, contest_id, criteria_id, can_edit")
+              .eq("judge_id", judgeRow.id);
+            if (!error && data) {
+              console.log('[BROADCAST-LISTENER] Updated permissions from broadcast notification');
+              setJudgeScoringPermissions(data as JudgeScoringPermissionRow[]);
+            }
+          } catch (error) {
+            console.warn('[BROADCAST-LISTENER] Failed to refresh permissions after broadcast:', error);
+          }
+        })
+        .subscribe((status) => {
+          console.log('[BROADCAST-LISTENER] Broadcast channel status:', status);
+        });
 
       setIsLoading(false);
     };
 
     loadJudgeData();
+    let permissionPollInterval: NodeJS.Timeout | null = null;
 
     return () => {
+      if (permissionPollInterval) {
+        clearInterval(permissionPollInterval);
+      }
       if (channel) {
         supabase.removeChannel(channel);
+      }
+      if (scoringPermChannel) {
+        supabase.removeChannel(scoringPermChannel);
+      }
+      if (broadcastChannel) {
+        supabase.removeChannel(broadcastChannel);
       }
     };
   }, [router]);
@@ -950,6 +1033,56 @@ export default function JudgeDashboardPage() {
       window.clearInterval(intervalId);
     };
   }, [activeContestId]);
+
+  // Fallback polling and page visibility listener for permission changes
+  useEffect(() => {
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+    if (!supabaseUrl || !supabaseAnonKey || !judge?.id) {
+      return;
+    }
+
+    const supabase = createClient(supabaseUrl, supabaseAnonKey);
+    let cancelled = false;
+
+    // Manual refresh function
+    const refreshPermissions = async () => {
+      if (cancelled || !judge?.id) return;
+      try {
+        console.log('[MANUAL-REFRESH] Checking permissions...');
+        const { data, error } = await supabase
+          .from("judge_scoring_permission")
+          .select("judge_id, contest_id, criteria_id, can_edit")
+          .eq("judge_id", judge.id);
+        if (!error && data && JSON.stringify(data) !== JSON.stringify(judgeScoringPermissions)) {
+          console.log('[MANUAL-REFRESH] Permission change detected, updating state');
+          setJudgeScoringPermissions(data as JudgeScoringPermissionRow[]);
+        }
+      } catch (error) {
+        console.warn('[MANUAL-REFRESH] Error refreshing permissions:', error);
+      }
+    };
+
+    // Set up polling every 8 seconds
+    const pollInterval = setInterval(refreshPermissions, 8000);
+
+    // Listen for page visibility changes
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        console.log('[PAGE-VISIBILITY] Page became visible, refreshing permissions');
+        refreshPermissions();
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      cancelled = true;
+      clearInterval(pollInterval);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [judge?.id]);
 
   const activeContest = useMemo(
     () => contests.find((contest) => contest.id === activeContestId) || null,
@@ -1331,17 +1464,7 @@ export default function JudgeDashboardPage() {
     
     criteriaIds = criteriaIds.filter(n => !isNaN(n));
 
-    // NEW: Include all criteria from categories
-    if (criteriaIds.length > 0) {
-      const selectedCriteria = criteriaList.filter(c => criteriaIds.includes(c.id));
-      const categories = Array.from(new Set(selectedCriteria.map(c => c.category).filter(Boolean)));
-      
-      if (categories.length > 0) {
-          const allCriteriaInCategories = criteriaList.filter(c => categories.includes(c.category));
-          const allIds = allCriteriaInCategories.map(c => c.id);
-          criteriaIds = Array.from(new Set([...criteriaIds, ...allIds]));
-      }
-    }
+    // Use only the explicitly selected child criteria for award computation
 
     if (
       selectedAwardResult.award.award_type !== "criteria" ||
@@ -1555,25 +1678,18 @@ export default function JudgeDashboardPage() {
     setSuccess(null);
 
     try {
-      // Validate all scores exist for this participant
+      // Allow partial submissions; any missing scores are treated as 0.
       for (const criteria of activeContestCriteria) {
         const key = `${currentParticipant.id}-${criteria.id}`;
         const value = scoreInputs[key];
-
         if (value === undefined || value === "") {
-          setModalError(
-            "Please enter a score for every criteria before submitting.",
-          );
-          setIsSubmittingParticipant(false);
-          return;
+          continue;
         }
-
         const parsed = Number(value);
         const maxScore =
           activeContestScoringType === "points"
             ? criteria.percentage
             : 100;
-
         if (!Number.isFinite(parsed) || parsed < 0 || parsed > maxScore) {
           setModalError(`Scores must be between 0 and ${maxScore}.`);
           setIsSubmittingParticipant(false);
@@ -1596,9 +1712,7 @@ export default function JudgeDashboardPage() {
         const value = scoreInputs[key];
         const parsed = Number(value);
 
-        if (Number.isNaN(parsed)) {
-          continue;
-        }
+        if (!Number.isFinite(parsed)) continue;
 
         if (activeContestScoringType === "points") {
           total += parsed;
@@ -1652,6 +1766,22 @@ export default function JudgeDashboardPage() {
         return;
       }
 
+      try {
+        const ch = scoresBroadcastRef.current;
+        if (ch) {
+          await ch.send({
+            type: "broadcast",
+            event: "score-submitted",
+            payload: {
+              judgeId: judge.id,
+              contestId: activeContest.id,
+              participantId: currentParticipant.id,
+              timestamp: Date.now(),
+            },
+          });
+        }
+      } catch {}
+
       // Update local state
       setJudgeTotals((previous) => {
         const filtered = previous.filter(
@@ -1675,6 +1805,7 @@ export default function JudgeDashboardPage() {
         ];
       });
 
+      setLastSubmittedParticipantId(currentParticipant.id);
       setSuccess(
         `Score for ${currentParticipant.full_name} submitted to tabulation.`,
       );
@@ -1987,22 +2118,30 @@ export default function JudgeDashboardPage() {
       }
     }
     ids = ids.filter((n) => !isNaN(n));
-    if (ids.length > 0) {
-      const selected = criteriaList.filter((c) => ids.includes(c.id));
-      const cats = Array.from(new Set(selected.map((c) => c.category).filter(Boolean)));
-      if (cats.length > 0) {
-        const allInCats = criteriaList.filter((c) => cats.includes(c.category));
-        const extra = allInCats.map((c) => c.id);
-        ids = Array.from(new Set([...ids, ...extra]));
-      }
-    }
     return ids;
   }, [activeAwardFilterId, awards, criteriaList]);
 
   const awardTotalsByJudge = useMemo(() => {
     const outer = new Map<number, Map<number, number>>();
     if (activeAwardFilterId === "all") return outer;
-    for (const judgeId of judgeIdsForActiveContest) {
+    // Determine which judges to include. If overall totals are not available yet,
+    // derive judge IDs from raw scores for the selected criteria within this contest.
+    let judgeIds: number[] = judgeIdsForActiveContest;
+    if (judgeIds.length === 0 && selectedAwardCriteriaIds.length > 0 && activeContest) {
+      const participantIds = new Set(activeContestParticipants.map((p) => p.id));
+      judgeIds = Array.from(
+        new Set(
+          scores
+            .filter(
+              (s) =>
+                selectedAwardCriteriaIds.includes(s.criteria_id) &&
+                participantIds.has(s.participant_id),
+            )
+            .map((s) => s.judge_id),
+        ),
+      );
+    }
+    for (const judgeId of judgeIds) {
       const pmap = new Map<number, number>();
       for (const p of activeContestParticipants) {
         let total = 0;
@@ -2022,7 +2161,7 @@ export default function JudgeDashboardPage() {
       outer.set(judgeId, pmap);
     }
     return outer;
-  }, [activeAwardFilterId, judgeIdsForActiveContest, activeContestParticipants, selectedAwardCriteriaIds, criteriaScoreByJudgeAndParticipant]);
+  }, [activeAwardFilterId, judgeIdsForActiveContest, activeContestParticipants, selectedAwardCriteriaIds, criteriaScoreByJudgeAndParticipant, scores, activeContest]);
 
   const effectiveTotalsByJudgeAndParticipant = useMemo(() => {
     return activeAwardFilterId === "all"
@@ -2277,11 +2416,7 @@ export default function JudgeDashboardPage() {
               </div>
             )}
 
-            {success && !error && (
-              <div className="mb-3 rounded-xl border border-[#2ECC71] bg-[#E9F9F1] px-3 py-2 text-[11px] text-[#1E9C57]">
-                {success}
-              </div>
-            )}
+            {/* success message removed from scoring page per requirement */}
 
             <div className="flex flex-col gap-5">
               <div className="grid gap-3 text-xs md:grid-cols-2">
@@ -2308,37 +2443,7 @@ export default function JudgeDashboardPage() {
                   </select>
                 </div>
 
-                <div className="flex flex-col gap-1">
-                  <span className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
-                    Division filter
-                  </span>
-                  <select
-                    className="w-full rounded-full border border-[#E2E8F0] bg-white px-4 py-2.5 text-xs font-medium text-slate-800 outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
-                    value={
-                      activeDivisionFilterId === "all"
-                        ? "all"
-                        : String(activeDivisionFilterId)
-                    }
-                    onChange={(event) => {
-                      const value = event.target.value;
-                      if (value === "all") {
-                        setActiveDivisionFilterId("all");
-                      } else {
-                        setActiveDivisionFilterId(
-                          Number.parseInt(value, 10),
-                        );
-                      }
-                    }}
-                    disabled={!activeContest}
-                  >
-                    <option value="all">All divisions</option>
-                    {categoriesForActiveEvent.map((category) => (
-                      <option key={category.id} value={category.id}>
-                        {category.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+                
               </div>
 
               <div className="flex items-center justify-between">
@@ -3215,6 +3320,9 @@ export default function JudgeDashboardPage() {
                                 </td>
                                 <td className="px-4 py-3 align-middle">
                                   <div className="flex items-center justify-end gap-2">
+                                    {isCriteriaSaved(currentParticipant.id, criteria.id) && (
+                                      <span className="inline-block h-2 w-2 rounded-full bg-emerald-600" />
+                                    )}
                                     <input
                                       type="number"
                                       min={0}
@@ -3228,6 +3336,9 @@ export default function JudgeDashboardPage() {
                                       onWheel={(event) => {
                                         event.currentTarget.blur();
                                       }}
+                                      onBlur={() =>
+                                        handleScoreBlur(currentParticipant.id, criteria.id)
+                                      }
                                       onChange={(event) =>
                                         handleScoreChange(
                                           currentParticipant.id,
@@ -3292,7 +3403,7 @@ export default function JudgeDashboardPage() {
               </div>
 
               <div
-                className="sticky bottom-0 mt-5 flex items-center justify-end gap-3 bg-white pt-3 pb-4"
+                className="sticky bottom-0 mt-5 flex items-center justify-end gap-3 bg-white pt-3 pb-4 relative"
                 style={
                   contestLayoutTheme?.modalFooterBg
                     ? {
@@ -3304,74 +3415,49 @@ export default function JudgeDashboardPage() {
                     : undefined
                 }
               >
-                <button
-                  type="button"
-                  onClick={handleSaveCurrentParticipant}
-                  disabled={
-                    isSavingParticipantScores ||
-                    !activeContestCriteria.some((criteria) =>
-                      canEditCriteria(activeContest.id, criteria.id),
-                    )
-                  }
-                  className="rounded-full border px-5 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-60"
-                  style={{
-                    ...(contestLayoutTheme?.modalSecondaryButtonBg
-                      ? {
-                          backgroundColor: hexWithOpacity(
-                            contestLayoutTheme.modalSecondaryButtonBg,
-                            (contestLayoutTheme.modalSecondaryButtonBgOpacity ??
-                              100) / 100,
-                          ),
-                        }
-                      : { backgroundColor: "#ffffff" }),
-                    ...(contestLayoutTheme?.modalSecondaryButtonTextColor
-                      ? {
-                          color: hexWithOpacity(
-                            contestLayoutTheme.modalSecondaryButtonTextColor,
-                            (contestLayoutTheme
-                              .modalSecondaryButtonTextColorOpacity ?? 100) / 100,
-                          ),
-                        }
-                      : { color: "#14532d" }),
-                    borderColor: "#1F4D3A33",
-                  }}
-                >
-                  {isSavingParticipantScores ? "Saving..." : "Save"}
-                </button>
-                <button
-                  type="button"
-                  onClick={handleSubmitCurrentParticipant}
-                  disabled={
-                    isSubmittingParticipant ||
-                    isSavingParticipantScores ||
-                    !activeContestCriteria.some((criteria) =>
-                      canEditCriteria(activeContest.id, criteria.id),
-                    )
-                  }
-                  className="rounded-full px-5 py-2 text-sm font-medium shadow-sm disabled:cursor-not-allowed disabled:opacity-60"
-                  style={{
-                    ...(contestLayoutTheme?.modalPrimaryButtonBg
-                      ? {
-                          backgroundColor: hexWithOpacity(
-                            contestLayoutTheme.modalPrimaryButtonBg,
-                            (contestLayoutTheme.modalPrimaryButtonBgOpacity ?? 100) /
-                              100,
-                          ),
-                        }
-                      : { backgroundColor: "#14532d" }),
-                    ...(contestLayoutTheme?.modalPrimaryButtonTextColor
-                      ? {
-                          color: hexWithOpacity(
-                            contestLayoutTheme.modalPrimaryButtonTextColor,
-                            (contestLayoutTheme
-                              .modalPrimaryButtonTextColorOpacity ?? 100) / 100,
-                          ),
-                        }
-                      : { color: "#ffffff" }),
-                  }}
-                >
-                  {isSubmittingParticipant ? "Submitting..." : "Submit"}
-                </button>
+                {currentParticipant &&
+                  lastSubmittedParticipantId === currentParticipant.id && (
+                  <div className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-700 shadow-sm">
+                    <span className="inline-block h-2 w-2 rounded-full bg-emerald-600" />
+                    <span>Score for {currentParticipant.full_name} submitted to tabulation.</span>
+                  </div>
+                )}
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={handleSubmitCurrentParticipant}
+                    disabled={
+                      isSubmittingParticipant ||
+                      isSavingParticipantScores ||
+                      !activeContestCriteria.some((criteria) =>
+                        canEditCriteria(activeContest.id, criteria.id),
+                      )
+                    }
+                    className="rounded-full px-5 py-2 text-sm font-medium shadow-sm disabled:cursor-not-allowed disabled:opacity-60"
+                    style={{
+                      ...(contestLayoutTheme?.modalPrimaryButtonBg
+                        ? {
+                            backgroundColor: hexWithOpacity(
+                              contestLayoutTheme.modalPrimaryButtonBg,
+                              (contestLayoutTheme.modalPrimaryButtonBgOpacity ?? 100) /
+                                100,
+                            ),
+                          }
+                        : { backgroundColor: "#14532d" }),
+                      ...(contestLayoutTheme?.modalPrimaryButtonTextColor
+                        ? {
+                            color: hexWithOpacity(
+                              contestLayoutTheme.modalPrimaryButtonTextColor,
+                              (contestLayoutTheme
+                                .modalPrimaryButtonTextColorOpacity ?? 100) / 100,
+                            ),
+                          }
+                        : { color: "#ffffff" }),
+                    }}
+                  >
+                    {isSubmittingParticipant ? "Submitting..." : "Submit"}
+                  </button>
+                </div>
               </div>
             </div>
           </div>

@@ -2040,6 +2040,204 @@ export default function AdminDashboard() {
   }, []);
 
   useEffect(() => {
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+    if (!supabaseUrl || !supabaseAnonKey) {
+      return;
+    }
+    if (activeEventId === null) {
+      return;
+    }
+    const supabase = createClient(supabaseUrl, supabaseAnonKey);
+    
+    // Setup realtime listeners for permission changes
+    const channels: ReturnType<typeof supabase.channel>[] = [];
+
+    // Listen for scoring permission changes
+    const scoringChannel = supabase
+      .channel(`admin-scoring-perms-${activeEventId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'judge_scoring_permission',
+        },
+        async (payload) => {
+          console.log('Scoring permission change detected:', payload.eventType, payload);
+          try {
+            const { data, error } = await supabase
+              .from("judge_scoring_permission")
+              .select("judge_id, contest_id, criteria_id, can_edit, created_at");
+            if (!error && data) {
+              console.log('Updated scoring permissions from realtime');
+              setJudgeScoringPermissions(data as JudgeScoringPermissionRow[]);
+            }
+          } catch (error) {
+            console.warn('Failed to refresh scoring permissions:', error);
+          }
+        }
+      )
+      .subscribe((status, err) => {
+        console.log('Scoring channel status:', status, err);
+      });
+    
+    channels.push(scoringChannel);
+
+    // Listen for division permission changes
+    const divisionChannel = supabase
+      .channel(`admin-division-perms-${activeEventId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'judge_division_permission',
+        },
+        async (payload) => {
+          console.log('Division permission change detected:', payload.eventType, payload);
+          try {
+            const { data, error } = await supabase
+              .from("judge_division_permission")
+              .select("id, judge_id, contest_id, division_id, created_at");
+            if (!error && data) {
+              console.log('Updated division permissions from realtime');
+              setJudgeDivisionPermissions(data as JudgeDivisionPermissionRow[]);
+            }
+          } catch (error) {
+            console.warn('Failed to refresh division permissions:', error);
+          }
+        }
+      )
+      .subscribe((status, err) => {
+        console.log('Division channel status:', status, err);
+      });
+    
+    channels.push(divisionChannel);
+
+    // Listen for participant permission changes
+    const participantChannel = supabase
+      .channel(`admin-participant-perms-${activeEventId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'judge_participant_permission',
+        },
+        async (payload) => {
+          console.log('Participant permission change detected:', payload.eventType, payload);
+          try {
+            const { data, error } = await supabase
+              .from("judge_participant_permission")
+              .select("id, judge_id, contest_id, participant_id, created_at");
+            if (!error && data) {
+              console.log('Updated participant permissions from realtime');
+              setJudgeParticipantPermissions(data as JudgeParticipantPermissionRow[]);
+            }
+          } catch (error) {
+            console.warn('Failed to refresh participant permissions:', error);
+          }
+        }
+      )
+      .subscribe((status, err) => {
+        console.log('Participant channel status:', status, err);
+      });
+    
+    channels.push(participantChannel);
+
+    const scoresChannel = supabase
+      .channel(`event-${activeEventId}-scores`)
+      .on(
+        'broadcast',
+        { event: 'score-submitted' },
+        async () => {
+          try {
+            const [totalsRes, scoresRes] = await Promise.all([
+              supabase
+                .from("judge_participant_total")
+                .select("id, judge_id, participant_id, contest_id, total_score, created_at"),
+              supabase
+                .from("score")
+                .select("id, judge_id, participant_id, criteria_id, score, created_at"),
+            ]);
+            if (totalsRes.data) setJudgeTotals(totalsRes.data as JudgeParticipantTotalRow[]);
+            if (scoresRes.data) setScores(scoresRes.data as ScoreRow[]);
+          } catch (error) {
+            console.warn('Failed to refresh scores/totals from broadcast:', error);
+          }
+        }
+      )
+      .subscribe();
+    channels.push(scoresChannel);
+
+    return () => {
+      channels.forEach(ch => supabase.removeChannel(ch));
+    };
+  }, [activeEventId]);
+
+  // Fallback polling for permission changes to ensure sync across admins/tabulators
+  useEffect(() => {
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+    if (!supabaseUrl || !supabaseAnonKey || !activeEventId) {
+      return;
+    }
+
+    const supabase = createClient(supabaseUrl, supabaseAnonKey);
+    let cancelled = false;
+
+    // Poll for permission changes every 7 seconds
+    const pollInterval = setInterval(async () => {
+      if (cancelled) return;
+      try {
+        const [scoringRes, divisionRes, participantRes] = await Promise.all([
+          supabase
+            .from("judge_scoring_permission")
+            .select("judge_id, contest_id, criteria_id, can_edit, created_at"),
+          supabase
+            .from("judge_division_permission")
+            .select("id, judge_id, contest_id, division_id, created_at"),
+          supabase
+            .from("judge_participant_permission")
+            .select("id, judge_id, contest_id, participant_id, created_at"),
+        ]);
+
+        if (scoringRes.data && JSON.stringify(scoringRes.data) !== JSON.stringify(judgeScoringPermissions)) {
+          console.log('[ADMIN-POLL] Scoring permissions changed');
+          setJudgeScoringPermissions(scoringRes.data as JudgeScoringPermissionRow[]);
+        }
+        if (divisionRes.data && JSON.stringify(divisionRes.data) !== JSON.stringify(judgeDivisionPermissions)) {
+          console.log('[ADMIN-POLL] Division permissions changed');
+          setJudgeDivisionPermissions(divisionRes.data as JudgeDivisionPermissionRow[]);
+        }
+        if (participantRes.data && JSON.stringify(participantRes.data) !== JSON.stringify(judgeParticipantPermissions)) {
+          console.log('[ADMIN-POLL] Participant permissions changed');
+          setJudgeParticipantPermissions(participantRes.data as JudgeParticipantPermissionRow[]);
+        }
+      } catch (error) {
+        console.warn('[ADMIN-POLL] Error polling permissions:', error);
+      }
+    }, 7000);
+
+    // Also refresh when page becomes visible
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        console.log('[ADMIN-VISIBILITY] Page visible, checking permissions');
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      cancelled = true;
+      clearInterval(pollInterval);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [activeEventId, judgeScoringPermissions, judgeDivisionPermissions, judgeParticipantPermissions]);
+
+  useEffect(() => {
     if (
       activeJudgeIdForPermissions === null ||
       selectedContestIdForPermissions === null
@@ -3209,10 +3407,8 @@ export default function AdminDashboard() {
         (teamRow) => teamRow.id === participant.team_id,
       );
 
-      const average =
-        totalsForParticipant.count === 0
-          ? 0
-          : totalsForParticipant.sum / totalsForParticipant.count;
+      // Match Tabulator logic: use SUM of judge totals per participant (not average)
+      const totalSum = totalsForParticipant.sum;
 
       rows.push({
         contestId: contest.id,
@@ -3222,7 +3418,7 @@ export default function AdminDashboard() {
         participantId: participant.id,
         participantName: participant.full_name,
         contestantNumber: participant.contestant_number,
-        totalScore: Number(average.toFixed(2)),
+        totalScore: Number(totalSum.toFixed(2)),
         rank: 0,
         judgeScores: totalsForParticipant.judgeScores,
       });
@@ -5399,25 +5595,37 @@ export default function AdminDashboard() {
       return;
     }
 
-    if (
-      !judgeFullName.trim() ||
-      !judgeUsername.trim() ||
-      !judgePassword
-    ) {
-      setJudgeError("Please fill in all fields.");
-      return;
+    if (editingJudgeId === null) {
+      if (
+        !judgeFullName.trim() ||
+        !judgeUsername.trim() ||
+        !judgePassword
+      ) {
+        setJudgeError("Please fill in all fields.");
+        return;
+      }
+    } else {
+      if (!judgeFullName.trim() || !judgeUsername.trim()) {
+        setJudgeError("Please fill in required fields.");
+        return;
+      }
     }
 
     const fullNameSanitized = cleanText(judgeFullName);
-    const usernameSanitized = cleanText(judgeUsername).toLowerCase();
-    const usernameOk = /^[a-z0-9_]{3,32}$/.test(usernameSanitized);
-    if (!usernameOk) {
-      setJudgeError("Username must be 3-32 characters, lowercase letters, digits or _");
-      return;
-    }
-    if (judgePassword.length < 8) {
-      setJudgeError("Password must be at least 8 characters.");
-      return;
+    const usernameSanitized =
+      editingJudgeId === null
+        ? cleanText(judgeUsername).toLowerCase()
+        : cleanText(judgeUsername);
+    if (editingJudgeId === null) {
+      const usernameOk = /^[a-z0-9_]{3,32}$/.test(usernameSanitized);
+      if (!usernameOk) {
+        setJudgeError("Please enter a valid username.");
+        return;
+      }
+      if (judgePassword.length < 8) {
+        setJudgeError("Password must be at least 8 characters.");
+        return;
+      }
     }
 
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -5477,12 +5685,17 @@ export default function AdminDashboard() {
     } else {
       const response = await supabase
         .from("user_judge")
-        .update({
-          full_name: fullNameSanitized,
-          username: usernameSanitized,
-          password_hash: judgePassword,
-          role: judgeRole,
-        })
+        .update((() => {
+          const payload: { full_name: string; username: string; role: "chairman" | "judge"; password_hash?: string } = {
+            full_name: fullNameSanitized,
+            username: usernameSanitized,
+            role: judgeRole,
+          };
+          if (judgePassword && judgePassword.length > 0) {
+            payload.password_hash = judgePassword;
+          }
+          return payload;
+        })())
         .eq("id", editingJudgeId)
         .select("id, event_id, full_name, username, role, created_at");
 
@@ -6199,59 +6412,8 @@ export default function AdminDashboard() {
                           <div className="overflow-hidden rounded-2xl border border-[#E2E8F0] bg-white">
                             <table className="min-w-full border-collapse text-left text-[11px]">
                               <thead>
-                                <tr className="border-b border-[#E2E8F0] bg-[#F5F7FF] text-[10px] uppercase tracking-wide text-slate-500">
-                                  <th className="px-3 py-2 font-medium">Rank</th>
-                                  <th className="px-3 py-2 font-medium">
-                                    Represent
-                                  </th>
-                                  <th className="px-3 py-2 font-medium">
-                                    Contestant
-                                  </th>
-                                  {/* Dynamic Judge Columns */}
-                                  {(() => {
-                                    const originalAward = awards.find(
-                                      (a) => a.id === award.awardId,
-                                    );
-
-                                    const visibleJudges = judges
-                                      .filter((judge) => {
-                                        if (originalAward && originalAward.contest_id) {
-                                          return judgeAssignments.some(
-                                            (ja) =>
-                                              ja.judge_id === judge.id &&
-                                              ja.contest_id === originalAward.contest_id,
-                                          );
-                                        }
-                                        return judge.event_id === activeEventId;
-                                      })
-                                      .sort((a, b) => a.username.localeCompare(b.username));
-
-                                    return visibleJudges.map((judge) => (
-                                      <th
-                                        key={judge.id}
-                                        className="px-3 py-2 font-medium text-center"
-                                      >
-                                        <div>{judge.username}</div>
-                                        <button
-                                          type="button"
-                                          onClick={() => setSelectedJudgeForBreakdown(judge.id)}
-                                          className="mt-1 rounded-full border border-[#1F4D3A33] bg-white px-2 py-0.5 text-[9px] font-medium text-[#1F4D3A] transition hover:bg-[#F0FDF4]"
-                                        >
-                                          show more
-                                        </button>
-                                      </th>
-                                    ));
-                                  })()}
-                                  <th className="px-3 py-2 font-medium text-right">
-                                    Total score
-                                  </th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {award.allParticipants.map((participant, index) => {
-                                  const originalAward = awards.find(
-                                    (a) => a.id === award.awardId,
-                                  );
+                                {(() => {
+                                  const originalAward = awards.find((a) => a.id === award.awardId);
                                   const visibleJudges = judges
                                     .filter((judge) => {
                                       if (originalAward && originalAward.contest_id) {
@@ -6264,49 +6426,130 @@ export default function AdminDashboard() {
                                       return judge.event_id === activeEventId;
                                     })
                                     .sort((a, b) => a.username.localeCompare(b.username));
-
                                   return (
-                                    <tr
-                                      key={`${participant.contestantNumber}-${index}`}
-                                      className={`border-b border-[#F1F5F9] hover:bg-[#F8FAFC] ${
-                                        participant.rank === 1 ? "bg-[#F0FDF4]" : ""
-                                      }`}
-                                    >
-                                      <td className="px-3 py-2 font-semibold text-slate-800">
-                                        {participant.rank}
-                                      </td>
+                                    <>
+                                      <tr className="border-b border-[#E2E8F0] bg-[#F5F7FF] text-[10px] uppercase tracking-wide text-slate-500">
+                                        <th className="px-3 py-2 font-medium">Represent</th>
+                                        <th className="px-3 py-2 font-medium">Contestant</th>
+                                        {visibleJudges.map((judge) => (
+                                          <th key={judge.id} className="px-3 py-2 font-medium text-center" colSpan={2}>
+                                            {judge.username}
+                                          </th>
+                                        ))}
+                                        <th className="px-3 py-2 font-medium text-right">Rank total</th>
+                                      </tr>
+                                      <tr className="bg-[#F5F7FF] text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                                        <th className="px-3 py-2"></th>
+                                        <th className="px-3 py-2"></th>
+                                        {visibleJudges.flatMap((judge) => ([
+                                          <th key={`hdr-s-${judge.id}`} className="px-3 py-2 text-center">Score</th>,
+                                          <th key={`hdr-r-${judge.id}`} className="px-3 py-2 text-center">Rank</th>,
+                                        ]))}
+                                        <th className="px-3 py-2"></th>
+                                      </tr>
+                                    </>
+                                  );
+                                })()}
+                              </thead>
+                              <tbody>
+                                {(() => {
+                                  const originalAward = awards.find((a) => a.id === award.awardId);
+                                  const visibleJudges = judges
+                                    .filter((judge) => {
+                                      if (originalAward && originalAward.contest_id) {
+                                        return judgeAssignments.some(
+                                          (ja) =>
+                                            ja.judge_id === judge.id &&
+                                            ja.contest_id === originalAward.contest_id,
+                                        );
+                                      }
+                                      return judge.event_id === activeEventId;
+                                    })
+                                    .sort((a, b) => a.username.localeCompare(b.username));
+                                  const judgeIds = visibleJudges.map((j) => j.id);
+
+                                  // Build totals per judge for this award
+                                  const totalsByJudge = new Map<number, Map<number, number>>();
+                                  for (const p of award.allParticipants) {
+                                    for (const jid of judgeIds) {
+                                      const val = p.judgeCriteriaScores[jid];
+                                      if (val !== undefined) {
+                                        const map = totalsByJudge.get(jid) ?? new Map<number, number>();
+                                        map.set(p.participantId, val);
+                                        totalsByJudge.set(jid, map);
+                                      }
+                                    }
+                                  }
+                                  // Compute rank per judge
+                                  const rankByJudgeAndParticipant = new Map<string, number>();
+                                  for (const [jid, pmap] of totalsByJudge.entries()) {
+                                    const entries = Array.from(pmap.entries());
+                                    entries.sort((a, b) => b[1] - a[1]);
+                                    let currentRank = 1;
+                                    for (let i = 0; i < entries.length; i++) {
+                                      if (i > 0) {
+                                        const prev = entries[i - 1][1];
+                                        const curr = entries[i][1];
+                                        if (curr < prev) currentRank = i + 1;
+                                      }
+                                      rankByJudgeAndParticipant.set(`${jid}-${entries[i][0]}`, currentRank);
+                                    }
+                                  }
+
+                                  const sorted = [...award.allParticipants].map((p) => {
+                                    let sum = 0;
+                                    let count = 0;
+                                    for (const jid of judgeIds) {
+                                      const r = rankByJudgeAndParticipant.get(`${jid}-${p.participantId}`);
+                                      if (r != null) {
+                                        sum += r;
+                                        count += 1;
+                                      }
+                                    }
+                                    const avg = count === judgeIds.length ? sum / count : Number.POSITIVE_INFINITY;
+                                    return { p, avg };
+                                  }).sort((a, b) => {
+                                    if (a.avg === b.avg) return a.p.participantName.localeCompare(b.p.participantName);
+                                    return a.avg - b.avg;
+                                  });
+                                  return sorted.map(({ p }, index) => (
+                                    <tr key={`${p.contestantNumber}-${index}`} className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC]">
                                       <td className="px-3 py-2 text-slate-700">
-                                        {participant.teamName ?? "—"}
+                                        {p.teamName ?? "—"}
                                       </td>
                                       <td className="px-3 py-2">
-                                        <div className="font-medium text-slate-800">
-                                          {participant.participantName}
-                                        </div>
-                                        <div className="text-[10px] text-slate-500">
-                                          Contestant #{participant.contestantNumber}
-                                        </div>
+                                        <div className="font-medium text-slate-800">{p.participantName}</div>
+                                        <div className="text-[10px] text-slate-500">Contestant #{p.contestantNumber}</div>
                                       </td>
-                                      {visibleJudges.map((judge) => {
-                                        // Find the judge's total score for this award
-                                        const judgeScore = participant.judgeCriteriaScores[judge.id];
-
-                                        return (
-                                          <td
-                                            key={judge.id}
-                                            className="px-3 py-2 text-center text-slate-600"
-                                          >
-                                            {judgeScore !== undefined
-                                              ? judgeScore.toFixed(2)
-                                              : "—"}
-                                          </td>
-                                        );
+                                      {judgeIds.flatMap((jid) => {
+                                        const score = p.judgeCriteriaScores[jid];
+                                        const rank = rankByJudgeAndParticipant.get(`${jid}-${p.participantId}`) ?? null;
+                                        return ([
+                                          <td key={`cell-s-${p.participantId}-${jid}`} className="px-3 py-2 text-center text-slate-600">
+                                            {score !== undefined ? score.toFixed(2) : "—"}
+                                          </td>,
+                                          <td key={`cell-r-${p.participantId}-${jid}`} className="px-3 py-2 text-center font-semibold text-[#1F4D3A]">
+                                            {rank ?? "—"}
+                                          </td>,
+                                        ]);
                                       })}
                                       <td className="px-3 py-2 text-right font-semibold text-[#1F4D3A]">
-                                        {participant.totalScore.toFixed(2)}
+                                        {(() => {
+                                          let sum = 0;
+                                          let count = 0;
+                                          for (const jid of judgeIds) {
+                                            const r = rankByJudgeAndParticipant.get(`${jid}-${p.participantId}`);
+                                            if (r != null) {
+                                              sum += r;
+                                              count += 1;
+                                            }
+                                          }
+                                          return count === judgeIds.length ? (sum / count).toFixed(2) : "—";
+                                        })()}
                                       </td>
                                     </tr>
-                                  );
-                                })}
+                                  ));
+                                })()}
                               </tbody>
                             </table>
                           </div>
@@ -10294,20 +10537,9 @@ export default function AdminDashboard() {
                             className="flex w-full items-center justify-between rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
                           >
                             <span className={awardCriteriaIds.length === 0 ? "text-slate-400" : "text-slate-900"}>
-                              {(() => {
-                                // Determine selected categories based on selected criteria IDs
-                                const selectedCategories = Array.from(new Set(
-                                  criteriaForActiveEvent
-                                    .filter(c => awardCriteriaIds.includes(c.id))
-                                    .map(c => c.category || "Uncategorized")
-                                ));
-                                
-                                return selectedCategories.length === 0
-                                  ? "Select category"
-                                  : selectedCategories.length === 1
-                                    ? selectedCategories[0]
-                                    : `${selectedCategories.length} categories selected`;
-                              })()}
+                              {awardCriteriaIds.length === 0
+                                ? "Select criteria"
+                                : `${awardCriteriaIds.length} criterion${awardCriteriaIds.length > 1 ? "a" : ""} selected`}
                             </span>
                             <svg
                               xmlns="http://www.w3.org/2000/svg"
@@ -10329,30 +10561,11 @@ export default function AdminDashboard() {
                                 <div className="p-1">
                                   {Array.from(new Set(criteriaForActiveEvent.map(c => c.category || "Uncategorized"))).map((category) => {
                                     const criteriaInCategory = criteriaForActiveEvent.filter(c => (c.category || "Uncategorized") === category);
-                                    const allSelected = criteriaInCategory.every(c => awardCriteriaIds.includes(c.id));
-                                    const someSelected = criteriaInCategory.some(c => awardCriteriaIds.includes(c.id)) && !allSelected;
                                     const isExpanded = expandedAwardCategories.has(category);
                                     
                                     return (
                                       <div key={category} className="border-b border-[#F1F5F9] last:border-0">
                                         <div className="flex items-center gap-2 px-2 py-1.5 hover:bg-[#F8FAFC]">
-                                          <input
-                                            type="checkbox"
-                                            id={`category-${category}`}
-                                            checked={allSelected}
-                                            ref={(el) => {
-                                              if (el) el.indeterminate = someSelected;
-                                            }}
-                                            onChange={(e) => {
-                                              const ids = criteriaInCategory.map(c => c.id);
-                                              if (e.target.checked) {
-                                                setAwardCriteriaIds((prev) => Array.from(new Set([...prev, ...ids])));
-                                              } else {
-                                                setAwardCriteriaIds((prev) => prev.filter((id) => !ids.includes(id)));
-                                              }
-                                            }}
-                                            className="h-3.5 w-3.5 rounded border-[#D0D7E2] text-[#1F4D3A] focus:ring-[#1F4D3A]"
-                                          />
                                           <div 
                                             className="flex flex-1 cursor-pointer items-center justify-between py-0.5"
                                             onClick={() => {
@@ -11020,7 +11233,7 @@ export default function AdminDashboard() {
                                     </div>
                                     <button
                                       type="button"
-                                      onClick={() => {
+                                      onClick={async () => {
                                         if (judgePermissionsMode === "all") {
                                           const allCriteriaIds = criteriaList
                                             .filter(
@@ -11044,6 +11257,125 @@ export default function AdminDashboard() {
                                                   )
                                                 : [...previous, criteria.id],
                                           );
+                                        }
+                                        // Realtime persist of criteria permissions
+                                        if (selectedContestIdForPermissions !== null) {
+                                          try {
+                                            const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+                                            const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+                                            if (supabaseUrl && supabaseAnonKey) {
+                                              const supabase = createClient(supabaseUrl, supabaseAnonKey);
+                                              let judgeIds =
+                                                selectedJudgeIdsForPermissions.length === 0
+                                                  ? judgesForActiveEvent.map((j) => j.id)
+                                                  : [...selectedJudgeIdsForPermissions];
+                                              judgeIds = judgeIds.filter((id) =>
+                                                judgesForActiveEvent.some((j) => j.id === id),
+                                              );
+                                              if (judgeIds.length > 0) {
+                                                await supabase
+                                                  .from("judge_scoring_permission")
+                                                  .delete()
+                                                  .in("judge_id", judgeIds)
+                                                  .eq("contest_id", selectedContestIdForPermissions);
+                                                const allIdsForSave = criteriaList
+                                                  .filter((c) => c.contest_id === selectedContestIdForPermissions)
+                                                  .map((c) => c.id);
+                                                const nextSelected =
+                                                  judgePermissionsMode === "all"
+                                                    ? allIdsForSave.filter((id) => id !== criteria.id)
+                                                    : (prev => {
+                                                        const exists = (judgePermissionsCriteriaIds.includes(criteria.id));
+                                                        return exists
+                                                          ? judgePermissionsCriteriaIds.filter((id) => id !== criteria.id)
+                                                          : [...judgePermissionsCriteriaIds, criteria.id];
+                                                      })();
+                                                const isAll = nextSelected.length === allIdsForSave.length;
+                                                const inserts: {
+                                                  judge_id: number;
+                                                  contest_id: number;
+                                                  criteria_id: number | null;
+                                                  can_edit: boolean;
+                                                }[] = [];
+                                                judgeIds.forEach((jid) => {
+                                                  if (isAll) {
+                                                    inserts.push({
+                                                      judge_id: jid,
+                                                      contest_id: selectedContestIdForPermissions,
+                                                      criteria_id: null,
+                                                      can_edit: true,
+                                                    });
+                                                  } else {
+                                                    inserts.push({
+                                                      judge_id: jid,
+                                                      contest_id: selectedContestIdForPermissions,
+                                                      criteria_id: null,
+                                                      can_edit: false,
+                                                    });
+                                                    nextSelected.forEach((cid) =>
+                                                      inserts.push({
+                                                        judge_id: jid,
+                                                        contest_id: selectedContestIdForPermissions,
+                                                        criteria_id: cid,
+                                                        can_edit: true,
+                                                      }),
+                                                    );
+                                                  }
+                                                });
+                                                if (inserts.length > 0) {
+                                                  await supabase
+                                                    .from("judge_scoring_permission")
+                                                    .insert(inserts);
+                                                }
+                                                // Clear submission state so judges must resubmit
+                                                await supabase
+                                                  .from("judge_contest_submission")
+                                                  .delete()
+                                                  .in("judge_id", judgeIds)
+                                                  .eq("contest_id", selectedContestIdForPermissions);
+                                                // Broadcast to judges/tabulators to force refresh
+                                                const eventId =
+                                                  contests.find((c) => c.id === selectedContestIdForPermissions)?.event_id ?? null;
+                                                if (eventId) {
+                                                  let ch: ReturnType<typeof supabase.channel> | null = null;
+                                                  try {
+                                                    console.log('[ADMIN-BROADCAST] Sending permission update broadcast');
+                                                    ch = supabase.channel(`permissions-update-${eventId}`, { config: { broadcast: { ack: true } } });
+                                                    await ch.subscribe((status) => {
+                                                      console.log('[ADMIN-BROADCAST] Channel subscribed:', status);
+                                                    });
+                                                    // Small delay to ensure channel is ready
+                                                    await new Promise(resolve => setTimeout(resolve, 150));
+                                                    ch.send({
+                                                      type: 'broadcast',
+                                                      event: 'permissions-updated',
+                                                      payload: { 
+                                                        eventId,
+                                                        contestId: selectedContestIdForPermissions, 
+                                                        timestamp: Date.now(),
+                                                        judgeIds,
+                                                      },
+                                                    });
+                                                    console.log('[ADMIN-BROADCAST] Broadcast sent successfully');
+                                                    // Small delay before cleanup
+                                                    await new Promise(resolve => setTimeout(resolve, 150));
+                                                  } catch (error) {
+                                                    console.warn('[ADMIN-BROADCAST] Failed to broadcast permission update:', error);
+                                                  } finally {
+                                                    if (ch) {
+                                                      try {
+                                                        supabase.removeChannel(ch);
+                                                      } catch (e) {
+                                                        console.warn('[ADMIN-BROADCAST] Error removing channel:', e);
+                                                      }
+                                                    }
+                                                  }
+                                                }
+                                              }
+                                            }
+                                          } catch {
+                                            // silent fail for realtime persist to avoid blocking UI
+                                          }
                                         }
                                       }}
                                       className={`relative inline-flex h-5 w-9 flex-shrink-0 items-center rounded-full transition-colors ${
@@ -11278,6 +11610,34 @@ export default function AdminDashboard() {
                                   ),
                               ),
                             );
+                          }
+                          
+                          // Notify judges and tabulators listening on this event channel
+                          try {
+                            const eventId =
+                              contests.find((c) => c.id === selectedContestIdForPermissions)?.event_id ?? null;
+                            if (eventId) {
+                              let ch: ReturnType<typeof supabase.channel> | null = null;
+                              try {
+                                ch = supabase.channel(`event-${eventId}-permissions`, {
+                                  config: { broadcast: { ack: true } },
+                                });
+                                await ch.subscribe();
+                                // Add small delay to ensure channel is ready
+                                await new Promise(resolve => setTimeout(resolve, 100));
+                                await ch.send({
+                                  type: "broadcast",
+                                  event: "permissions-updated",
+                                  payload: { contestId: selectedContestIdForPermissions, timestamp: Date.now() },
+                                });
+                                // Small delay to ensure broadcast is delivered before channel cleanup
+                                await new Promise(resolve => setTimeout(resolve, 100));
+                              } finally {
+                                if (ch) try { supabase.removeChannel(ch); } catch {}
+                              }
+                            }
+                          } catch (error) {
+                            console.warn('Failed to broadcast permission update:', error);
                           }
                           
                           // clear earlier validation errors now that save succeeded

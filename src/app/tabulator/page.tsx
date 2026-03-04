@@ -796,6 +796,203 @@ export default function TabulatorPage() {
     };
   }, []);
 
+  useEffect(() => {
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+    if (!supabaseUrl || !supabaseAnonKey) return;
+    if (!event) return;
+    const supabase = createClient(supabaseUrl, supabaseAnonKey);
+    
+    // Setup separate realtime channels for each permission table
+    const channels: ReturnType<typeof supabase.channel>[] = [];
+
+    // Listen for scoring permission changes
+    const scoringChannel = supabase
+      .channel(`tabulator-scoring-perms-${event.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'judge_scoring_permission',
+        },
+        async (payload) => {
+          console.log('Scoring permission change detected (tabulator):', payload.eventType, payload);
+          try {
+            const { data, error } = await supabase
+              .from("judge_scoring_permission")
+              .select("judge_id, contest_id, criteria_id, can_edit, created_at");
+            if (!error && data) {
+              console.log('Updated scoring permissions from realtime (tabulator)');
+              setJudgeScoringPermissions(data as JudgeScoringPermissionRow[]);
+            }
+          } catch (error) {
+            console.warn('Failed to refresh scoring permissions (tabulator):', error);
+          }
+        }
+      )
+      .subscribe((status, err) => {
+        console.log('Scoring channel status (tabulator):', status, err);
+      });
+    
+    channels.push(scoringChannel);
+
+    // Listen for division permission changes
+    const divisionChannel = supabase
+      .channel(`tabulator-division-perms-${event.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'judge_division_permission',
+        },
+        async (payload) => {
+          console.log('Division permission change detected (tabulator):', payload.eventType, payload);
+          try {
+            const { data, error } = await supabase
+              .from("judge_division_permission")
+              .select("id, judge_id, contest_id, division_id, created_at");
+            if (!error && data) {
+              console.log('Updated division permissions from realtime (tabulator)');
+              setJudgeDivisionPermissions(data as JudgeDivisionPermissionRow[]);
+            }
+          } catch (error) {
+            console.warn('Failed to refresh division permissions (tabulator):', error);
+          }
+        }
+      )
+      .subscribe((status, err) => {
+        console.log('Division channel status (tabulator):', status, err);
+      });
+    
+    channels.push(divisionChannel);
+
+    // Listen for participant permission changes
+    const participantChannel = supabase
+      .channel(`tabulator-participant-perms-${event.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'judge_participant_permission',
+        },
+        async (payload) => {
+          console.log('Participant permission change detected (tabulator):', payload.eventType, payload);
+          try {
+            const { data, error } = await supabase
+              .from("judge_participant_permission")
+              .select("id, judge_id, contest_id, participant_id, created_at");
+            if (!error && data) {
+              console.log('Updated participant permissions from realtime (tabulator)');
+              setJudgeParticipantPermissions(data as JudgeParticipantPermissionRow[]);
+            }
+          } catch (error) {
+            console.warn('Failed to refresh participant permissions (tabulator):', error);
+          }
+        }
+      )
+      .subscribe((status, err) => {
+        console.log('Participant channel status (tabulator):', status, err);
+      });
+    
+    channels.push(participantChannel);
+
+    return () => {
+      channels.forEach(ch => supabase.removeChannel(ch));
+    };
+  }, [event]);
+
+  // Fallback polling for permission changes to ensure sync across admins/tabulators
+  useEffect(() => {
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+    if (!supabaseUrl || !supabaseAnonKey || !event?.id) {
+      return;
+    }
+
+    const supabase = createClient(supabaseUrl, supabaseAnonKey);
+    let cancelled = false;
+
+    // Poll for permission changes every 7 seconds
+    const pollInterval = setInterval(async () => {
+      if (cancelled) return;
+      try {
+        const [scoringRes, divisionRes, participantRes] = await Promise.all([
+          supabase
+            .from("judge_scoring_permission")
+            .select("judge_id, contest_id, criteria_id, can_edit, created_at"),
+          supabase
+            .from("judge_division_permission")
+            .select("id, judge_id, contest_id, division_id, created_at"),
+          supabase
+            .from("judge_participant_permission")
+            .select("id, judge_id, contest_id, participant_id, created_at"),
+        ]);
+
+        if (scoringRes.data && JSON.stringify(scoringRes.data) !== JSON.stringify(judgeScoringPermissions)) {
+          console.log('[TABULATOR-POLL] Scoring permissions changed');
+          setJudgeScoringPermissions(scoringRes.data as JudgeScoringPermissionRow[]);
+        }
+        if (divisionRes.data && JSON.stringify(divisionRes.data) !== JSON.stringify(judgeDivisionPermissions)) {
+          console.log('[TABULATOR-POLL] Division permissions changed');
+          setJudgeDivisionPermissions(divisionRes.data as JudgeDivisionPermissionRow[]);
+        }
+        if (participantRes.data && JSON.stringify(participantRes.data) !== JSON.stringify(judgeParticipantPermissions)) {
+          console.log('[TABULATOR-POLL] Participant permissions changed');
+          setJudgeParticipantPermissions(participantRes.data as JudgeParticipantPermissionRow[]);
+        }
+      } catch (error) {
+        console.warn('[TABULATOR-POLL] Error polling permissions:', error);
+      }
+    }, 7000);
+
+    // Also can refresh when page becomes visible
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        console.log('[TABULATOR-VISIBILITY] Page visible, checking permissions');
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      cancelled = true;
+      clearInterval(pollInterval);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [event?.id, judgeScoringPermissions, judgeDivisionPermissions, judgeParticipantPermissions]);
+
+  useEffect(() => {
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+    if (!supabaseUrl || !supabaseAnonKey) return;
+    if (!event) return;
+    const supabase = createClient(supabaseUrl, supabaseAnonKey);
+    const ch = supabase
+      .channel(`event-${event.id}-scores`, { config: { broadcast: { ack: true } } })
+      .on('broadcast', { event: 'score-submitted' }, async () => {
+        try {
+          const [totalsRes, scoresRes] = await Promise.all([
+            supabase
+              .from("judge_participant_total")
+              .select("id, judge_id, participant_id, contest_id, total_score, created_at"),
+            supabase
+              .from("score")
+              .select("id, judge_id, participant_id, criteria_id, score, created_at"),
+          ]);
+          if (totalsRes.data) setTotals(totalsRes.data as TotalRow[]);
+          if (scoresRes.data) setScores(scoresRes.data as ScoreRow[]);
+        } catch {}
+      })
+      .subscribe();
+    return () => {
+      supabase.removeChannel(ch);
+    };
+  }, [event]);
+
   const activeContest = useMemo(
     () => contests.find((contest) => contest.id === activeContestId) || null,
     [contests, activeContestId],
@@ -1037,21 +1234,6 @@ export default function TabulatorPage() {
       criteriaIds = [Number(selectedAwardResult.award.criteria_id)];
     }
     criteriaIds = criteriaIds.filter((n) => !isNaN(n));
-    if (criteriaIds.length > 0) {
-      const selectedCriteria = criteriaList.filter((c) =>
-        criteriaIds.includes(c.id),
-      );
-      const categories = Array.from(
-        new Set(selectedCriteria.map((c) => c.category).filter(Boolean)),
-      );
-      if (categories.length > 0) {
-        const allCriteriaInCategories = criteriaList.filter((c) =>
-          categories.includes(c.category),
-        );
-        const allIds = allCriteriaInCategories.map((c) => c.id);
-        criteriaIds = Array.from(new Set([...criteriaIds, ...allIds]));
-      }
-    }
     return criteriaIds;
   }, [selectedAwardResult, criteriaList]);
 
@@ -1126,18 +1308,7 @@ export default function TabulatorPage() {
     // Filter out NaNs if any parsing failed
     criteriaIds = criteriaIds.filter(n => !isNaN(n));
 
-    // NEW: If the award has associated criteria, check if we need to include ALL criteria from the categories
-    // that the selected criteria belong to.
-    if (criteriaIds.length > 0) {
-      const selectedCriteria = criteriaList.filter(c => criteriaIds.includes(c.id));
-      const categories = Array.from(new Set(selectedCriteria.map(c => c.category).filter(Boolean)));
-      
-      if (categories.length > 0) {
-          const allCriteriaInCategories = criteriaList.filter(c => categories.includes(c.category));
-          const allIds = allCriteriaInCategories.map(c => c.id);
-          criteriaIds = Array.from(new Set([...criteriaIds, ...allIds]));
-      }
-    }
+    // Use only explicitly selected criteria for award computation
 
     if (
       selectedAwardResult.award.award_type !== "criteria" ||
@@ -2234,7 +2405,7 @@ export default function TabulatorPage() {
                                 </div>
                                 <button
                                   type="button"
-                                  onClick={() => {
+                                  onClick={async () => {
                                     if (judgePermissionsMode === "all") {
                                       const allCriteriaIds = criteriaList
                                         .filter(
@@ -2258,6 +2429,107 @@ export default function TabulatorPage() {
                                               )
                                             : [...previous, criteria.id],
                                       );
+                                    }
+                                    // Realtime persist of criteria toggles
+                                    if (selectedContestIdForPermissions !== null) {
+                                      try {
+                                        const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+                                        const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+                                        if (supabaseUrl && supabaseAnonKey) {
+                                          const supabase = createClient(supabaseUrl, supabaseAnonKey);
+                                          let judgeIds =
+                                            selectedJudgeIdsForPermissions.length === 0
+                                              ? judgesForSelectedEvent.map((j) => j.id)
+                                              : [...selectedJudgeIdsForPermissions];
+                                          judgeIds = judgeIds.filter((id) =>
+                                            judgesForSelectedEvent.some((j) => j.id === id),
+                                          );
+                                          if (judgeIds.length > 0) {
+                                            await supabase
+                                              .from("judge_scoring_permission")
+                                              .delete()
+                                              .in("judge_id", judgeIds)
+                                              .eq("contest_id", selectedContestIdForPermissions);
+                                            const allIdsForSave = criteriaList
+                                              .filter((c) => c.contest_id === selectedContestIdForPermissions)
+                                              .map((c) => c.id);
+                                            const nextSelected =
+                                              judgePermissionsMode === "all"
+                                                ? allIdsForSave.filter((id) => id !== criteria.id)
+                                                : (prev => {
+                                                    const exists = judgePermissionsCriteriaIds.includes(criteria.id);
+                                                    return exists
+                                                      ? judgePermissionsCriteriaIds.filter((id) => id !== criteria.id)
+                                                      : [...judgePermissionsCriteriaIds, criteria.id];
+                                                  })();
+                                            const isAll = nextSelected.length === allIdsForSave.length;
+                                            const inserts: {
+                                              judge_id: number;
+                                              contest_id: number;
+                                              criteria_id: number | null;
+                                              can_edit: boolean;
+                                            }[] = [];
+                                            judgeIds.forEach((jid) => {
+                                              if (isAll) {
+                                                inserts.push({
+                                                  judge_id: jid,
+                                                  contest_id: selectedContestIdForPermissions,
+                                                  criteria_id: null,
+                                                  can_edit: true,
+                                                });
+                                              } else {
+                                                inserts.push({
+                                                  judge_id: jid,
+                                                  contest_id: selectedContestIdForPermissions,
+                                                  criteria_id: null,
+                                                  can_edit: false,
+                                                });
+                                                nextSelected.forEach((cid) =>
+                                                  inserts.push({
+                                                    judge_id: jid,
+                                                    contest_id: selectedContestIdForPermissions,
+                                                    criteria_id: cid,
+                                                    can_edit: true,
+                                                  }),
+                                                );
+                                              }
+                                            });
+                                            if (inserts.length > 0) {
+                                              await supabase
+                                                .from("judge_scoring_permission")
+                                                .insert(inserts);
+                                            }
+                                            await supabase
+                                              .from("judge_contest_submission")
+                                              .delete()
+                                              .in("judge_id", judgeIds)
+                                              .eq("contest_id", selectedContestIdForPermissions);
+                                            // Broadcast to judges/admins
+                                            if (event) {
+                                              let ch: ReturnType<typeof supabase.channel> | null = null;
+                                              try {
+                                                ch = supabase.channel(`event-${event.id}-permissions`, { config: { broadcast: { ack: true } } });
+                                                await ch.subscribe();
+                                                // Add small delay to ensure channel is ready
+                                                await new Promise(resolve => setTimeout(resolve, 100));
+                                                await ch.send({
+                                                  type: 'broadcast',
+                                                  event: 'permissions-updated',
+                                                  payload: { contestId: selectedContestIdForPermissions, timestamp: Date.now() },
+                                                });
+                                                // Small delay to ensure broadcast is delivered before channel cleanup
+                                                await new Promise(resolve => setTimeout(resolve, 100));
+                                              } catch (error) {
+                                                console.warn('Failed to broadcast permission update:', error);
+                                              } finally {
+                                                if (ch) try { supabase.removeChannel(ch); } catch {}
+                                              }
+                                            }
+                                          }
+                                        }
+                                      } catch {
+                                        // ignore realtime errors to keep UI responsive
+                                      }
                                     }
                                   }}
                                   className={`relative inline-flex h-5 w-9 flex-shrink-0 items-center rounded-full transition-colors ${
@@ -2427,6 +2699,27 @@ export default function TabulatorPage() {
                         setJudgePermissionsSuccess("Access permissions updated successfully.");
                         setIsSavingJudgePermissions(false);
                         
+                        // Broadcast to judges/admins so they refresh immediately
+                        try {
+                          if (event && selectedContestIdForPermissions !== null) {
+                            const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+                            const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+                            if (supabaseUrl && supabaseAnonKey) {
+                              const supabase2 = createClient(supabaseUrl, supabaseAnonKey);
+                              const ch = supabase2.channel(`event-${event.id}-permissions`, {
+                                config: { broadcast: { ack: true } },
+                              });
+                              await ch.subscribe();
+                              await ch.send({
+                                type: "broadcast",
+                                event: "permissions-updated",
+                                payload: { contestId: selectedContestIdForPermissions },
+                              });
+                              supabase2.removeChannel(ch);
+                            }
+                          }
+                        } catch {}
+                        
                         // auto-clear success message after 3 seconds
                         setTimeout(() => {
                           setJudgePermissionsSuccess(null);
@@ -2484,10 +2777,8 @@ export default function TabulatorPage() {
                     <tr>
                       <th className="px-4 py-3 font-medium">Contestant</th>
                       {(() => {
-                        // Determine categories involved
                         let criteriaIds: number[] = [];
                         const rawIds = selectedAwardResult.award.criteria_ids;
-
                         if (Array.isArray(rawIds)) {
                           criteriaIds = rawIds.map(id => Number(id));
                         } else if (typeof rawIds === 'string') {
@@ -2500,28 +2791,13 @@ export default function TabulatorPage() {
                         } else if (selectedAwardResult.award.criteria_id) {
                           criteriaIds = [Number(selectedAwardResult.award.criteria_id)];
                         }
-                        
                         criteriaIds = criteriaIds.filter(n => !isNaN(n));
-                        
-                        // Expand to categories
                         const selectedCriteria = criteriaList.filter(c => criteriaIds.includes(c.id));
-                        const categories = Array.from(new Set(selectedCriteria.map(c => c.category).filter(Boolean)));
-                        
-                        // If categories exist, show columns for each category
-                        if (categories.length > 0) {
-                            return categories.map(cat => (
-                                <th key={cat} className="px-4 py-3 text-center font-medium">
-                                    {cat}
-                                </th>
-                            ));
-                        } else {
-                            // If no categories, maybe just show criteria names? Or just one "Score" column
-                            return selectedCriteria.map(c => (
-                                <th key={c.id} className="px-4 py-3 text-center font-medium">
-                                    {c.name}
-                                </th>
-                            ));
-                        }
+                        return selectedCriteria.map(c => (
+                          <th key={c.id} className="px-4 py-3 text-center font-medium">
+                            {c.name}
+                          </th>
+                        ));
                       })()}
                       <th className="px-4 py-3 text-right font-medium">Total</th>
                     </tr>
@@ -2550,47 +2826,19 @@ export default function TabulatorPage() {
                             } else if (selectedAwardResult.award.criteria_id) {
                               criteriaIds = [Number(selectedAwardResult.award.criteria_id)];
                             }
-                            
                             criteriaIds = criteriaIds.filter(n => !isNaN(n));
                             const selectedCriteria = criteriaList.filter(c => criteriaIds.includes(c.id));
-                            const categories = Array.from(new Set(selectedCriteria.map(c => c.category).filter(Boolean)));
-                            
                             // Calculate scores for this participant and judge
                             const judgeId = selectedJudgeForBreakdown;
-                            
-                            if (categories.length > 0) {
-                                return categories.map(cat => {
-                                    // Sum all criteria in this category
-                                    const catCriteria = criteriaList.filter(c => c.category === cat);
-                                    let catTotal = 0;
-                                    let hasVal = false;
-                                    
-                                    for (const c of catCriteria) {
-                                        const key = `${c.id}-${judgeId}-${item.row.participant.id}`;
-                                        const val = criteriaScoreByJudgeAndParticipant.get(key);
-                                        if (val !== undefined) {
-                                            catTotal += val;
-                                            hasVal = true;
-                                        }
-                                    }
-                                    
-                                    return (
-                                        <td key={cat} className="px-4 py-3 text-center text-slate-600">
-                                            {hasVal ? catTotal.toFixed(2) : "—"}
-                                        </td>
-                                    );
-                                });
-                            } else {
-                                return selectedCriteria.map(c => {
-                                    const key = `${c.id}-${judgeId}-${item.row.participant.id}`;
-                                    const val = criteriaScoreByJudgeAndParticipant.get(key);
-                                    return (
-                                        <td key={c.id} className="px-4 py-3 text-center text-slate-600">
-                                            {val !== undefined ? val.toFixed(2) : "—"}
-                                        </td>
-                                    );
-                                });
-                            }
+                            return selectedCriteria.map(c => {
+                              const key = `${c.id}-${judgeId}-${item.row.participant.id}`;
+                              const val = criteriaScoreByJudgeAndParticipant.get(key);
+                              return (
+                                <td key={c.id} className="px-4 py-3 text-center text-slate-600">
+                                  {val !== undefined ? val.toFixed(2) : "—"}
+                                </td>
+                              );
+                            });
                         })()}
                         {(() => {
                              // Calculate total again for this judge
@@ -2612,17 +2860,7 @@ export default function TabulatorPage() {
                              
                              criteriaIds = criteriaIds.filter(n => !isNaN(n));
  
-                             // Include all criteria from categories
-                             if (criteriaIds.length > 0) {
-                               const selectedCriteria = criteriaList.filter(c => criteriaIds.includes(c.id));
-                               const categories = Array.from(new Set(selectedCriteria.map(c => c.category).filter(Boolean)));
-                               
-                               if (categories.length > 0) {
-                                   const allCriteriaInCategories = criteriaList.filter(c => categories.includes(c.category));
-                                   const allIds = allCriteriaInCategories.map(c => c.id);
-                                   criteriaIds = Array.from(new Set([...criteriaIds, ...allIds]));
-                               }
-                             }
+                             // Use only selected criteria when computing totals
                              
                              const judgeId = selectedJudgeForBreakdown;
                              let total = 0;
