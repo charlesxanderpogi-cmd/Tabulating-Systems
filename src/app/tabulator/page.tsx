@@ -117,6 +117,17 @@ type AwardRankingRow = {
   rank: number | null;
 };
 
+type SubCriteriaCell = {
+  judgeId: number;
+  value: number | null;
+};
+
+type SubCriteriaRow = {
+  participant: ParticipantRow;
+  criteria: CriteriaRow;
+  cells: SubCriteriaCell[];
+};
+
 type JudgeRow = {
   id: number;
   event_id: number;
@@ -148,6 +159,16 @@ type JudgeParticipantPermissionRow = {
   contest_id: number;
   participant_id: number;
   created_at: string;
+};
+
+type SignatureRow = {
+  id: number;
+  tabulator_id: number;
+  event_id: number;
+  title: string;
+  name: string;
+  created_at: string;
+  updated_at: string;
 };
 
 type MultiSelectOption = {
@@ -266,7 +287,7 @@ export default function TabulatorPage() {
   const [activeDivisionFilterId, setActiveDivisionFilterId] = useState<number | "all">(
     "all",
   );
-  const [activeView, setActiveView] = useState<"overall" | "awards">("awards");
+  const [activeView, setActiveView] = useState<"awards" | "sub-criteria">("awards");
   const [activeAwardFilterId, setActiveAwardFilterId] = useState<number | "all">(
     "all",
   );
@@ -301,6 +322,8 @@ export default function TabulatorPage() {
     string | null
   >(null);
   const [isSavingJudgePermissions, setIsSavingJudgePermissions] =
+    useState(false);
+  const [hasUnsavedPermissionChanges, setHasUnsavedPermissionChanges] =
     useState(false);
   const [judgeDivisionMode, setJudgeDivisionMode] =
     useState<"all" | "custom">("all");
@@ -417,8 +440,7 @@ export default function TabulatorPage() {
       } = await supabase
         .from("contest")
         .select("id, event_id, name, contest_code, created_at")
-        // load contests for *all* events so the filter dropdown can switch
-        //.eq("event_id", activeEvent.id)
+        .eq("event_id", activeEvent.id)
         .order("created_at", { ascending: false });
 
       if (contestError) {
@@ -442,6 +464,7 @@ export default function TabulatorPage() {
         { data: scoringPermissionRows, error: scoringPermissionError },
         { data: divisionPermissionRows, error: divisionPermissionError },
         { data: participantPermissionRows, error: participantPermissionError },
+        { data: signatureRows, error: signatureError },
       ] = await Promise.all([
         supabase
           .from("division")
@@ -481,7 +504,7 @@ export default function TabulatorPage() {
           ),
         supabase
           .from("user_judge")
-          .select("id, event_id, full_name, username, role, created_at")
+          .select("id, event_id, full_name, username, role, avatar_url, created_at")
           .eq("event_id", activeEvent.id),
         supabase
           .from("judge_scoring_permission")
@@ -492,6 +515,10 @@ export default function TabulatorPage() {
         supabase
           .from("judge_participant_permission")
           .select("id, judge_id, contest_id, participant_id, created_at"),
+        supabase
+          .from("tabulator_signature")
+          .select("id, tabulator_id, event_id, title, name, created_at, updated_at")
+          .eq("event_id", activeEvent.id),
       ]);
 
       if (
@@ -505,7 +532,8 @@ export default function TabulatorPage() {
         judgeError ||
         scoringPermissionError ||
         divisionPermissionError ||
-        participantPermissionError
+        participantPermissionError ||
+        signatureError
       ) {
         const message =
           categoryError?.message ||
@@ -519,6 +547,7 @@ export default function TabulatorPage() {
           scoringPermissionError?.message ||
           divisionPermissionError?.message ||
           participantPermissionError?.message ||
+          signatureError?.message ||
           "Unable to load tabulation data.";
         setError(message);
         setIsLoading(false);
@@ -537,6 +566,7 @@ export default function TabulatorPage() {
       setJudgeScoringPermissions((scoringPermissionRows ?? []) as JudgeScoringPermissionRow[]);
       setJudgeDivisionPermissions((divisionPermissionRows ?? []) as JudgeDivisionPermissionRow[]);
       setJudgeParticipantPermissions((participantPermissionRows ?? []) as JudgeParticipantPermissionRow[]);
+      setSignatures((signatureRows ?? []) as SignatureRow[]);
 
       if (contestRows && contestRows.length > 0) {
         setActiveContestId((contestRows[0] as ContestRow).id);
@@ -776,6 +806,31 @@ export default function TabulatorPage() {
             }
           },
         )
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "tabulator_signature",
+            filter: `event_id=eq.${activeEvent.id}`,
+          },
+          (payload) => {
+            if (payload.eventType === "INSERT" || payload.eventType === "UPDATE") {
+              const newRow = payload.new as SignatureRow;
+              setSignatures((previous) => {
+                const exists = previous.some((row) => row.id === newRow.id);
+                if (payload.eventType === "INSERT" && !exists) {
+                  return [...previous, newRow];
+                }
+                return previous.map((row) => (row.id === newRow.id ? newRow : row));
+              });
+            } else if (payload.eventType === "DELETE") {
+              const oldRow = payload.old as { id: number } | null;
+              if (!oldRow) return;
+              setSignatures((previous) => previous.filter((row) => row.id !== oldRow.id));
+            }
+          }
+        )
         .subscribe();
 
       setIsLoading(false);
@@ -898,6 +953,53 @@ export default function TabulatorPage() {
       });
     
     channels.push(participantChannel);
+
+    // Listen for admin broadcasts about permission changes (criteria permissions)
+    const adminPermissionsChannel = supabase
+      .channel(`permissions-update-${event.id}`)
+      .on(
+        'broadcast',
+        { event: 'permissions-updated' },
+        async (payload) => {
+          console.log('Admin permission update broadcast received (tabulator):', payload);
+          try {
+            // Refresh all permission data from database
+            const [scoringRes, divisionRes, participantRes] = await Promise.all([
+              supabase
+                .from("judge_scoring_permission")
+                .select("judge_id, contest_id, criteria_id, can_edit, created_at"),
+              supabase
+                .from("judge_division_permission")
+                .select("id, judge_id, contest_id, division_id, created_at"),
+              supabase
+                .from("judge_participant_permission")
+                .select("id, judge_id, contest_id, participant_id, created_at"),
+            ]);
+            
+            if (scoringRes.data) {
+              setJudgeScoringPermissions(scoringRes.data as JudgeScoringPermissionRow[]);
+            }
+            if (divisionRes.data) {
+              setJudgeDivisionPermissions(divisionRes.data as JudgeDivisionPermissionRow[]);
+            }
+            if (participantRes.data) {
+              setJudgeParticipantPermissions(participantRes.data as JudgeParticipantPermissionRow[]);
+            }
+            
+            // Clear unsaved changes flag since we just synced with server
+            setHasUnsavedPermissionChanges(false);
+            
+            console.log('Permission data refreshed from admin broadcast (tabulator)');
+          } catch (error) {
+            console.warn('Failed to refresh permissions from admin broadcast (tabulator):', error);
+          }
+        }
+      )
+      .subscribe((status, err) => {
+        console.log('Admin permissions channel status (tabulator):', status, err);
+      });
+    
+    channels.push(adminPermissionsChannel);
 
     return () => {
       channels.forEach(ch => supabase.removeChannel(ch));
@@ -1070,7 +1172,7 @@ export default function TabulatorPage() {
       });
     }
 
-    rows.sort((a, b) => b.totalScore - a.totalScore);
+    rows.sort((a, b) => a.totalScore - b.totalScore);
 
     let previousScore: number | null = null;
     let currentRank = 0;
@@ -1078,7 +1180,7 @@ export default function TabulatorPage() {
 
     for (const row of rows) {
       index += 1;
-      if (previousScore === null || row.totalScore < previousScore) {
+      if (previousScore === null || row.totalScore > previousScore) {
         currentRank = index;
       }
       row.rank = currentRank;
@@ -1405,6 +1507,158 @@ export default function TabulatorPage() {
     awardRankByJudgeAndParticipant,
   ]);
 
+  const handleAddSignature = async () => {
+    if (!tabulator || !event) return;
+    
+    const title = signatureTitleInput.trim();
+    const name = signatureNameInput.trim();
+    
+    if (!title && !name) return;
+    
+    setIsSavingSignature(true);
+    setSignatureError(null);
+    setSignatureSuccess(null);
+    
+    try {
+      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+      const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+      
+      if (!supabaseUrl || !supabaseAnonKey) {
+        setSignatureError("Supabase configuration is missing.");
+        setIsSavingSignature(false);
+        return;
+      }
+      
+      const supabase = createClient(supabaseUrl, supabaseAnonKey);
+      
+      const { data, error } = await supabase
+        .from("tabulator_signature")
+        .insert({
+          tabulator_id: tabulator.id,
+          event_id: event.id,
+          title: title || "",
+          name: name || "",
+        })
+        .select();
+      
+      if (error) throw error;
+      
+      // Add the inserted signature to local state
+      if (data && data.length > 0) {
+        const insertedSignature = data[0] as SignatureRow;
+        setSignatures((previous) => [...previous, insertedSignature]);
+      }
+      
+      setSignatureTitleInput("");
+      setSignatureNameInput("");
+      setSignatureSuccess("Signature added successfully.");
+      
+      setTimeout(() => setSignatureSuccess(null), 3000);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : null;
+      setSignatureError(message ?? "Failed to add signature.");
+    } finally {
+      setIsSavingSignature(false);
+    }
+  };
+
+  const handleDeleteSignature = async (signatureId: number) => {
+    if (!event) return;
+  
+    try {
+      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+      const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  
+      if (!supabaseUrl || !supabaseAnonKey) {
+        setSignatureError("Supabase configuration is missing.");
+        return;
+      }
+  
+      const supabase = createClient(supabaseUrl, supabaseAnonKey);
+  
+      const { error } = await supabase
+        .from("tabulator_signature")
+        .delete()
+        .eq("id", signatureId);
+  
+      if (error) throw error;
+  
+      // Immediately update local state to reflect deletion
+      setSignatures((previous) => previous.filter((s) => s.id !== signatureId));
+  
+      setSignatureSuccess("Signature deleted successfully.");
+      setTimeout(() => setSignatureSuccess(null), 3000);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : null;
+      setSignatureError(message ?? "Failed to delete signature.");
+    }
+  };
+
+  const handleStartEdit = (signature: SignatureRow) => {
+    setEditingSignatureId(signature.id);
+    setEditingTitle(signature.title);
+    setEditingName(signature.name);
+  };
+
+  const handleCancelEdit = () => {
+    setEditingSignatureId(null);
+    setEditingTitle("");
+    setEditingName("");
+  };
+
+  const handleSaveEdit = async (signatureId: number) => {
+    if (!event) return;
+    
+    setIsSavingSignature(true);
+    setSignatureError(null);
+    setSignatureSuccess(null);
+    
+    try {
+      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+      const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+      
+      if (!supabaseUrl || !supabaseAnonKey) {
+        setSignatureError("Supabase configuration is missing.");
+        setIsSavingSignature(false);
+        return;
+      }
+      
+      const supabase = createClient(supabaseUrl, supabaseAnonKey);
+      
+      const { data, error } = await supabase
+        .from("tabulator_signature")
+        .update({
+          title: editingTitle.trim() || "",
+          name: editingName.trim() || "",
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", signatureId)
+        .select();
+      
+      if (error) throw error;
+      
+      // Update local state with the updated signature from the database
+      if (data && data.length > 0) {
+        const updatedSignature = data[0] as SignatureRow;
+        setSignatures((previous) =>
+          previous.map((s) => (s.id === signatureId ? updatedSignature : s))
+        );
+      }
+      
+      setEditingSignatureId(null);
+      setEditingTitle("");
+      setEditingName("");
+      setSignatureSuccess("Signature updated successfully.");
+      
+      setTimeout(() => setSignatureSuccess(null), 3000);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : null;
+      setSignatureError(message ?? "Failed to update signature.");
+    } finally {
+      setIsSavingSignature(false);
+    }
+  };
+
   const handleSignOut = () => {
     if (typeof window !== "undefined") {
       window.localStorage.removeItem("tabulator_username");
@@ -1464,9 +1718,17 @@ export default function TabulatorPage() {
   // Refs to table containers for printing only the rankings table
   const overallTableRef = useRef<HTMLDivElement | null>(null);
   const awardsTableRef = useRef<HTMLDivElement | null>(null);
-  const [signatures, setSignatures] = useState<{ title: string; name: string }[]>([]);
+  const subCriteriaTableRef = useRef<HTMLDivElement | null>(null);
+  const tempSignatureId = useRef(0);
+  const [signatures, setSignatures] = useState<SignatureRow[]>([]);
   const [signatureTitleInput, setSignatureTitleInput] = useState("");
   const [signatureNameInput, setSignatureNameInput] = useState("");
+  const [editingSignatureId, setEditingSignatureId] = useState<number | null>(null);
+  const [editingTitle, setEditingTitle] = useState("");
+  const [editingName, setEditingName] = useState("");
+  const [isSavingSignature, setIsSavingSignature] = useState(false);
+  const [signatureError, setSignatureError] = useState<string | null>(null);
+  const [signatureSuccess, setSignatureSuccess] = useState<string | null>(null);
 
   function escapeHtml(unsafe: string) {
     return unsafe
@@ -1480,18 +1742,18 @@ export default function TabulatorPage() {
   const handlePrint = () => {
     if (typeof window === "undefined") return;
 
-    const contentEl = activeView === "overall" ? overallTableRef.current : awardsTableRef.current;
+    const contentEl =
+      activeView === "awards" ? awardsTableRef.current : subCriteriaTableRef.current;
 
     if (!contentEl) {
       window.print();
       return;
     }
-
-    const eventTitle = headerTitle;
     const divisionName =
       activeDivisionFilterId === "all"
         ? null
         : categoriesForActiveEvent.find((c) => c.id === activeDivisionFilterId)?.name ?? null;
+    const eventTitle = event ? `${event.name} • ${event.year}` : "Tabulation workspace";
     const selectedAwardName =
       activeView === "awards"
         ? activeAwardFilterId === "all"
@@ -1571,7 +1833,78 @@ export default function TabulatorPage() {
     win.document.write(html);
     win.document.close();
   };
-  
+
+  const judgesForActiveContest = useMemo(() => {
+    if (!activeContest) return [];
+    const judgeIds = new Set(
+      totals.filter((t) => t.contest_id === activeContest.id).map((t) => t.judge_id),
+    );
+    return judges.filter((j) => judgeIds.has(j.id));
+  }, [activeContest, totals, judges]);
+
+  const subCriteriaRows = useMemo<SubCriteriaRow[]>(() => {
+    if (!activeContest) return [];
+
+    const participantsForContest = participants.filter(
+      (p) => p.contest_id === activeContest.id,
+    );
+
+    const filteredParticipants =
+      activeDivisionFilterId === "all"
+        ? participantsForContest
+        : participantsForContest.filter((p) => p.division_id === activeDivisionFilterId);
+
+    const criteriaForContest = criteriaList.filter(
+      (c) => c.contest_id === activeContest.id,
+    );
+
+    if (filteredParticipants.length === 0 || criteriaForContest.length === 0) {
+      return [];
+    }
+
+    const judgeIds = judgesForActiveContest.map((j) => j.id);
+
+    const scoreByKey = new Map<string, number>();
+    for (const s of scores) {
+      scoreByKey.set(`${s.participant_id}-${s.criteria_id}-${s.judge_id}`, Number(s.score));
+    }
+
+    const rows: SubCriteriaRow[] = [];
+    for (const participant of filteredParticipants) {
+      for (const criteria of criteriaForContest) {
+        const cells: SubCriteriaCell[] = judgeIds.map((judgeId) => {
+          const key = `${participant.id}-${criteria.id}-${judgeId}`;
+          const val = scoreByKey.has(key) ? scoreByKey.get(key)! : null;
+          return { judgeId, value: Number.isFinite(val as number) ? (val as number) : null };
+        });
+        rows.push({ participant, criteria, cells });
+      }
+    }
+
+    rows.sort((a, b) => {
+      const aNum = Number.parseFloat(
+        String(a.participant.contestant_number).replace(/[^0-9.\-]/g, ""),
+      );
+      const bNum = Number.parseFloat(
+        String(b.participant.contestant_number).replace(/[^0-9.\-]/g, ""),
+      );
+      const aN = Number.isFinite(aNum) ? aNum : Number.POSITIVE_INFINITY;
+      const bN = Number.isFinite(bNum) ? bNum : Number.POSITIVE_INFINITY;
+      if (aN !== bN) return aN - bN;
+      const pn = a.participant.contestant_number.localeCompare(b.participant.contestant_number);
+      if (pn !== 0) return pn;
+      return a.criteria.name.localeCompare(b.criteria.name);
+    });
+
+    return rows;
+  }, [
+    activeContest,
+    participants,
+    activeDivisionFilterId,
+    criteriaList,
+    judgesForActiveContest,
+    scores,
+  ]);
 
   const judgeDivisionIdsForContest = useMemo(() => {
     if (selectedContestIdForPermissions === null) return [];
@@ -1614,6 +1947,12 @@ export default function TabulatorPage() {
       setJudgeParticipantMode("all");
       setJudgePermissionsCriteriaIds([]);
       setJudgePermissionsMode("all");
+      setHasUnsavedPermissionChanges(false);
+      return;
+    }
+
+    // Don't overwrite local state if there are unsaved changes
+    if (hasUnsavedPermissionChanges) {
       return;
     }
 
@@ -1623,9 +1962,12 @@ export default function TabulatorPage() {
         : selectedJudgeIdsForPermissions;
 
     // helper to compute division/participant settings based on one or many judges
-    const computePermissionList = <T extends { judge_id: number; contest_id: number }>(
+    const computePermissionList = <
+      T extends { judge_id: number; contest_id: number },
+      K extends keyof T,
+    >(
       list: T[],
-      key: keyof T,
+      key: K,
     ) => {
       const perms =
         relevantJudges.length === 1
@@ -1636,9 +1978,17 @@ export default function TabulatorPage() {
       if (perms.length === 0) {
         return { mode: "all" as const, ids: [] as number[] };
       }
+      const ids = Array.from(
+        new Set(
+          perms.flatMap((p) => {
+            const value = p[key] as unknown;
+            return typeof value === "number" ? [value] : [];
+          }),
+        ),
+      );
       return {
         mode: "custom" as const,
-        ids: Array.from(new Set(perms.map((p) => (p as any)[key] as number))),
+        ids,
       };
     };
 
@@ -1698,6 +2048,7 @@ export default function TabulatorPage() {
     judgeScoringPermissions,
     judgesForSelectedEvent,
     criteriaList,
+    hasUnsavedPermissionChanges,
   ]);
 
 
@@ -1750,13 +2101,20 @@ export default function TabulatorPage() {
     <div className="flex min-h-screen flex-col bg-gradient-to-br from-[#E3F2EA] via-white to-[#E3F2EA] px-4 py-6 text-slate-900">
       <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-4">
         <header className="flex items-center justify-between gap-3">
-          <div>
-            <h1 className="text-2xl font-semibold tracking-tight text-[#1F4D3A]">
-              {headerTitle}
-            </h1>
-            <p className="text-sm text-slate-600">
-              Realtime rankings and medals for tabulators.
-            </p>
+          <div className="flex items-center gap-3">
+            <img
+              src="/favicon.svg"
+              alt="Tabulora"
+              className="h-10 w-10 transition-transform duration-300 hover:scale-105"
+            />
+            <div className="space-y-0.5">
+              <div className="text-sm font-bold tracking-tight text-[#1F4D3A]">
+                Tabulora
+              </div>
+              <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-slate-400">
+                Tabulator Console
+              </div>
+            </div>
           </div>
           <div className="flex items-center gap-6">
             <nav className="flex items-center gap-1 rounded-full bg-[#1F4D3A0A] p-1 text-[11px] font-medium">
@@ -1856,36 +2214,83 @@ export default function TabulatorPage() {
                   </div>
                   <button
                     type="button"
-                    onClick={() => {
-                      const t = signatureTitleInput.trim();
-                      const n = signatureNameInput.trim();
-                      if (!t && !n) return;
-                      setSignatures((prev) => [...prev, { title: t, name: n }]);
-                      setSignatureTitleInput("");
-                      setSignatureNameInput("");
-                    }}
-                    className="rounded-full bg-[#1F4D3A] px-4 py-2 text-xs font-semibold text-white shadow-sm transition hover:bg-[#163528]"
+                    onClick={handleAddSignature}
+                    disabled={isSavingSignature}
+                    className="rounded-full bg-[#1F4D3A] px-4 py-2 text-xs font-semibold text-white shadow-sm transition hover:bg-[#163528] disabled:opacity-50"
                   >
-                    Add signature
+                    {isSavingSignature ? "Adding..." : "Add signature"}
                   </button>
                 </div>
+                {(signatureError || signatureSuccess) && (
+                  <div className={`mt-2 text-[11px] ${signatureError ? "text-red-500" : "text-emerald-600"}`}>
+                    {signatureError || signatureSuccess}
+                  </div>
+                )}
                 {signatures.length > 0 && (
                   <div className="mt-3 grid grid-cols-1 gap-3 text-[11px] sm:grid-cols-2 lg:grid-cols-3">
-                    {signatures.map((s, idx) => (
-                      <div key={idx} className="flex items-center justify-between rounded-xl border border-[#E2E8F0] bg-white px-3 py-2">
-                        <div>
-                          <div className="font-semibold text-slate-700">{s.name || "\u00A0"}</div>
-                          <div className="text-slate-500">{s.title || "\u00A0"}</div>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setSignatures((prev) => prev.filter((_, i) => i !== idx))
-                          }
-                          className="rounded-full border border-[#E2E8F0] px-2 py-1 text-[10px] text-slate-600 hover:bg-[#F8FAFC]"
-                        >
-                          Remove
-                        </button>
+                    {signatures.map((s) => (
+                      <div key={s.id} className="rounded-xl border border-[#E2E8F0] bg-white p-3">
+                        {editingSignatureId === s.id ? (
+                          <div className="space-y-2">
+                            <div>
+                              <div className="text-[11px] text-slate-500">Title</div>
+                              <input
+                                value={editingTitle}
+                                onChange={(e) => setEditingTitle(e.target.value)}
+                                className="w-full rounded-lg border border-[#D0D7E2] bg-white px-2 py-1 text-xs outline-none focus:border-[#1F4D3A] focus:ring-1 focus:ring-[#1F4D3A26]"
+                              />
+                            </div>
+                            <div>
+                              <div className="text-[11px] text-slate-500">Name</div>
+                              <input
+                                value={editingName}
+                                onChange={(e) => setEditingName(e.target.value)}
+                                className="w-full rounded-lg border border-[#D0D7E2] bg-white px-2 py-1 text-xs outline-none focus:border-[#1F4D3A] focus:ring-1 focus:ring-[#1F4D3A26]"
+                              />
+                            </div>
+                            <div className="flex gap-2">
+                              <button
+                                type="button"
+                                onClick={() => handleSaveEdit(s.id)}
+                                disabled={isSavingSignature}
+                                className="flex-1 rounded-lg bg-emerald-500 px-2 py-1 text-[10px] font-semibold text-white hover:bg-emerald-600 disabled:opacity-50"
+                              >
+                                {isSavingSignature ? "Saving..." : "Save"}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={handleCancelEdit}
+                                disabled={isSavingSignature}
+                                className="flex-1 rounded-lg border border-[#E2E8F0] bg-white px-2 py-1 text-[10px] text-slate-600 hover:bg-[#F8FAFC] disabled:opacity-50"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <div className="font-semibold text-slate-700">{s.name || "\u00A0"}</div>
+                              <div className="text-slate-500">{s.title || "\u00A0"}</div>
+                            </div>
+                            <div className="flex gap-1">
+                              <button
+                                type="button"
+                                onClick={() => handleStartEdit(s)}
+                                className="rounded-full border border-[#E2E8F0] px-2 py-1 text-[10px] text-slate-600 hover:bg-[#F8FAFC]"
+                              >
+                                Edit
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteSignature(s.id)}
+                                className="rounded-full border border-[#E2E8F0] px-2 py-1 text-[10px] text-red-600 hover:bg-[#FDEDED]"
+                              >
+                                Delete
+                              </button>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -1979,74 +2384,30 @@ export default function TabulatorPage() {
                 </div>
               ) : (
                 <div className="flex flex-col gap-6">
-                  {/* View switcher removed as per request */}
-
-                  {activeView === "overall" && (
-                    <div className="flex flex-col gap-6">
-                      <div ref={overallTableRef} className="overflow-hidden rounded-2xl border border-[#E2E8F0] bg-white">
-                        <table className="min-w-full border-collapse text-left text-sm">
-                          <thead className="bg-[#F5F7FF] text-xs font-semibold uppercase tracking-wide text-[#1F4D3A]">
-                            <tr>
-                              <th className="px-4 py-3 font-medium">College/University</th>
-                              <th className="px-4 py-3 font-medium">Contestant</th>
-                              {judgeIdsForActiveContest.map((_, index) => (
-                                <th
-                                  key={index}
-                                  className="px-4 py-3 text-right font-medium"
-                                >
-                                  Judge {index + 1}
-                                </th>
-                              ))}
-                              <th className="px-4 py-3 text-right font-medium">
-                                Total score
-                              </th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {rankings.map((row) => (
-                              <tr
-                                key={row.participant.id}
-                                className="border-t border-[#E2E8F0] hover:bg-[#F8FAFC]"
-                              >
-                                <td className="px-4 py-3 align-middle text-sm text-slate-700">
-                                  {row.teamName ?? row.categoryName}
-                                </td>
-                                <td className="px-4 py-3 align-middle">
-                                  <div className="text-sm font-semibold text-slate-800">
-                                    {row.participant.full_name}
-                                  </div>
-                                  <div className="text-xs text-slate-500">
-                                    Contestant #{row.participant.contestant_number}
-                                  </div>
-                                </td>
-                                {judgeIdsForActiveContest.map((judgeId) => {
-                                  const key = `${judgeId}-${row.participant.id}`;
-                                  const value = totalScoreByJudgeAndParticipant.has(
-                                    key,
-                                  )
-                                    ? totalScoreByJudgeAndParticipant
-                                        .get(key)!
-                                        .toFixed(2)
-                                    : "—";
-                                  return (
-                                    <td
-                                      key={judgeId}
-                                      className="px-4 py-3 align-middle text-right text-sm text-slate-700"
-                                    >
-                                      {value}
-                                    </td>
-                                  );
-                                })}
-                                <td className="px-4 py-3 align-middle text-right text-sm font-semibold text-[#1F4D3A]">
-                                  {row.totalScore.toFixed(2)}
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
-                  )}
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setActiveView("awards")}
+                      className={`rounded-full border px-4 py-2 text-xs font-semibold transition ${
+                        activeView === "awards"
+                          ? "border-[#1F4D3A] bg-[#1F4D3A] text-white"
+                          : "border-[#E2E8F0] bg-white text-slate-700 hover:bg-[#F8FAFC]"
+                      }`}
+                    >
+                      Awards
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setActiveView("sub-criteria")}
+                      className={`rounded-full border px-4 py-2 text-xs font-semibold transition ${
+                        activeView === "sub-criteria"
+                          ? "border-[#1F4D3A] bg-[#1F4D3A] text-white"
+                          : "border-[#E2E8F0] bg-white text-slate-700 hover:bg-[#F8FAFC]"
+                      }`}
+                    >
+                      Sub-Criteria
+                    </button>
+                  </div>
 
                   {activeView === "awards" && (
                     <div className="flex flex-col gap-4">
@@ -2199,6 +2560,85 @@ export default function TabulatorPage() {
                       </div>
                     </div>
                   )}
+
+                  {activeView === "sub-criteria" && (
+                    <div className="flex flex-col gap-4">
+                      <div className="rounded-2xl border border-[#E2E8F0] bg-white px-4 py-4">
+                        <div className="text-sm font-semibold text-[#1F4D3A]">
+                          Sub-Criteria breakdown
+                        </div>
+                        <div className="text-[11px] text-slate-500">
+                          Scores per participant, per criteria, per judge.
+                        </div>
+                      </div>
+
+                      {subCriteriaRows.length === 0 ? (
+                        <div className="text-sm text-slate-500">
+                          No sub-criteria scores found for this contest.
+                        </div>
+                      ) : (
+                        <div
+                          ref={subCriteriaTableRef}
+                          className="overflow-auto rounded-2xl border border-[#E2E8F0] bg-white"
+                        >
+                          <table className="min-w-full border-collapse text-left text-sm">
+                            <thead className="bg-[#F5F7FF] text-[10px] font-semibold uppercase tracking-wide text-[#1F4D3A]">
+                              <tr>
+                                <th className="px-4 py-3 font-medium">Contestant</th>
+                                <th className="px-4 py-3 font-medium">Criteria</th>
+                                {judgesForActiveContest.map((j, idx) => (
+                                  <th
+                                    key={j.id}
+                                    className="px-4 py-3 text-right font-medium"
+                                  >
+                                    Judge {idx + 1}
+                                  </th>
+                                ))}
+                                <th className="px-4 py-3 text-right font-medium">Total</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {subCriteriaRows.map((row) => (
+                                <tr
+                                  key={`${row.participant.id}-${row.criteria.id}`}
+                                  className="border-t border-[#E2E8F0] hover:bg-[#F8FAFC]"
+                                >
+                                  <td className="px-4 py-3 align-middle">
+                                    <div className="text-sm font-semibold text-slate-800">
+                                      {row.participant.full_name}
+                                    </div>
+                                    <div className="text-xs text-slate-500">
+                                      Contestant #{row.participant.contestant_number}
+                                    </div>
+                                  </td>
+                                  <td className="px-4 py-3 align-middle text-sm text-slate-700">
+                                    {row.criteria.name}
+                                  </td>
+                                  {row.cells.map((cell) => (
+                                    <td
+                                      key={cell.judgeId}
+                                      className="px-4 py-3 align-middle text-right text-sm text-slate-700"
+                                    >
+                                      {typeof cell.value === "number"
+                                        ? cell.value.toFixed(2)
+                                        : "—"}
+                                    </td>
+                                  ))}
+                                  <td className="px-4 py-3 align-middle text-right text-sm font-semibold text-[#1F4D3A]">
+                                    {row.cells
+                                      .reduce<number>((sum, cell) => {
+                                        return typeof cell.value === "number" ? sum + cell.value : sum;
+                                      }, 0)
+                                      .toFixed(2)}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -2234,6 +2674,7 @@ export default function TabulatorPage() {
                       selectedIds={selectedJudgeIdsForPermissions}
                       onChange={(ids) => {
                         setSelectedJudgeIdsForPermissions(ids);
+                        setHasUnsavedPermissionChanges(false);
                         setJudgePermissionsError(null);
                         setJudgePermissionsSuccess(null);
                       }}
@@ -2253,6 +2694,7 @@ export default function TabulatorPage() {
                         const value = event.target.value;
                         const parsed = value ? Number(value) : null;
                         setSelectedContestIdForPermissions(parsed);
+                        setHasUnsavedPermissionChanges(false);
                         setJudgePermissionsError(null);
                         setJudgePermissionsSuccess(null);
                       }}
@@ -2297,6 +2739,7 @@ export default function TabulatorPage() {
                         setJudgeDivisionMode(
                           ids.length === 0 ? "all" : "custom",
                         );
+                        setHasUnsavedPermissionChanges(true);
                       }}
                     />
                     <div className="text-[10px] text-slate-500">
@@ -2331,6 +2774,7 @@ export default function TabulatorPage() {
                         setJudgeParticipantMode(
                           ids.length === 0 ? "all" : "custom",
                         );
+                        setHasUnsavedPermissionChanges(true);
                       }}
                     />
                     <div className="text-[10px] text-slate-500">
@@ -2405,7 +2849,7 @@ export default function TabulatorPage() {
                                 </div>
                                 <button
                                   type="button"
-                                  onClick={async () => {
+                                  onClick={() => {
                                     if (judgePermissionsMode === "all") {
                                       const allCriteriaIds = criteriaList
                                         .filter(
@@ -2430,107 +2874,9 @@ export default function TabulatorPage() {
                                             : [...previous, criteria.id],
                                       );
                                     }
-                                    // Realtime persist of criteria toggles
-                                    if (selectedContestIdForPermissions !== null) {
-                                      try {
-                                        const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-                                        const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-                                        if (supabaseUrl && supabaseAnonKey) {
-                                          const supabase = createClient(supabaseUrl, supabaseAnonKey);
-                                          let judgeIds =
-                                            selectedJudgeIdsForPermissions.length === 0
-                                              ? judgesForSelectedEvent.map((j) => j.id)
-                                              : [...selectedJudgeIdsForPermissions];
-                                          judgeIds = judgeIds.filter((id) =>
-                                            judgesForSelectedEvent.some((j) => j.id === id),
-                                          );
-                                          if (judgeIds.length > 0) {
-                                            await supabase
-                                              .from("judge_scoring_permission")
-                                              .delete()
-                                              .in("judge_id", judgeIds)
-                                              .eq("contest_id", selectedContestIdForPermissions);
-                                            const allIdsForSave = criteriaList
-                                              .filter((c) => c.contest_id === selectedContestIdForPermissions)
-                                              .map((c) => c.id);
-                                            const nextSelected =
-                                              judgePermissionsMode === "all"
-                                                ? allIdsForSave.filter((id) => id !== criteria.id)
-                                                : (prev => {
-                                                    const exists = judgePermissionsCriteriaIds.includes(criteria.id);
-                                                    return exists
-                                                      ? judgePermissionsCriteriaIds.filter((id) => id !== criteria.id)
-                                                      : [...judgePermissionsCriteriaIds, criteria.id];
-                                                  })();
-                                            const isAll = nextSelected.length === allIdsForSave.length;
-                                            const inserts: {
-                                              judge_id: number;
-                                              contest_id: number;
-                                              criteria_id: number | null;
-                                              can_edit: boolean;
-                                            }[] = [];
-                                            judgeIds.forEach((jid) => {
-                                              if (isAll) {
-                                                inserts.push({
-                                                  judge_id: jid,
-                                                  contest_id: selectedContestIdForPermissions,
-                                                  criteria_id: null,
-                                                  can_edit: true,
-                                                });
-                                              } else {
-                                                inserts.push({
-                                                  judge_id: jid,
-                                                  contest_id: selectedContestIdForPermissions,
-                                                  criteria_id: null,
-                                                  can_edit: false,
-                                                });
-                                                nextSelected.forEach((cid) =>
-                                                  inserts.push({
-                                                    judge_id: jid,
-                                                    contest_id: selectedContestIdForPermissions,
-                                                    criteria_id: cid,
-                                                    can_edit: true,
-                                                  }),
-                                                );
-                                              }
-                                            });
-                                            if (inserts.length > 0) {
-                                              await supabase
-                                                .from("judge_scoring_permission")
-                                                .insert(inserts);
-                                            }
-                                            await supabase
-                                              .from("judge_contest_submission")
-                                              .delete()
-                                              .in("judge_id", judgeIds)
-                                              .eq("contest_id", selectedContestIdForPermissions);
-                                            // Broadcast to judges/admins
-                                            if (event) {
-                                              let ch: ReturnType<typeof supabase.channel> | null = null;
-                                              try {
-                                                ch = supabase.channel(`event-${event.id}-permissions`, { config: { broadcast: { ack: true } } });
-                                                await ch.subscribe();
-                                                // Add small delay to ensure channel is ready
-                                                await new Promise(resolve => setTimeout(resolve, 100));
-                                                await ch.send({
-                                                  type: 'broadcast',
-                                                  event: 'permissions-updated',
-                                                  payload: { contestId: selectedContestIdForPermissions, timestamp: Date.now() },
-                                                });
-                                                // Small delay to ensure broadcast is delivered before channel cleanup
-                                                await new Promise(resolve => setTimeout(resolve, 100));
-                                              } catch (error) {
-                                                console.warn('Failed to broadcast permission update:', error);
-                                              } finally {
-                                                if (ch) try { supabase.removeChannel(ch); } catch {}
-                                              }
-                                            }
-                                          }
-                                        }
-                                      } catch {
-                                        // ignore realtime errors to keep UI responsive
-                                      }
-                                    }
+                                    setHasUnsavedPermissionChanges(true);
+                                    setJudgePermissionsError(null);
+                                    setJudgePermissionsSuccess(null);
                                   }}
                                   className={`relative inline-flex h-5 w-9 flex-shrink-0 items-center rounded-full transition-colors ${
                                     !isInteractive
@@ -2601,23 +2947,17 @@ export default function TabulatorPage() {
                           );
                         }
 
-                        // 1. Update Scoring Permissions
-                        const { error: deleteScoringError } = await supabase
-                          .from("judge_scoring_permission")
-                          .delete()
-                          .in("judge_id", judgeIds)
-                          .eq("contest_id", selectedContestIdForPermissions);
-                        if (deleteScoringError) {
-                          setJudgePermissionsError(deleteScoringError.message);
-                          setIsSavingJudgePermissions(false);
-                          return;
-                        }
-
+                        // Build scoring permission inserts
                         const allCriteriaIdsForSave = criteriaList
                           .filter((c) => c.contest_id === selectedContestIdForPermissions)
                           .map((c) => c.id);
                         
-                        const scoringInserts: any[] = [];
+                        const scoringInserts: Array<{
+                          judge_id: number;
+                          contest_id: number;
+                          criteria_id: number | null;
+                          can_edit: boolean;
+                        }> = [];
                         if (judgePermissionsMode === "all") {
                           judgeIds.forEach(jId => scoringInserts.push({
                             judge_id: jId, contest_id: selectedContestIdForPermissions, criteria_id: null, can_edit: true
@@ -2633,64 +2973,100 @@ export default function TabulatorPage() {
                           });
                         }
 
-                        if (scoringInserts.length > 0) {
-                          const { error: sErr } = await supabase
-                            .from("judge_scoring_permission")
-                            .insert(scoringInserts);
-                          if (sErr) {
-                            setJudgePermissionsError(sErr.message);
-                            setIsSavingJudgePermissions(false);
-                            return;
-                          }
-                        }
-
-                        // 2. Update Division Permissions
-                        const { error: deleteDivError } = await supabase
-                          .from("judge_division_permission")
-                          .delete()
-                          .in("judge_id", judgeIds)
-                          .eq("contest_id", selectedContestIdForPermissions);
-                        if (deleteDivError) {
-                          setJudgePermissionsError(deleteDivError.message);
-                          setIsSavingJudgePermissions(false);
-                          return;
-                        }
+                        // Build division permission inserts
+                        const divisionInserts: Array<{
+                          judge_id: number;
+                          contest_id: number;
+                          division_id: number;
+                        }> = [];
                         if (judgeDivisionMode === "custom" && judgeDivisionIds.length > 0) {
-                          const divInserts = judgeIds.flatMap(jId => judgeDivisionIds.map(dId => ({
-                            judge_id: jId, contest_id: selectedContestIdForPermissions, division_id: dId
-                          })));
-                          const { error: dErr } = await supabase
-                            .from("judge_division_permission")
-                            .insert(divInserts);
-                          if (dErr) {
-                            setJudgePermissionsError(dErr.message);
-                            setIsSavingJudgePermissions(false);
-                            return;
-                          }
+                          judgeDivisionIds.forEach(dId => {
+                            judgeIds.forEach(jId => {
+                              divisionInserts.push({
+                                judge_id: jId, contest_id: selectedContestIdForPermissions, division_id: dId
+                              });
+                            });
+                          });
                         }
 
-                        // 3. Update Participant Permissions
-                        const { error: deletePartError } = await supabase
-                          .from("judge_participant_permission")
-                          .delete()
-                          .in("judge_id", judgeIds)
-                          .eq("contest_id", selectedContestIdForPermissions);
-                        if (deletePartError) {
-                          setJudgePermissionsError(deletePartError.message);
+                        // Build participant permission inserts
+                        const participantInserts: Array<{
+                          judge_id: number;
+                          contest_id: number;
+                          participant_id: number;
+                        }> = [];
+                        if (judgeParticipantMode === "custom" && judgeParticipantIds.length > 0) {
+                          judgeParticipantIds.forEach(pId => {
+                            judgeIds.forEach(jId => {
+                              participantInserts.push({
+                                judge_id: jId, contest_id: selectedContestIdForPermissions, participant_id: pId
+                              });
+                            });
+                          });
+                        }
+
+                        // Execute all deletes in parallel
+                        const [deleteScoringRes, deleteDivRes, deletePartRes] = await Promise.all([
+                          supabase
+                            .from("judge_scoring_permission")
+                            .delete()
+                            .in("judge_id", judgeIds)
+                            .eq("contest_id", selectedContestIdForPermissions),
+                          supabase
+                            .from("judge_division_permission")
+                            .delete()
+                            .in("judge_id", judgeIds)
+                            .eq("contest_id", selectedContestIdForPermissions),
+                          supabase
+                            .from("judge_participant_permission")
+                            .delete()
+                            .in("judge_id", judgeIds)
+                            .eq("contest_id", selectedContestIdForPermissions),
+                        ]);
+
+                        // Check for errors in parallel deletes
+                        if (deleteScoringRes.error) {
+                          setJudgePermissionsError(deleteScoringRes.error.message);
                           setIsSavingJudgePermissions(false);
                           return;
                         }
-                        if (judgeParticipantMode === "custom" && judgeParticipantIds.length > 0) {
-                          const partInserts = judgeIds.flatMap(jId => judgeParticipantIds.map(pId => ({
-                            judge_id: jId, contest_id: selectedContestIdForPermissions, participant_id: pId
-                          })));
-                          const { error: pErr } = await supabase
-                            .from("judge_participant_permission")
-                            .insert(partInserts);
-                          if (pErr) {
-                            setJudgePermissionsError(pErr.message);
-                            setIsSavingJudgePermissions(false);
-                            return;
+                        if (deleteDivRes.error) {
+                          setJudgePermissionsError(deleteDivRes.error.message);
+                          setIsSavingJudgePermissions(false);
+                          return;
+                        }
+                        if (deletePartRes.error) {
+                          setJudgePermissionsError(deletePartRes.error.message);
+                          setIsSavingJudgePermissions(false);
+                          return;
+                        }
+
+                        // Execute all inserts in parallel (only if there's data to insert)
+                        const insertPromises = [];
+                        if (scoringInserts.length > 0) {
+                          insertPromises.push(
+                            supabase.from("judge_scoring_permission").insert(scoringInserts).select()
+                          );
+                        }
+                        if (divisionInserts.length > 0) {
+                          insertPromises.push(
+                            supabase.from("judge_division_permission").insert(divisionInserts).select()
+                          );
+                        }
+                        if (participantInserts.length > 0) {
+                          insertPromises.push(
+                            supabase.from("judge_participant_permission").insert(participantInserts).select()
+                          );
+                        }
+
+                        if (insertPromises.length > 0) {
+                          const insertResults = await Promise.all(insertPromises);
+                          for (const result of insertResults) {
+                            if (result.error) {
+                              setJudgePermissionsError(result.error.message);
+                              setIsSavingJudgePermissions(false);
+                              return;
+                            }
                           }
                         }
 
@@ -2698,22 +3074,28 @@ export default function TabulatorPage() {
                         setJudgePermissionsError(null);
                         setJudgePermissionsSuccess("Access permissions updated successfully.");
                         setIsSavingJudgePermissions(false);
+                        setHasUnsavedPermissionChanges(false);
                         
-                        // Broadcast to judges/admins so they refresh immediately
+                        // Broadcast to admin so they refresh immediately
                         try {
                           if (event && selectedContestIdForPermissions !== null) {
                             const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
                             const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
                             if (supabaseUrl && supabaseAnonKey) {
                               const supabase2 = createClient(supabaseUrl, supabaseAnonKey);
-                              const ch = supabase2.channel(`event-${event.id}-permissions`, {
+                              // Use same channel name as admin's broadcast for consistency
+                              const ch = supabase2.channel(`permissions-update-${event.id}`, {
                                 config: { broadcast: { ack: true } },
                               });
                               await ch.subscribe();
                               await ch.send({
                                 type: "broadcast",
                                 event: "permissions-updated",
-                                payload: { contestId: selectedContestIdForPermissions },
+                                payload: {
+                                  contestId: selectedContestIdForPermissions,
+                                  source: 'tabulator',
+                                  timestamp: Date.now(),
+                                },
                               });
                               supabase2.removeChannel(ch);
                             }

@@ -1,5 +1,11 @@
 import type { NextConfig } from "next";
 
+// Extract Supabase project reference from URL for CSP
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const supabaseProjectRef = supabaseUrl ? supabaseUrl.replace('https://', '').replace('.supabase.co', '') : '';
+const supabaseWssUrl = supabaseProjectRef ? `wss://${supabaseProjectRef}.supabase.co` : '';
+const supabaseHttpsUrl = supabaseProjectRef ? `https://${supabaseProjectRef}.supabase.co` : '';
+
 const securityHeaders = [
   {
     key: "Strict-Transport-Security",
@@ -30,7 +36,7 @@ const securityHeaders = [
       "style-src 'self' 'unsafe-inline'",
       "img-src 'self' https: data: blob:",
       "font-src 'self' https: data:",
-      "connect-src 'self' https:",
+      `connect-src 'self' https: ${supabaseWssUrl} ${supabaseHttpsUrl}`,
       "object-src 'none'",
       "base-uri 'self'",
       "frame-ancestors 'none'",

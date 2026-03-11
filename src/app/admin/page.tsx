@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { createClient } from "@supabase/supabase-js";
+import LottieIcon from "@/components/LottieIcon";
 import {
   type ReactNode,
   useCallback,
@@ -17,6 +18,7 @@ const navItems = [
   { key: "tabulation", label: "Tabulation" },
   { key: "event", label: "Event" },
   { key: "participants", label: "Participants" },
+  { key: "monitor", label: "Monitor" },
   { key: "users", label: "Add user" },
 ];
 
@@ -35,14 +37,15 @@ const monthOptions = [
   { value: "12", label: "December" },
 ];
 
-type AdminTab = "home" | "tabulation" | "event" | "participants" | "users";
+type AdminTab = "home" | "tabulation" | "event" | "participants" | "monitor" | "users";
 type EventSubTab =
   | "addEvent"
   | "addContest"
   | "addCriteria"
   | "awards"
   | "template";
-type ParticipantSubTab = "category" | "participant" | "judge" | "monitoring";
+type ParticipantSubTab = "category" | "participant";
+type MonitorSubTab = "permissions" | "monitoring" | "message";
 type UserSubTab = "admin" | "judge" | "tabulator";
 
 type EventRow = {
@@ -138,19 +141,19 @@ function PageantSection({
   children,
 }: PageantSectionProps) {
   return (
-    <div className="overflow-hidden rounded-2xl border border-[#E2E8F0] bg-white">
+    <div className={"overflow-hidden rounded-2xl border transition-all duration-300 " + (isOpen ? "border-emerald-200 bg-white shadow-sm" : "border-slate-100 bg-slate-50/50")}>
       <button
         type="button"
         onClick={() => onToggle(sectionKey)}
-        className="flex w-full items-center justify-between px-3 py-2 text-[10px] font-semibold uppercase tracking-wide text-slate-600"
+        className="flex w-full items-center justify-between px-4 py-3 text-[11px] font-bold uppercase tracking-wider text-slate-600 transition-colors hover:text-emerald-600"
       >
         <span>{title}</span>
-        <span className="text-[10px] text-slate-400">
-          {isOpen ? "Hide section" : "Show section"}
-        </span>
+        <div className={"flex h-5 w-5 items-center justify-center rounded-lg transition-all duration-300 " + (isOpen ? "bg-emerald-100 text-emerald-600 rotate-180" : "bg-white text-slate-400 shadow-sm")}>
+          <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M19 9l-7 7-7-7" /></svg>
+        </div>
       </button>
       {isOpen && (
-        <div className="border-t border-[#E2E8F0] bg-[#F8FAFC] p-3">{children}</div>
+        <div className="border-t border-emerald-50 bg-white p-4 animate-in slide-in-from-top-2 duration-300">{children}</div>
       )}
     </div>
   );
@@ -588,6 +591,7 @@ type JudgeRow = {
   full_name: string;
   username: string;
   role: "chairman" | "judge";
+  avatar_url: string | null;
   created_at: string;
 };
 
@@ -762,6 +766,18 @@ export default function AdminDashboard() {
   const [eventTab, setEventTab] = useState<EventSubTab>("addEvent");
   const [participantTab, setParticipantTab] =
     useState<ParticipantSubTab>("category");
+  const [monitorTab, setMonitorTab] = useState<MonitorSubTab>("permissions");
+  const [monitorMessageRecipientJudgeId, setMonitorMessageRecipientJudgeId] =
+    useState<number | null>(null);
+  const [monitorMessageTitle, setMonitorMessageTitle] = useState("");
+  const [monitorMessageBody, setMonitorMessageBody] = useState("");
+  const [monitorMessageError, setMonitorMessageError] = useState<string | null>(
+    null,
+  );
+  const [monitorMessageSuccess, setMonitorMessageSuccess] = useState<
+    string | null
+  >(null);
+  const [isSendingMonitorMessage, setIsSendingMonitorMessage] = useState(false);
   const [userTab, setUserTab] = useState<UserSubTab>("admin");
   const [isEventModalOpen, setIsEventModalOpen] = useState(false);
   const [isContestModalOpen, setIsContestModalOpen] = useState(false);
@@ -841,6 +857,14 @@ export default function AdminDashboard() {
   const [judgeUsername, setJudgeUsername] = useState("");
   const [judgePassword, setJudgePassword] = useState("");
   const [judgeRole, setJudgeRole] = useState<"chairman" | "judge">("judge");
+  const [judgeAvatarUrl, setJudgeAvatarUrl] = useState<string>("");
+  const [judgeAvatarZoom, setJudgeAvatarZoom] = useState(1);
+  const [judgeAvatarOffset, setJudgeAvatarOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const [judgeAvatarImageDims, setJudgeAvatarImageDims] = useState<{ w: number; h: number } | null>(null);
+  const [isUploadingJudgeAvatar, setIsUploadingJudgeAvatar] = useState(false);
+  const [isDraggingJudgeAvatar, setIsDraggingJudgeAvatar] = useState(false);
+  const [lastJudgeAvatarPointer, setLastJudgeAvatarPointer] = useState<{ x: number; y: number } | null>(null);
+  const judgeAvatarFrameRef = useRef<HTMLDivElement | null>(null);
   const [isSavingJudge, setIsSavingJudge] = useState(false);
   const [judgeError, setJudgeError] = useState<string | null>(null);
   const [judgeSuccess, setJudgeSuccess] = useState<string | null>(null);
@@ -926,6 +950,7 @@ export default function AdminDashboard() {
     null,
   );
   const templateThemeTimeoutRef = useRef<number | null>(null);
+  const tabulationContestAutoSelectedRef = useRef(false);
   const [openPageantSections, setOpenPageantSections] = useState<
     Record<PageantSettingsSection, boolean>
   >({
@@ -1123,7 +1148,7 @@ export default function AdminDashboard() {
     number | "all"
   >("all");
   const [adminTabulationView, setAdminTabulationView] = useState<
-    "overall" | "awards"
+    "awards" | "sub-criteria"
   >("awards");
   const [tabulationAwardFilterId, setTabulationAwardFilterId] = useState<
     number | "all"
@@ -1145,6 +1170,27 @@ export default function AdminDashboard() {
 
   const cleanText = (value: string) =>
     value.replace(/[\u0000-\u001F<>]/g, "").trim();
+
+  const parseAwardCriteriaIds = (award: AwardRow): number[] => {
+    const raw = award.criteria_ids as unknown;
+    let criteriaIds: number[] = [];
+
+    if (Array.isArray(raw)) {
+      criteriaIds = raw.map((id) => Number(id));
+    } else if (typeof raw === "string") {
+      const s = raw;
+      criteriaIds = s.startsWith("{") && s.endsWith("}")
+        ? s
+            .slice(1, -1)
+            .split(",")
+            .map((n) => Number(n.trim()))
+        : s.split(",").map((n) => Number(n.trim()));
+    } else if (award.criteria_id) {
+      criteriaIds = [Number(award.criteria_id)];
+    }
+
+    return criteriaIds.filter((n) => Number.isFinite(n));
+  };
 
   useEffect(() => {
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -1269,7 +1315,7 @@ export default function AdminDashboard() {
 
     supabase
       .from("user_judge")
-      .select("id, event_id, full_name, username, role, created_at")
+      .select("id, event_id, full_name, username, role, avatar_url, created_at")
       .order("created_at", { ascending: false })
       .then(({ data }) => {
         if (data) {
@@ -2040,204 +2086,6 @@ export default function AdminDashboard() {
   }, []);
 
   useEffect(() => {
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-    if (!supabaseUrl || !supabaseAnonKey) {
-      return;
-    }
-    if (activeEventId === null) {
-      return;
-    }
-    const supabase = createClient(supabaseUrl, supabaseAnonKey);
-    
-    // Setup realtime listeners for permission changes
-    const channels: ReturnType<typeof supabase.channel>[] = [];
-
-    // Listen for scoring permission changes
-    const scoringChannel = supabase
-      .channel(`admin-scoring-perms-${activeEventId}`)
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'judge_scoring_permission',
-        },
-        async (payload) => {
-          console.log('Scoring permission change detected:', payload.eventType, payload);
-          try {
-            const { data, error } = await supabase
-              .from("judge_scoring_permission")
-              .select("judge_id, contest_id, criteria_id, can_edit, created_at");
-            if (!error && data) {
-              console.log('Updated scoring permissions from realtime');
-              setJudgeScoringPermissions(data as JudgeScoringPermissionRow[]);
-            }
-          } catch (error) {
-            console.warn('Failed to refresh scoring permissions:', error);
-          }
-        }
-      )
-      .subscribe((status, err) => {
-        console.log('Scoring channel status:', status, err);
-      });
-    
-    channels.push(scoringChannel);
-
-    // Listen for division permission changes
-    const divisionChannel = supabase
-      .channel(`admin-division-perms-${activeEventId}`)
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'judge_division_permission',
-        },
-        async (payload) => {
-          console.log('Division permission change detected:', payload.eventType, payload);
-          try {
-            const { data, error } = await supabase
-              .from("judge_division_permission")
-              .select("id, judge_id, contest_id, division_id, created_at");
-            if (!error && data) {
-              console.log('Updated division permissions from realtime');
-              setJudgeDivisionPermissions(data as JudgeDivisionPermissionRow[]);
-            }
-          } catch (error) {
-            console.warn('Failed to refresh division permissions:', error);
-          }
-        }
-      )
-      .subscribe((status, err) => {
-        console.log('Division channel status:', status, err);
-      });
-    
-    channels.push(divisionChannel);
-
-    // Listen for participant permission changes
-    const participantChannel = supabase
-      .channel(`admin-participant-perms-${activeEventId}`)
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'judge_participant_permission',
-        },
-        async (payload) => {
-          console.log('Participant permission change detected:', payload.eventType, payload);
-          try {
-            const { data, error } = await supabase
-              .from("judge_participant_permission")
-              .select("id, judge_id, contest_id, participant_id, created_at");
-            if (!error && data) {
-              console.log('Updated participant permissions from realtime');
-              setJudgeParticipantPermissions(data as JudgeParticipantPermissionRow[]);
-            }
-          } catch (error) {
-            console.warn('Failed to refresh participant permissions:', error);
-          }
-        }
-      )
-      .subscribe((status, err) => {
-        console.log('Participant channel status:', status, err);
-      });
-    
-    channels.push(participantChannel);
-
-    const scoresChannel = supabase
-      .channel(`event-${activeEventId}-scores`)
-      .on(
-        'broadcast',
-        { event: 'score-submitted' },
-        async () => {
-          try {
-            const [totalsRes, scoresRes] = await Promise.all([
-              supabase
-                .from("judge_participant_total")
-                .select("id, judge_id, participant_id, contest_id, total_score, created_at"),
-              supabase
-                .from("score")
-                .select("id, judge_id, participant_id, criteria_id, score, created_at"),
-            ]);
-            if (totalsRes.data) setJudgeTotals(totalsRes.data as JudgeParticipantTotalRow[]);
-            if (scoresRes.data) setScores(scoresRes.data as ScoreRow[]);
-          } catch (error) {
-            console.warn('Failed to refresh scores/totals from broadcast:', error);
-          }
-        }
-      )
-      .subscribe();
-    channels.push(scoresChannel);
-
-    return () => {
-      channels.forEach(ch => supabase.removeChannel(ch));
-    };
-  }, [activeEventId]);
-
-  // Fallback polling for permission changes to ensure sync across admins/tabulators
-  useEffect(() => {
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-
-    if (!supabaseUrl || !supabaseAnonKey || !activeEventId) {
-      return;
-    }
-
-    const supabase = createClient(supabaseUrl, supabaseAnonKey);
-    let cancelled = false;
-
-    // Poll for permission changes every 7 seconds
-    const pollInterval = setInterval(async () => {
-      if (cancelled) return;
-      try {
-        const [scoringRes, divisionRes, participantRes] = await Promise.all([
-          supabase
-            .from("judge_scoring_permission")
-            .select("judge_id, contest_id, criteria_id, can_edit, created_at"),
-          supabase
-            .from("judge_division_permission")
-            .select("id, judge_id, contest_id, division_id, created_at"),
-          supabase
-            .from("judge_participant_permission")
-            .select("id, judge_id, contest_id, participant_id, created_at"),
-        ]);
-
-        if (scoringRes.data && JSON.stringify(scoringRes.data) !== JSON.stringify(judgeScoringPermissions)) {
-          console.log('[ADMIN-POLL] Scoring permissions changed');
-          setJudgeScoringPermissions(scoringRes.data as JudgeScoringPermissionRow[]);
-        }
-        if (divisionRes.data && JSON.stringify(divisionRes.data) !== JSON.stringify(judgeDivisionPermissions)) {
-          console.log('[ADMIN-POLL] Division permissions changed');
-          setJudgeDivisionPermissions(divisionRes.data as JudgeDivisionPermissionRow[]);
-        }
-        if (participantRes.data && JSON.stringify(participantRes.data) !== JSON.stringify(judgeParticipantPermissions)) {
-          console.log('[ADMIN-POLL] Participant permissions changed');
-          setJudgeParticipantPermissions(participantRes.data as JudgeParticipantPermissionRow[]);
-        }
-      } catch (error) {
-        console.warn('[ADMIN-POLL] Error polling permissions:', error);
-      }
-    }, 7000);
-
-    // Also refresh when page becomes visible
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
-        console.log('[ADMIN-VISIBILITY] Page visible, checking permissions');
-      }
-    };
-
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-
-    return () => {
-      cancelled = true;
-      clearInterval(pollInterval);
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-    };
-  }, [activeEventId, judgeScoringPermissions, judgeDivisionPermissions, judgeParticipantPermissions]);
-
-  useEffect(() => {
     if (
       activeJudgeIdForPermissions === null ||
       selectedContestIdForPermissions === null
@@ -2495,6 +2343,10 @@ export default function AdminDashboard() {
     setJudgeUsername("");
     setJudgePassword("");
     setJudgeRole("judge");
+    setJudgeAvatarUrl("");
+    setJudgeAvatarZoom(1);
+    setJudgeAvatarOffset({ x: 0, y: 0 });
+    setJudgeAvatarImageDims(null);
     setJudgeError(null);
     setJudgeSuccess(null);
     setSelectedContestIdsForJudge([]);
@@ -2508,6 +2360,10 @@ export default function AdminDashboard() {
     setJudgeUsername(judge.username);
     setJudgePassword("");
     setJudgeRole(judge.role || "judge");
+    setJudgeAvatarUrl(judge.avatar_url ?? "");
+    setJudgeAvatarZoom(1);
+    setJudgeAvatarOffset({ x: 0, y: 0 });
+    setJudgeAvatarImageDims(null);
     setJudgeError(null);
     setJudgeSuccess(null);
     setSelectedContestIdsForJudge(
@@ -3000,20 +2856,33 @@ export default function AdminDashboard() {
         setParticipantsTabEventFilterId(activeEventId);
         setSelectedEventIdForParticipant(activeEventId);
         setSelectedEventIdForAward(activeEventId);
+    } else {
+        setTabulationEventFilterId("all");
+        setEventTabEventFilterId(null);
+        setParticipantsTabEventFilterId(null);
+        setSelectedEventIdForParticipant(null);
+        setSelectedEventIdForAward(null);
+        setUserTabEventFilterId(null);
     }
   }, [activeEventId]);
+
+  useEffect(() => {
+    if (activeEventId === null && eventTabEventFilterId === null && events.length > 0) {
+      setEventTabEventFilterId(events[0].id);
+    }
+  }, [activeEventId, eventTabEventFilterId, events]);
 
   const contestsForActiveEvent = useMemo(
     () =>
       activeEventId === null
-        ? contests
+        ? []
         : contests.filter((contest) => contest.event_id === activeEventId),
     [contests, activeEventId],
   );
 
   const criteriaForActiveEvent = useMemo(() => {
     if (activeEventId === null) {
-      return criteriaList;
+      return [];
     }
 
     const contestIdsForEvent = new Set(
@@ -3060,7 +2929,7 @@ export default function AdminDashboard() {
   const teamsForActiveEvent = useMemo(
     () =>
       activeEventId === null
-        ? teams
+        ? []
         : teams.filter((team) => team.event_id === activeEventId),
     [teams, activeEventId],
   );
@@ -3068,7 +2937,7 @@ export default function AdminDashboard() {
   const categoriesForActiveEvent = useMemo(
     () =>
       activeEventId === null
-        ? categories
+        ? []
         : categories.filter((category) => category.event_id === activeEventId),
     [categories, activeEventId],
   );
@@ -3077,7 +2946,7 @@ export default function AdminDashboard() {
   const contestsForEventTab = useMemo(
     () =>
       eventTabEventFilterId === null
-        ? contests
+        ? []
         : contests.filter((contest) => contest.event_id === eventTabEventFilterId),
     [contests, eventTabEventFilterId],
   );
@@ -3085,7 +2954,7 @@ export default function AdminDashboard() {
   // For Event Tab - show criteria for selected event (not just active)
   const criteriaForEventTab = useMemo(() => {
     if (eventTabEventFilterId === null) {
-      return criteriaList;
+      return [];
     }
 
     const contestIdsForEvent = new Set(
@@ -3103,7 +2972,7 @@ export default function AdminDashboard() {
   const awardsForEventTab = useMemo(
     () =>
       eventTabEventFilterId === null
-        ? awards
+        ? []
         : awards.filter((award) => award.event_id === eventTabEventFilterId),
     [awards, eventTabEventFilterId],
   );
@@ -3112,7 +2981,7 @@ export default function AdminDashboard() {
   const teamsForParticipantsTab = useMemo(
     () =>
       participantsTabEventFilterId === null
-        ? teams
+        ? []
         : teams.filter((team) => team.event_id === participantsTabEventFilterId),
     [teams, participantsTabEventFilterId],
   );
@@ -3121,7 +2990,7 @@ export default function AdminDashboard() {
   const contestsForParticipantsTab = useMemo(
     () =>
       participantsTabEventFilterId === null
-        ? contests
+        ? []
         : contests.filter((contest) => contest.event_id === participantsTabEventFilterId),
     [contests, participantsTabEventFilterId],
   );
@@ -3129,7 +2998,9 @@ export default function AdminDashboard() {
   const participantsForActiveEvent = useMemo(() => {
     const effectiveEventId = participantsTabEventFilterId ?? activeEventId;
     if (effectiveEventId === null) {
-      return participants;
+      const activeEventIds = new Set(events.filter(e => e.is_active).map(e => e.id));
+      const activeContestIds = new Set(contests.filter(c => activeEventIds.has(c.event_id)).map(c => c.id));
+      return participants.filter((participant) => activeContestIds.has(participant.contest_id));
     }
 
     const contestIdsForEvent = new Set(
@@ -3141,7 +3012,7 @@ export default function AdminDashboard() {
     return participants.filter((participant) =>
       contestIdsForEvent.has(participant.contest_id),
     );
-  }, [participants, contests, activeEventId, participantsTabEventFilterId]);
+  }, [participants, contests, activeEventId, participantsTabEventFilterId, events]);
 
   const effectiveTabulationEventId =
     tabulationEventFilterId === "all"
@@ -3149,6 +3020,42 @@ export default function AdminDashboard() {
         ? null
         : activeEventId
       : tabulationEventFilterId;
+
+  const effectiveTabulationContestId =
+    tabulationContestFilterId === "all" ? null : tabulationContestFilterId;
+
+  useEffect(() => {
+    tabulationContestAutoSelectedRef.current = false;
+  }, [effectiveTabulationEventId]);
+
+  useEffect(() => {
+    if (effectiveTabulationEventId === null) {
+      return;
+    }
+
+    if (tabulationContestAutoSelectedRef.current) {
+      return;
+    }
+
+    if (tabulationContestFilterId !== "all") {
+      tabulationContestAutoSelectedRef.current = true;
+      return;
+    }
+
+    const contestsForEvent = contests
+      .filter((c) => c.event_id === effectiveTabulationEventId)
+      .slice()
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    if (contestsForEvent.length > 0) {
+      tabulationContestAutoSelectedRef.current = true;
+      setTabulationContestFilterId(contestsForEvent[0].id);
+    }
+  }, [contests, effectiveTabulationEventId, tabulationContestFilterId]);
+
+  useEffect(() => {
+    setTabulationAwardFilterId("all");
+  }, [tabulationContestFilterId]);
 
   const debugTabulationInfo = useMemo(() => {
     const eventId = effectiveTabulationEventId;
@@ -3173,50 +3080,88 @@ export default function AdminDashboard() {
     return awards.filter((a) => a.event_id === eventId);
   }, [awards, effectiveTabulationEventId]);
 
+  const awardsForTabulationContest = useMemo(() => {
+    if (effectiveTabulationEventId === null || effectiveTabulationContestId === null) {
+      return [];
+    }
+
+    const filtered: AwardRow[] = [];
+    const awardsForEvent = awardsForTabulationEvent.filter((award) => award.is_active);
+
+    for (const award of awardsForEvent) {
+      const criteriaIds = parseAwardCriteriaIds(award);
+      const criteria = criteriaIds.length > 0
+        ? criteriaList.find((c) => c.id === criteriaIds[0]) ?? null
+        : null;
+      const contestId = award.contest_id ?? criteria?.contest_id ?? null;
+
+      if (contestId === effectiveTabulationContestId) {
+        filtered.push(award);
+      }
+    }
+
+    return filtered;
+  }, [
+    awardsForTabulationEvent,
+    criteriaList,
+    effectiveTabulationContestId,
+    effectiveTabulationEventId,
+  ]);
+
   // derive judges/tabulators using the add‑user-specific event filter, falling back to the global active event
   const judgesForUserEvent = useMemo(
     () => {
-      // when filter is null, show judges from all events
-      if (userTabEventFilterId === null) return judges;
+      const activeEventIds = new Set(events.filter(e => e.is_active).map(e => e.id));
+      // when filter is null, show judges from active events only
+      if (userTabEventFilterId === null) return judges.filter(j => activeEventIds.has(j.event_id));
       return judges.filter((judge) => judge.event_id === userTabEventFilterId);
     },
-    [judges, userTabEventFilterId],
+    [judges, userTabEventFilterId, events],
   );
 
   const tabulatorsForUserEvent = useMemo(
     () => {
-      if (userTabEventFilterId === null) return tabulators;
+      const activeEventIds = new Set(events.filter(e => e.is_active).map(e => e.id));
+      if (userTabEventFilterId === null) return tabulators.filter(t => activeEventIds.has(t.event_id));
       return tabulators.filter((tabulator) => tabulator.event_id === userTabEventFilterId);
     },
-    [tabulators, userTabEventFilterId],
+    [tabulators, userTabEventFilterId, events],
   );
 
   const judgesForActiveEvent = useMemo(
     () => {
       const effectiveEventId = participantsTabEventFilterId ?? activeEventId;
-      return effectiveEventId === null
-        ? judges
-        : judges.filter((judge) => judge.event_id === effectiveEventId);
+      if (effectiveEventId === null) {
+        const activeEventIds = new Set(events.filter(e => e.is_active).map(e => e.id));
+        return judges.filter(j => activeEventIds.has(j.event_id));
+      }
+      return judges.filter((judge) => judge.event_id === effectiveEventId);
     },
-    [judges, activeEventId, participantsTabEventFilterId],
+    [judges, activeEventId, participantsTabEventFilterId, events],
   );
 
 
 
   const tabulatorsForActiveEvent = useMemo(
-    () =>
-      activeEventId === null
-        ? tabulators
-        : tabulators.filter((tabulator) => tabulator.event_id === activeEventId),
-    [tabulators, activeEventId],
+    () => {
+      if (activeEventId === null) {
+        const activeEventIds = new Set(events.filter(e => e.is_active).map(e => e.id));
+        return tabulators.filter(t => activeEventIds.has(t.event_id));
+      }
+      return tabulators.filter((tabulator) => tabulator.event_id === activeEventId);
+    },
+    [tabulators, activeEventId, events],
   );
 
   const awardsForActiveEvent = useMemo(
-    () =>
-      activeEventId === null
-        ? awards
-        : awards.filter((award) => award.event_id === activeEventId),
-    [awards, activeEventId],
+    () => {
+      if (activeEventId === null) {
+        const activeEventIds = new Set(events.filter(e => e.is_active).map(e => e.id));
+        return awards.filter(a => activeEventIds.has(a.event_id));
+      }
+      return awards.filter((award) => award.event_id === activeEventId);
+    },
+    [awards, activeEventId, events],
   );
 
   const filteredAdmins = useMemo(() => {
@@ -3310,12 +3255,18 @@ export default function AdminDashboard() {
         ? (activeEventId === null ? null : activeEventId)
         : tabulationEventFilterId;
 
+    const activeEventIds = new Set(events.filter(e => e.is_active).map(e => e.id));
+
     const contestIds = new Set(
       contests
         .filter((contest) => {
-          if (eventFilterId !== null && contest.event_id !== eventFilterId) {
-            return false;
+          if (eventFilterId !== null) {
+            if (contest.event_id !== eventFilterId) return false;
+          } else {
+            // No specific event filter, only show active events
+            if (!activeEventIds.has(contest.event_id)) return false;
           }
+          
           if (contestFilterId !== null && contest.id !== contestFilterId) {
             return false;
           }
@@ -3479,6 +3430,7 @@ export default function AdminDashboard() {
     tabulationContestFilterId,
     tabulationDivisionFilterId,
     judgeTotals,
+    events,
   ]);
 
   const awardsResults = useMemo(() => {
@@ -3486,8 +3438,10 @@ export default function AdminDashboard() {
       awardId: number;
       awardName: string;
       awardType: AwardType;
+      contestId: number | null;
       contestName: string;
       criteriaName: string | null;
+      criteriaIds: number[];
       winners: {
         participantId: number;
         participantName: string;
@@ -3516,47 +3470,8 @@ export default function AdminDashboard() {
     );
 
     for (const award of activeAwards) {
-      let criteriaIds: number[] = [];
-      const rawIds = award.criteria_ids as any;
-
-      if (Array.isArray(rawIds)) {
-        criteriaIds = rawIds.map(id => Number(id));
-      } else if (typeof rawIds === 'string') {
-        const s = rawIds as string;
-        if (s.startsWith('{') && s.endsWith('}')) {
-          criteriaIds = s.substring(1, s.length - 1).split(',').map(n => Number(n.trim()));
-        } else {
-          criteriaIds = s.split(',').map(n => Number(n.trim()));
-        }
-      } else if (award.criteria_id) {
-        criteriaIds = [Number(award.criteria_id)];
-      }
-      
-      criteriaIds = criteriaIds.filter(n => !isNaN(n));
-
-      // NEW: If the award has associated criteria, check if we need to include ALL criteria from the categories
-      // that the selected criteria belong to.
-      // This is because the user might have selected a Category in the UI, which saved specific IDs at that time,
-      // but expects the award to cover "The Category" conceptually.
-      // OR, the user explicitly said "all of the points of that category... because i set the linked criteria category".
-      
-      // Let's identify the categories involved in this award based on the saved criteria IDs.
-      if (criteriaIds.length > 0) {
-        const selectedCriteria = criteriaList.filter(c => criteriaIds.includes(c.id));
-        const categories = Array.from(new Set(selectedCriteria.map(c => c.category).filter(Boolean)));
-        
-        // If there are categories, find ALL criteria in those categories and add their IDs if missing.
-        // This ensures that if the award is conceptually "All criteria in Category X", we get them all.
-        // This acts as a safeguard if the save operation missed some, or if new ones were added (though rare).
-        // More importantly, it aligns with the user's mental model of "Category-based Award".
-        
-        if (categories.length > 0) {
-            const allCriteriaInCategories = criteriaList.filter(c => categories.includes(c.category));
-            const allIds = allCriteriaInCategories.map(c => c.id);
-            // Merge unique IDs
-            criteriaIds = Array.from(new Set([...criteriaIds, ...allIds]));
-        }
-      }
+      // Use only the explicitly linked criteria IDs for this award
+      const criteriaIds = parseAwardCriteriaIds(award);
 
       if (award.award_type === "criteria" && criteriaIds.length > 0) {
         const criteriaListForAward = criteriaList.filter(c => criteriaIds.includes(c.id));
@@ -3566,8 +3481,10 @@ export default function AdminDashboard() {
             awardId: award.id,
             awardName: award.name,
             awardType: award.award_type,
+            contestId: award.contest_id ?? null,
             contestName: "Unknown contest",
             criteriaName: null,
+            criteriaIds,
             winners: [],
             allParticipants: [],
             note: "Criteria not found.",
@@ -3587,8 +3504,10 @@ export default function AdminDashboard() {
             awardId: award.id,
             awardName: award.name,
             awardType: award.award_type,
+            contestId,
             contestName: "Unknown contest",
             criteriaName: criteriaListForAward.map(c => c.name).join(", "),
+            criteriaIds,
             winners: [],
             allParticipants: [],
             note: "Contest not found.",
@@ -3605,8 +3524,10 @@ export default function AdminDashboard() {
             awardId: award.id,
             awardName: award.name,
             awardType: award.award_type,
+            contestId: contest.id,
             contestName: contest.name,
             criteriaName: criteriaListForAward.map(c => c.name).join(", "),
+            criteriaIds,
             winners: [],
             allParticipants: [],
             note: "No tabulation data yet.",
@@ -3638,15 +3559,21 @@ export default function AdminDashboard() {
             participantScoresMap.set(row.participantId, judgeScores);
         }
 
-        // Create a new list of participants with recalculated scores and ranks
-        const participantsWithCriteriaScores = rowsForContest.map(row => {
-            const score = criteriaScoresMap.get(row.participantId) ?? 0;
-            const jScores = participantScoresMap.get(row.participantId) ?? {};
-            return {
-                ...row,
-                criteriaTotalScore: score,
-                judgeCriteriaScores: jScores
-            };
+        type CriteriaScoreRow = (typeof rowsForContest)[number] & {
+          criteriaTotalScore: number;
+          judgeCriteriaScores: Record<number, number>;
+          criteriaRank: number;
+        };
+
+        const participantsWithCriteriaScores: CriteriaScoreRow[] = rowsForContest.map((row) => {
+          const score = criteriaScoresMap.get(row.participantId) ?? 0;
+          const jScores = participantScoresMap.get(row.participantId) ?? {};
+          return {
+            ...row,
+            criteriaTotalScore: score,
+            judgeCriteriaScores: jScores,
+            criteriaRank: 1,
+          };
         });
 
         // Sort by criteria score descending
@@ -3655,22 +3582,29 @@ export default function AdminDashboard() {
         // Assign ranks (handling ties properly)
         let currentRank = 1;
         for (let i = 0; i < participantsWithCriteriaScores.length; i++) {
-            if (i > 0 && participantsWithCriteriaScores[i].criteriaTotalScore < participantsWithCriteriaScores[i-1].criteriaTotalScore) {
-                currentRank = i + 1;
-            } else if (i > 0 && participantsWithCriteriaScores[i].criteriaTotalScore === participantsWithCriteriaScores[i-1].criteriaTotalScore) {
-                // Tie, keep same rank
-                currentRank = (participantsWithCriteriaScores[i-1] as any).criteriaRank;
-            }
-            (participantsWithCriteriaScores[i] as any).criteriaRank = currentRank;
+          if (
+            i > 0 &&
+            participantsWithCriteriaScores[i].criteriaTotalScore <
+              participantsWithCriteriaScores[i - 1].criteriaTotalScore
+          ) {
+            currentRank = i + 1;
+          } else if (
+            i > 0 &&
+            participantsWithCriteriaScores[i].criteriaTotalScore ===
+              participantsWithCriteriaScores[i - 1].criteriaTotalScore
+          ) {
+            currentRank = participantsWithCriteriaScores[i - 1].criteriaRank;
+          }
+          participantsWithCriteriaScores[i].criteriaRank = currentRank;
         }
 
         const winners = participantsWithCriteriaScores
-          .filter((row) => (row as any).criteriaRank === 1)
+          .filter((row) => row.criteriaRank === 1)
           .map((row) => ({
             participantId: row.participantId,
             participantName: row.participantName,
             contestantNumber: row.contestantNumber,
-            rank: (row as any).criteriaRank,
+            rank: row.criteriaRank,
             totalScore: row.criteriaTotalScore,
             teamName: row.teamName,
             judgeCriteriaScores: row.judgeCriteriaScores,
@@ -3680,7 +3614,7 @@ export default function AdminDashboard() {
           participantId: row.participantId,
           participantName: row.participantName,
           contestantNumber: row.contestantNumber,
-          rank: (row as any).criteriaRank,
+          rank: row.criteriaRank,
           totalScore: row.criteriaTotalScore,
           teamName: row.teamName,
           judgeCriteriaScores: row.judgeCriteriaScores,
@@ -3690,18 +3624,21 @@ export default function AdminDashboard() {
           awardId: award.id,
           awardName: award.name,
           awardType: award.award_type,
+          contestId: contest.id,
           contestName: contest.name,
           criteriaName: criteriaListForAward.map(c => c.name).join(", "),
+          criteriaIds,
           winners,
           allParticipants,
           note: null,
         });
       } else {
         let contestName = "All contests";
+        const contestId = award.contest_id ?? null;
 
-        if (award.contest_id !== null) {
+        if (contestId !== null) {
           const contest = contests.find(
-            (contestRow) => contestRow.id === award.contest_id,
+            (contestRow) => contestRow.id === contestId,
           );
           contestName = contest ? contest.name : "Unknown contest";
         }
@@ -3710,8 +3647,10 @@ export default function AdminDashboard() {
           awardId: award.id,
           awardName: award.name,
           awardType: award.award_type,
+          contestId,
           contestName,
           criteriaName: null,
+          criteriaIds: [],
           winners: [],
           allParticipants: [],
           note: "Special award. Assign recipients manually.",
@@ -3781,6 +3720,180 @@ export default function AdminDashboard() {
       ) ?? null
     );
   }, [awardsResults, tabulationAwardFilterId]);
+
+  const tabulationAwardsTable = useMemo(() => {
+    if (
+      !selectedTabulationAwardResult ||
+      selectedTabulationAwardResult.awardType !== "criteria" ||
+      selectedTabulationAwardResult.contestId === null
+    ) {
+      return null;
+    }
+
+    const contestId = selectedTabulationAwardResult.contestId;
+    const assignedJudgeIds = new Set(
+      judgeAssignments
+        .filter((ja) => ja.contest_id === contestId)
+        .map((ja) => ja.judge_id),
+    );
+
+    const visibleJudges =
+      assignedJudgeIds.size > 0
+        ? judges.filter((j) => assignedJudgeIds.has(j.id))
+        : effectiveTabulationEventId === null
+          ? judges
+          : judges.filter((j) => j.event_id === effectiveTabulationEventId);
+
+    const orderedJudges = [...visibleJudges].sort((a, b) =>
+      a.username.localeCompare(b.username),
+    );
+    const judgeIds = orderedJudges.map((j) => j.id);
+
+    const totalsByJudge = new Map<number, Map<number, number>>();
+    for (const p of selectedTabulationAwardResult.allParticipants) {
+      for (const jid of judgeIds) {
+        const val = p.judgeCriteriaScores[jid];
+        if (val !== undefined) {
+          const map = totalsByJudge.get(jid) ?? new Map<number, number>();
+          map.set(p.participantId, val);
+          totalsByJudge.set(jid, map);
+        }
+      }
+    }
+
+    const rankByJudgeAndParticipant = new Map<string, number>();
+    for (const [jid, pmap] of totalsByJudge.entries()) {
+      const entries = Array.from(pmap.entries()).sort((a, b) => b[1] - a[1]);
+      let currentRank = 1;
+      for (let i = 0; i < entries.length; i++) {
+        if (i > 0 && entries[i][1] < entries[i - 1][1]) {
+          currentRank = i + 1;
+        }
+        rankByJudgeAndParticipant.set(jid + "-" + entries[i][0], currentRank);
+      }
+    }
+
+    const rows = [...selectedTabulationAwardResult.allParticipants]
+      .map((p) => {
+        let sum = 0;
+        let count = 0;
+        for (const jid of judgeIds) {
+          const r = rankByJudgeAndParticipant.get(jid + "-" + p.participantId);
+          if (r != null) {
+            sum += r;
+            count += 1;
+          }
+        }
+        const avg = count === judgeIds.length ? sum / count : Number.POSITIVE_INFINITY;
+        return { participant: p, avg };
+      })
+      .sort((a, b) => {
+        if (a.avg !== b.avg) return a.avg - b.avg;
+        return a.participant.participantName.localeCompare(b.participant.participantName);
+      });
+
+    return {
+      judges: orderedJudges,
+      judgeIds,
+      rankByJudgeAndParticipant,
+      rows,
+    };
+  }, [
+    effectiveTabulationEventId,
+    judgeAssignments,
+    judges,
+    selectedTabulationAwardResult,
+  ]);
+
+  const tabulationSubCriteriaTable = useMemo(() => {
+    if (effectiveTabulationContestId === null) {
+      return null;
+    }
+
+    const contestId = effectiveTabulationContestId;
+    const criteriaForContest = criteriaList
+      .filter((c) => c.contest_id === contestId)
+      .slice()
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    const participantsForContest = participants
+      .filter((p) => p.contest_id === contestId)
+      .filter((p) =>
+        tabulationDivisionFilterId === "all"
+          ? true
+          : p.division_id === tabulationDivisionFilterId,
+      );
+
+    const assignedJudgeIds = new Set(
+      judgeAssignments
+        .filter((ja) => ja.contest_id === contestId)
+        .map((ja) => ja.judge_id),
+    );
+
+    const visibleJudges =
+      assignedJudgeIds.size > 0
+        ? judges.filter((j) => assignedJudgeIds.has(j.id))
+        : effectiveTabulationEventId === null
+          ? judges
+          : judges.filter((j) => j.event_id === effectiveTabulationEventId);
+
+    const orderedJudges = [...visibleJudges].sort((a, b) =>
+      a.username.localeCompare(b.username),
+    );
+    const judgeIds = orderedJudges.map((j) => j.id);
+
+    const participantIds = new Set(participantsForContest.map((p) => p.id));
+    const criteriaIds = new Set(criteriaForContest.map((c) => c.id));
+
+    const scoreSums = new Map<string, number>();
+    for (const s of scores) {
+      if (!participantIds.has(s.participant_id) || !criteriaIds.has(s.criteria_id)) {
+        continue;
+      }
+      if (judgeIds.length > 0 && !judgeIds.includes(s.judge_id)) {
+        continue;
+      }
+      const key = s.participant_id + "-" + s.criteria_id + "-" + s.judge_id;
+      scoreSums.set(key, (scoreSums.get(key) ?? 0) + Number(s.score));
+    }
+
+    const parseNumber = (value: string) => {
+      const parsed = Number.parseInt(value.trim(), 10);
+      return Number.isNaN(parsed) ? Number.MAX_SAFE_INTEGER : parsed;
+    };
+
+    const orderedParticipants = [...participantsForContest].sort((a, b) => {
+      const an = parseNumber(a.contestant_number);
+      const bn = parseNumber(b.contestant_number);
+      if (an !== bn) return an - bn;
+      return a.full_name.localeCompare(b.full_name);
+    });
+
+    const rows = orderedParticipants.flatMap((participant) =>
+      criteriaForContest.map((criteria) => {
+        const cells = judgeIds.map((jid) => {
+          const key = participant.id + "-" + criteria.id + "-" + jid;
+          const value = scoreSums.get(key);
+          return { judgeId: jid, value: value === undefined ? null : value };
+        });
+        return { participant, criteria, cells };
+      }),
+    );
+
+    return {
+      judges: orderedJudges,
+      rows,
+    };
+  }, [
+    criteriaList,
+    effectiveTabulationContestId,
+    effectiveTabulationEventId,
+    judgeAssignments,
+    judges,
+    participants,
+    scores,
+    tabulationDivisionFilterId,
+  ]);
 
   const templatePreviewParticipants = useMemo(() => {
     if (selectedContestIdForTemplate === null) {
@@ -4835,13 +4948,24 @@ export default function AdminDashboard() {
     const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
     // build insert/update payload carefully so it cannot violate the check constraint
-    const payload: any = {
+    const payload: {
+      event_id: number;
+      contest_id: number | null;
+      name: string;
+      description: string | null;
+      award_type: "criteria" | "special";
+      is_active: boolean;
+      criteria_ids: number[] | null;
+      criteria_id: number | null;
+    } = {
       event_id: effectiveEventId,
       contest_id: awardContestId,
       name: awardName.trim(),
       description: awardDescription.trim() || null,
       award_type: awardType,
       is_active: awardIsActive,
+      criteria_ids: null,
+      criteria_id: null,
     };
 
     if (awardType === "criteria") {
@@ -5636,6 +5760,26 @@ export default function AdminDashboard() {
       return;
     }
 
+    const judgeAvatarUrlToSave = (() => {
+      const raw = judgeAvatarUrl.trim();
+      if (!raw) {
+        return null;
+      }
+      try {
+        const url = new URL(raw);
+        const frameWidth = judgeAvatarFrameRef.current?.offsetWidth ?? 1;
+        const frameHeight = judgeAvatarFrameRef.current?.offsetHeight ?? 1;
+        const txp = frameWidth ? judgeAvatarOffset.x / frameWidth : 0;
+        const typ = frameHeight ? judgeAvatarOffset.y / frameHeight : 0;
+        url.searchParams.set("tz", String(Number(judgeAvatarZoom.toFixed(2))));
+        url.searchParams.set("txp", String(Number(txp.toFixed(4))));
+        url.searchParams.set("typ", String(Number(typ.toFixed(4))));
+        return url.toString();
+      } catch {
+        return raw;
+      }
+    })();
+
     setIsSavingJudge(true);
 
     const supabase = createClient(supabaseUrl, supabaseAnonKey);
@@ -5652,8 +5796,9 @@ export default function AdminDashboard() {
           username: usernameSanitized,
           password_hash: judgePassword,
           role: judgeRole,
+          avatar_url: judgeAvatarUrlToSave,
         })
-        .select("id, event_id, full_name, username, role, created_at");
+        .select("id, event_id, full_name, username, role, avatar_url, created_at");
 
       error = response.error;
       data = response.data;
@@ -5686,10 +5831,11 @@ export default function AdminDashboard() {
       const response = await supabase
         .from("user_judge")
         .update((() => {
-          const payload: { full_name: string; username: string; role: "chairman" | "judge"; password_hash?: string } = {
+          const payload: { full_name: string; username: string; role: "chairman" | "judge"; avatar_url: string | null; password_hash?: string } = {
             full_name: fullNameSanitized,
             username: usernameSanitized,
             role: judgeRole,
+            avatar_url: judgeAvatarUrlToSave,
           };
           if (judgePassword && judgePassword.length > 0) {
             payload.password_hash = judgePassword;
@@ -5697,7 +5843,7 @@ export default function AdminDashboard() {
           return payload;
         })())
         .eq("id", editingJudgeId)
-        .select("id, event_id, full_name, username, role, created_at");
+        .select("id, event_id, full_name, username, role, avatar_url, created_at");
 
       error = response.error;
       data = response.data;
@@ -5751,6 +5897,10 @@ export default function AdminDashboard() {
     setJudgeFullName("");
     setJudgeUsername("");
     setJudgePassword("");
+    setJudgeAvatarUrl("");
+    setJudgeAvatarZoom(1);
+    setJudgeAvatarOffset({ x: 0, y: 0 });
+    setJudgeAvatarImageDims(null);
     setIsJudgeModalOpen(false);
   };
 
@@ -5890,12 +6040,9 @@ export default function AdminDashboard() {
       setJudgeAssignments((previous) =>
         previous.filter((assignment) => assignment.judge_id !== id),
       );
-    } catch (e: any) {
-      const message =
-        typeof e?.message === "string"
-          ? e.message
-          : "Unable to delete judge due to an unexpected error.";
-      setJudgeError(message);
+    } catch (e) {
+      const message = e instanceof Error ? e.message : null;
+      setJudgeError(message ?? "Unable to delete judge due to an unexpected error.");
     } finally {
       setIsDeletingJudgeId(null);
     }
@@ -5940,631 +6087,375 @@ export default function AdminDashboard() {
   };
 
   return (
-    <div className="flex min-h-screen flex-col overflow-x-hidden bg-gradient-to-br from-[#E3F2EA] via-white to-[#E3F2EA] text-slate-900">
-      <header className="border-b border-[#1F4D3A1F] bg-white/90 backdrop-blur-sm">
-        <div className="mx-auto flex max-w-6xl items-center px-6 py-3">
-          <div className="flex items-center gap-2">
-            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-[#1F4D3A] text-xs font-semibold uppercase text-white">
-              TS
-            </div>
+    <div className="flex min-h-screen flex-col overflow-x-hidden bg-[#F1F5F9] text-slate-900">
+      {/* Background patterns */}
+      <div className="pointer-events-none fixed inset-0 overflow-hidden opacity-20">
+        <div className="absolute -left-[10%] -top-[10%] h-[40%] w-[40%] rounded-full bg-[#1F4D3A1F] blur-[120px]" />
+        <div className="absolute -bottom-[10%] -right-[10%] h-[40%] w-[40%] rounded-full bg-[#1F4D3A1A] blur-[120px]" />
+      </div>
+
+      <header className="sticky top-0 z-30 border-b border-white/40 bg-white/70 backdrop-blur-xl">
+        <div className="mx-auto flex max-w-6xl items-center px-6 py-4">
+          <div className="flex items-center gap-3">
+            <img
+              src="/favicon.svg"
+              alt="Tabulora"
+              className="h-10 w-10 transition-transform duration-300 hover:scale-105"
+            />
             <div>
-              <div className="text-sm font-semibold tracking-tight text-[#1F4D3A]">
-                Tabulating System
+              <div className="text-sm font-bold tracking-tight text-[#1F4D3A]">
+                Tabulora
               </div>
-              <div className="text-[11px] uppercase tracking-[0.18em] text-[#4A3F35]">
-                Admin Dashboard
+              <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-slate-400">
+                Admin Console
               </div>
             </div>
           </div>
 
-          <div className="flex flex-1 justify-center">
-            <nav className="hidden text-[11px] font-medium text-[#1F4D3A] sm:flex">
-              <div className="inline-flex items-center gap-1 rounded-full bg-[#E3F2EA] p-1">
-                {navItems.map((item) => (
-                  <button
-                    key={item.key}
-                    type="button"
-                    onClick={() => setActiveTab(item.key as AdminTab)}
-                    className={`rounded-full px-4 py-2.5 transition ${
-                      activeTab === item.key
-                        ? "bg-[#1F4D3A] text-white shadow-sm"
-                        : "hover:bg-[#1F4D3A0D]"
-                    }`}
-                  >
-                    {item.label}
-                  </button>
-                ))}
-              </div>
+          <div className="flex flex-1 justify-center px-8">
+            <nav className="hidden items-center gap-1 rounded-2xl bg-slate-100/50 p-1 text-[11px] font-bold sm:flex">
+              {navItems.map((item) => (
+                <button
+                  key={item.key}
+                  type="button"
+                  onClick={() => setActiveTab(item.key as AdminTab)}
+                  className={"rounded-xl px-5 py-2 transition-all duration-300 " + (activeTab === item.key
+                    ? "bg-[#1F4D3A] text-white shadow-lg shadow-[#1F4D3A30]"
+                    : "text-slate-500 hover:bg-white hover:text-[#1F4D3A]")}
+                >
+                  {item.label}
+                </button>
+              ))}
             </nav>
           </div>
 
-          <div className="flex items-center justify-end gap-3">
-            <span className="hidden text-xs font-medium text-[#1F4D3A] sm:inline">
-              Admin
-            </span>
+          <div className="flex items-center justify-end gap-4">
+            <div className="hidden items-center gap-2 sm:flex">
+              <div className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+              <span className="text-[11px] font-bold text-slate-500">
+                Administrator
+              </span>
+            </div>
             <Link
               href="/"
-              className="rounded-full border border-[#1F4D3A26] px-3.5 py-1.5 text-[11px] font-medium text-[#1F4D3A] transition hover:border-[#1F4D3A] hover:bg-[#1F4D3A] hover:text-white"
+              className="group flex items-center gap-2 rounded-xl border-2 border-slate-100 bg-white px-4 py-2 text-[11px] font-bold text-slate-600 transition-all duration-300 hover:border-red-100 hover:bg-red-50 hover:text-red-500"
             >
-              Sign out
+              <span>Sign out</span>
+              <svg className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+              </svg>
             </Link>
           </div>
         </div>
       </header>
 
-      <main className="relative mx-auto flex w-full max-w-6xl flex-1 flex-col gap-6 px-6 py-6">
-        <div className="pointer-events-none absolute inset-0 opacity-40">
-          <div className="absolute -left-32 top-10 h-48 w-48 rounded-full bg-[#1F4D3A12] blur-3xl" />
-          <div className="absolute -right-24 bottom-0 h-56 w-56 rounded-full bg-[#F4C43010] blur-3xl" />
-        </div>
-
+      <main className="relative mx-auto flex w-full max-w-6xl flex-1 flex-col gap-8 px-6 py-10">
         {activeTab === "home" && (
-          <>
-            <section className="relative grid gap-5 md:grid-cols-[2fr,1.1fr]">
-              <div className="rounded-3xl border border-[#1F4D3A1F] bg-white/95 p-5 shadow-[0_18px_45px_rgba(0,0,0,0.06)]">
-            <div className="mb-4 flex items-center justify-between">
-              <div>
-                <h2 className="text-sm font-semibold tracking-tight text-[#1F4D3A]">
-                  Overview
-                </h2>
-                <p className="text-[11px] text-slate-500">
-                  Quick snapshot of your current tabulation events.
-                </p>
-              </div>
-              <span className="rounded-full bg-[#E3F2EA] px-3 py-1 text-[10px] font-medium uppercase tracking-wide text-[#1F4D3A]">
-                Admin
-              </span>
-            </div>
+          <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
+            <section>
+              <div className="rounded-[32px] border border-white/40 bg-white/80 p-8 shadow-[0_20px_50px_-12px_rgba(0,0,0,0.08)] backdrop-blur-2xl">
+                <div className="mb-8 flex items-center justify-between">
+                  <div>
+                    <h2 className="text-lg font-bold tracking-tight text-slate-800">
+                      System Overview
+                    </h2>
+                    <p className="max-w-4xl text-[15px] font-medium leading-relaxed text-slate-400">
+                      Real-time summary of your tabulation events and participants.
+                    </p>
+                  </div>
+                  <div className="rounded-xl bg-[#1F4D3A]/5 px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-[#1F4D3A]">
+                    Live Status
+                  </div>
+                </div>
 
-            <div className="grid gap-3 sm:grid-cols-3">
-              <div className="rounded-2xl border border-[#1F4D3A14] bg-[#F5F7FF] px-4 py-3">
-                <div className="text-[11px] font-medium text-slate-500">
-                  Active events
+                <div className="grid gap-4 sm:grid-cols-3">
+                  {[
+                    { label: "Active Events", value: events.filter((e) => e.is_active).length, lottiePath: "/Confetti.json" },
+                    { label: "Total Judges", value: activeEventId ? judges.filter((j) => j.event_id === activeEventId).length : 0, lottiePath: "/Scales.json" },
+                    { label: "Participants", value: activeEventId ? participants.filter((p) => contests.find((c) => c.id === p.contest_id)?.event_id === activeEventId).length : 0, lottiePath: "/Fashionable%20girl%20in%20red%20dress.json" }
+                  ].map((stat, i) => (
+                    <div
+                      key={i}
+                      className="group rounded-2xl border border-slate-100 bg-slate-50/50 p-6 transition-all duration-300 hover:bg-white hover:shadow-xl hover:shadow-slate-200/50"
+                    >
+                      <div className="flex items-center justify-between gap-6">
+                        <div>
+                          <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                            {stat.label}
+                          </div>
+                          <div className="mt-1 text-2xl font-bold text-slate-800">
+                            {stat.value}
+                          </div>
+                        </div>
+                        <div className="flex h-28 w-28 items-center justify-center rounded-2xl bg-white/70 ring-1 ring-white/60 shadow-sm transition-transform duration-300 group-hover:scale-[1.03] md:h-40 md:w-40">
+                          <LottieIcon path={stat.lottiePath} className="h-full w-full" />
+                        </div>
+                      </div>
+                    </div>
+                  ))}
                 </div>
-                <div className="mt-1 text-2xl font-semibold text-[#1F4D3A]">
-                  {events.filter((e) => e.is_active).length}
-                </div>
-              </div>
-              <div className="rounded-2xl border border-[#1F4D3A14] bg-white px-4 py-3">
-                <div className="text-[11px] font-medium text-slate-500">
-                  Judges
-                </div>
-                <div className="mt-1 text-2xl font-semibold text-[#1F4D3A]">
-                  {activeEventId
-                    ? judges.filter((j) => j.event_id === activeEventId).length
-                    : 0}
-                </div>
-              </div>
-              <div className="rounded-2xl border border-[#1F4D3A14] bg-white px-4 py-3">
-                <div className="text-[11px] font-medium text-slate-500">
-                  Participants
-                </div>
-                <div className="mt-1 text-2xl font-semibold text-[#1F4D3A]">
-                  {activeEventId
-                    ? participants.filter(
-                        (p) =>
-                          contests.find((c) => c.id === p.contest_id)
-                            ?.event_id === activeEventId,
-                      ).length
-                    : 0}
-                </div>
-              </div>
-            </div>
               </div>
             </section>
-
-            <section className="relative rounded-3xl border border-[#1F4D3A1F] bg-white/95 p-5 shadow-[0_18px_45px_rgba(0,0,0,0.05)]">
-          <div className="mb-3 flex items-center justify-between">
-            <h2 className="text-sm font-semibold tracking-tight text-[#1F4D3A]">
-              Recent activity
-            </h2>
-            <span className="text-[11px] text-slate-500">
-              No activity yet
-            </span>
           </div>
-              <p className="text-[11px] text-slate-500">
-                Once you start creating events and tabulating scores, a summary
-                of recent actions will appear here.
-              </p>
-            </section>
-          </>
         )}
 
         {activeTab === "tabulation" && (
-          <section className="relative rounded-3xl border border-[#1F4D3A1F] bg-white/95 p-6 shadow-[0_18px_45px_rgba(0,0,0,0.05)]">
-            <div className="mb-3 flex items-center justify-between">
-              <div>
-                <h2 className="text-sm font-semibold tracking-tight text-[#1F4D3A]">
-                  Tabulation
-                </h2>
-                <p className="text-[11px] text-slate-500">
-                  Review scores and rankings for each contest.
-                </p>
+          <section className="animate-in fade-in slide-in-from-bottom-4 duration-500">
+            <div className="rounded-[32px] border border-white/40 bg-white/80 p-8 shadow-[0_20px_50px_-12px_rgba(0,0,0,0.08)] backdrop-blur-2xl">
+              <div className="mb-8 flex items-center justify-between">
+                <div>
+                  <h2 className="text-lg font-bold tracking-tight text-slate-800">
+                    Tabulation Dashboard
+                  </h2>
+                  <p className="text-[13px] text-slate-400">
+                    Monitor real-time scores and rankings for all contests.
+                  </p>
+                </div>
               </div>
-            </div>
 
-            <div className="rounded-2xl border border-[#1F4D3A1F] bg-white p-4">
-              <div className="mb-2 flex items-center justify-between gap-3">
-                <div className="flex flex-wrap gap-2 text-[11px]">
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-[10px] text-slate-500">Event</span>
-                    <select
-                      className="rounded-full border border-[#D0D7E2] bg-white px-3 py-1.5 text-[11px] outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26] max-w-[320px]"
-                      value={
-                        tabulationEventFilterId === "all"
-                          ? "all"
-                          : String(tabulationEventFilterId)
-                      }
-                      onChange={(event) => {
-                        const value = event.target.value;
-                        const next =
-                          value === "all" ? "all" : Number.parseInt(value, 10);
-                        setTabulationEventFilterId(next);
-                        setTabulationContestFilterId("all");
-                      }}
-                    >
-                      <option value="all">All events</option>
-                      {(events.filter(e => e.is_active).length > 0 ? events.filter(e => e.is_active) : events)
-                        .slice()
-                        .sort((a, b) => a.name.localeCompare(b.name))
-                        .map((event) => (
-                          <option key={event.id} value={event.id}>
-                            {event.name}
-                          </option>
-                        ))}
-                    </select>
-                  </div>
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-[10px] text-slate-500">Contest</span>
-                    <select
-                      className="rounded-full border border-[#D0D7E2] bg-white px-3 py-1.5 text-[11px] outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
-                      value={
-                        tabulationContestFilterId === "all"
-                          ? "all"
-                          : String(tabulationContestFilterId)
-                      }
-                      onChange={(event) => {
-                        const value = event.target.value;
-                        const next =
-                          value === "all" ? "all" : Number.parseInt(value, 10);
-                        setTabulationContestFilterId(next);
-                      }}
-                    >
-                      <option value="all">All contests</option>
-                      {contests
-                        .filter((contest) =>
-                          tabulationEventFilterId === "all"
-                            ? true
-                            : contest.event_id === tabulationEventFilterId,
-                        )
-                        .slice()
-                        .sort((a, b) => a.name.localeCompare(b.name))
-                        .map((contest) => (
-                          <option key={contest.id} value={contest.id}>
-                            {contest.name}
-                          </option>
-                        ))}
-                    </select>
-                  </div>
-                <div className="flex items-center gap-1.5">
-                  <span className="text-[10px] text-slate-500">Division</span>
+              <div className="mb-6 flex flex-wrap items-center gap-4 rounded-2xl border border-slate-100 bg-slate-50/50 p-4">
+                <div className="flex items-center gap-3">
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Event</span>
                   <select
-                    className="rounded-full border border-[#D0D7E2] bg-white px-3 py-1.5 text-[11px] outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
-                    value={
-                      tabulationDivisionFilterId === "all"
-                        ? "all"
-                        : String(tabulationDivisionFilterId)
-                    }
+                    className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-medium text-slate-700 outline-none transition-all duration-300 focus:border-[#1F4D3A] focus:ring-4 focus:ring-[#1F4D3A10] min-w-[200px]"
+                    value={tabulationEventFilterId === "all" ? "all" : String(tabulationEventFilterId)}
                     onChange={(event) => {
                       const value = event.target.value;
-                      const next =
-                        value === "all" ? "all" : Number.parseInt(value, 10);
+                      const next = value === "all" ? "all" : Number.parseInt(value, 10);
+                      setTabulationEventFilterId(next);
+                      setTabulationContestFilterId("all");
+                    }}
+                  >
+                    <option value="all">All Events</option>
+                    {events.filter((e) => e.is_active).slice().sort((a, b) => a.name.localeCompare(b.name)).map((event) => (
+                      <option key={event.id} value={event.id}>{event.name}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="flex items-center gap-3">
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Contest</span>
+                  <select
+                    className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-medium text-slate-700 outline-none transition-all duration-300 focus:border-[#1F4D3A] focus:ring-4 focus:ring-[#1F4D3A10] min-w-[200px]"
+                    value={tabulationContestFilterId === "all" ? "all" : String(tabulationContestFilterId)}
+                    onChange={(event) => {
+                      const value = event.target.value;
+                      const next = value === "all" ? "all" : Number.parseInt(value, 10);
+                      setTabulationContestFilterId(next);
+                    }}
+                  >
+                    <option value="all">All Contests</option>
+                    {contests.filter((contest) => tabulationEventFilterId === "all" ? true : contest.event_id === tabulationEventFilterId).slice().sort((a, b) => a.name.localeCompare(b.name)).map((contest) => (
+                      <option key={contest.id} value={contest.id}>{contest.name}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="flex items-center gap-3">
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Division</span>
+                  <select
+                    className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-medium text-slate-700 outline-none transition-all duration-300 focus:border-[#1F4D3A] focus:ring-4 focus:ring-[#1F4D3A10] min-w-[200px]"
+                    value={tabulationDivisionFilterId === "all" ? "all" : String(tabulationDivisionFilterId)}
+                    onChange={(event) => {
+                      const value = event.target.value;
+                      const next = value === "all" ? "all" : Number.parseInt(value, 10);
                       setTabulationDivisionFilterId(next);
                     }}
                   >
-                    <option value="all">All divisions</option>
-                    {(tabulationEventFilterId === "all"
-                      ? categories
-                      : categories.filter(
-                          (category) => category.event_id === tabulationEventFilterId,
-                        )
-                    )
-                      .slice()
-                      .sort((a, b) => a.name.localeCompare(b.name))
-                      .map((category) => (
-                        <option key={category.id} value={category.id}>
-                          {category.name}
-                        </option>
-                      ))}
+                    <option value="all">All Divisions</option>
+                    {(tabulationEventFilterId === "all" ? categories : categories.filter((category) => category.event_id === tabulationEventFilterId)).slice().sort((a, b) => a.name.localeCompare(b.name)).map((category) => (
+                      <option key={category.id} value={category.id}>{category.name}</option>
+                    ))}
                   </select>
                 </div>
-                </div>
-                <span className="text-[10px] text-slate-400">
-                  {events.length === 0 || contests.length === 0
-                    ? "No tabulation data yet"
-                    : "Showing current tabulation from judges' submissions"}
-                </span>
               </div>
 
-              <div className="mb-2 flex items-center justify-between gap-3">
-                {/* View switcher removed */}
+              <div className="mb-6 flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setAdminTabulationView("awards")}
+                  className={"rounded-full border px-4 py-2 text-xs font-semibold transition " + (adminTabulationView === "awards"
+                    ? "border-[#1F4D3A] bg-[#1F4D3A] text-white"
+                    : "border-[#E2E8F0] bg-white text-slate-700 hover:bg-[#F8FAFC]")}
+                >
+                  Awards
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAdminTabulationView("sub-criteria")}
+                  className={"rounded-full border px-4 py-2 text-xs font-semibold transition " + (adminTabulationView === "sub-criteria"
+                    ? "border-[#1F4D3A] bg-[#1F4D3A] text-white"
+                    : "border-[#E2E8F0] bg-white text-slate-700 hover:bg-[#F8FAFC]")}
+                >
+                  Sub-Criteria
+                </button>
               </div>
-
-              {adminTabulationView === "overall" && (
-                <div className="overflow-x-auto">
-                  <table className="min-w-full border-collapse text-left text-[11px]">
-                    <thead>
-                      <tr className="border-b border-[#E2E8F0] bg-[#F5F7FF] text-[10px] uppercase tracking-wide text-slate-500">
-                        <th className="px-3 py-2 font-medium">Represent</th>
-                        <th className="px-3 py-2 font-medium">Contestant</th>
-                        {/* Dynamic Judge Columns */}
-                        {judges
-                          .filter((judge) => {
-                            // Filter judges relevant to the current view
-                            // Since tabulationRows can span multiple contests if filters are 'all',
-                            // showing specific judges is tricky.
-                            // But usually tabulation is viewed per contest.
-                            if (tabulationContestFilterId !== "all") {
-                                // Find if judge is assigned to this contest
-                                return judgeAssignments.some(ja => ja.judge_id === judge.id && ja.contest_id === tabulationContestFilterId);
-                            }
-                            if (tabulationEventFilterId !== "all") {
-                                return judge.event_id === tabulationEventFilterId;
-                            }
-                            return true;
-                          })
-                          .sort((a, b) => a.username.localeCompare(b.username))
-                          .map((judge) => (
-                            <th key={judge.id} className="px-3 py-2 font-medium text-center">
-                              {judge.username}
-                            </th>
-                          ))}
-                        <th className="px-3 py-2 font-medium text-right">Total score</th>
-                        <th className="px-3 py-2 font-medium text-right">Rank</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {tabulationRows.length === 0 ? (
-                        <tr className="border-b border-[#F1F5F9]">
-                          <td
-                            className="px-3 py-2 text-slate-400"
-                            colSpan={4 + judges.length} // Approx
-                          >
-                            {debugTabulationInfo.judgeTotalsCount === 0 ? (
-                              <>
-                                No tabulation data yet for the selected event.
-                                <div className="mt-1 text-[10px] text-slate-400">
-                                  Contests: {debugTabulationInfo.contestCount} • Participants: {debugTabulationInfo.participantCount} • Judge totals: {debugTabulationInfo.judgeTotalsCount}
-                                </div>
-                              </>
-                            ) : (
-                              "Once judges submit totals for contests, scores and rankings will appear here."
-                            )}
-                          </td>
-                        </tr>
-                      ) : (
-                        tabulationRows.map((row, index) => {
-                            // Determine visible judges again to map scores
-                            const visibleJudges = judges
-                              .filter((judge) => {
-                                if (tabulationContestFilterId !== "all") {
-                                    return judgeAssignments.some(ja => ja.judge_id === judge.id && ja.contest_id === tabulationContestFilterId);
-                                }
-                                if (tabulationEventFilterId !== "all") {
-                                    return judge.event_id === tabulationEventFilterId;
-                                }
-                                return true;
-                              })
-                              .sort((a, b) => a.username.localeCompare(b.username));
-
-                            return (
-                          <tr
-                            key={`${row.contestName}-${row.contestantNumber}-${index}`}
-                            className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC]"
-                          >
-                            <td className="px-3 py-2 text-slate-700">
-                              {row.teamName ?? "—"}
-                            </td>
-                            <td className="px-3 py-2">
-                              <div className="font-medium text-slate-800">
-                                {row.participantName}
-                              </div>
-                              <div className="text-[10px] text-slate-500">
-                                Contestant #{row.contestantNumber}
-                              </div>
-                            </td>
-                            {visibleJudges.map(judge => (
-                                <td key={judge.id} className="px-3 py-2 text-center text-slate-600">
-                                    {row.judgeScores[judge.id] !== undefined 
-                                        ? row.judgeScores[judge.id].toFixed(2) 
-                                        : "—"}
-                                </td>
-                            ))}
-                            <td className="px-3 py-2 font-semibold text-[#1F4D3A] text-right">
-                              {row.totalScore.toFixed(2)}
-                            </td>
-                            <td className="px-3 py-2 font-semibold text-slate-800 text-right">
-                              {row.rank}
-                            </td>
-                          </tr>
-                        )})
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              )}
             </div>
 
             {adminTabulationView === "awards" && (
-              <div className="mt-4 rounded-2xl border border-[#1F4D3A1F] bg-white p-4">
-                <div className="mb-3 flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
+              <div className="mt-8 rounded-[32px] border border-white/40 bg-white/80 p-8 shadow-[0_20px_50px_-12px_rgba(0,0,0,0.08)] backdrop-blur-2xl">
+                <div className="mb-6 flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
                   <div>
-                    <div className="text-sm font-semibold text-[#1F4D3A]">
-                      Awards ranking
-                    </div>
-                    <div className="text-[11px] text-slate-500">
-                      Select an award to view its winners based on current tabulation.
-                    </div>
+                    <h2 className="text-lg font-bold tracking-tight text-slate-800">Awards Ranking</h2>
+                    <p className="text-[13px] text-slate-400">View judge totals, ranks, and overall award ranking.</p>
                   </div>
-                  <div className="w-full max-w-xs text-xs">
-                    <span className="mb-1 block text-[11px] text-slate-500">
-                      Award
-                    </span>
+                  <div className="w-full max-w-sm">
+                    <label className="mb-2 block text-[11px] font-bold uppercase tracking-wider text-slate-400">Award</label>
                     <select
-                      className="w-full rounded-full border border-[#E2E8F0] bg-white px-4 py-2.5 text-xs font-medium text-slate-800 outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
-                      value={
-                        tabulationAwardFilterId === "all"
-                          ? ""
-                          : String(tabulationAwardFilterId)
-                      }
+                      className="w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs font-medium text-slate-700 outline-none transition-all duration-300 focus:border-[#1F4D3A] focus:ring-4 focus:ring-[#1F4D3A10]"
+                      value={tabulationAwardFilterId === "all" ? "" : String(tabulationAwardFilterId)}
                       onChange={(event) => {
                         const value = event.target.value;
-                        if (!value) {
-                          setTabulationAwardFilterId("all");
-                        } else {
-                          setTabulationAwardFilterId(
-                            Number.parseInt(value, 10),
-                          );
-                        }
+                        setTabulationAwardFilterId(value ? Number.parseInt(value, 10) : "all");
                         setAwardsTabulationError(null);
                         setAwardsTabulationSuccess(null);
                       }}
                     >
                       <option value="">Select award</option>
-                      {awardsForTabulationEvent
-                        .filter((a) => a.is_active)
-                        .slice()
-                        .sort((a, b) => a.name.localeCompare(b.name))
-                        .map((award) => (
-                          <option key={award.id} value={award.id}>
-                            {award.name}
-                          </option>
-                        ))}
+                      {awardsForTabulationContest.slice().sort((a, b) => a.name.localeCompare(b.name)).map((award) => (
+                        <option key={award.id} value={award.id}>{award.name}</option>
+                      ))}
                     </select>
                   </div>
                 </div>
-
                 {(awardsTabulationError || awardsTabulationSuccess) && (
-                  <div
-                    className={`mb-2 text-[10px] ${
-                      awardsTabulationError
-                        ? "text-red-500"
-                        : "text-emerald-600"
-                    }`}
-                  >
+                  <div className={"mb-6 rounded-xl p-4 text-xs font-medium " + (awardsTabulationError ? "bg-red-50 text-red-500" : "bg-emerald-50 text-emerald-600")}>
                     {awardsTabulationError ?? awardsTabulationSuccess}
                   </div>
                 )}
-
-                {awardsResults.length === 0 ? (
-                  <div className="text-[11px] text-slate-400">
-                    No awards configured for this event.
+                {effectiveTabulationContestId === null ? (
+                  <div className="rounded-2xl border border-slate-100 bg-white p-6 text-center text-xs font-medium text-slate-400">
+                    Select a contest to view awards ranking.
+                  </div>
+                ) : awardsForTabulationContest.length === 0 ? (
+                  <div className="rounded-2xl border border-slate-100 bg-white p-6 text-center text-xs font-medium text-slate-400">
+                    No awards configured for this contest.
                   </div>
                 ) : !selectedTabulationAwardResult ? (
-                  <div className="text-[11px] text-slate-400">
-                    Select an award above to view its winners.
+                  <div className="rounded-2xl border border-slate-100 bg-white p-6 text-center text-xs font-medium text-slate-400">
+                    Select an award above to view its ranking.
                   </div>
                 ) : selectedTabulationAwardResult.awardType !== "criteria" ? (
-                  <div className="text-[11px] text-slate-400">
-                    This is a special award. Confirm recipients manually in the Awards
-                    tab.
+                  <div className="rounded-2xl border border-slate-100 bg-white p-6 text-center text-xs font-medium text-slate-400">
+                    This is a special award. Criteria score ranking is not available.
                   </div>
-                ) : selectedTabulationAwardResult.allParticipants.length === 0 ? (
-                  <div className="text-[11px] text-slate-400">
-                    No participants available yet for this award.
+                ) : tabulationAwardsTable === null || tabulationAwardsTable.rows.length === 0 ? (
+                  <div className="rounded-2xl border border-slate-100 bg-white p-6 text-center text-xs font-medium text-slate-400">
+                    No tabulation data available for this award yet.
                   </div>
                 ) : (
-                  <div className="space-y-3 text-[11px]">
-                    {(() => {
-                      const award = selectedTabulationAwardResult;
-                      const existingRecipients = awardRecipients.filter(
-                        (row) => row.award_id === award.awardId,
-                      );
-                      const existingRecipientIds = new Set(
-                        existingRecipients.map((row) => row.participant_id),
-                      );
-                      const allWinnersSaved =
-                        award.winners.length > 0 &&
-                        award.winners.every((winner) =>
-                          existingRecipientIds.has(winner.participantId),
-                        );
-
-                      return (
-                        <div className="space-y-3">
-                          <div className="flex flex-wrap items-center justify-between gap-2">
-                            <div className="space-y-0.5">
-                              <div className="flex items-center gap-2">
-                                <span className="font-medium text-slate-800">
-                                  {award.awardName}
-                                </span>
-                                <span className="rounded-full bg-[#DCFCE7] px-2 py-0.5 text-[9px] font-medium text-[#166534]">
-                                  Criteria-based
-                                </span>
-                              </div>
-                              <div className="text-[10px] text-slate-500">
-                                {award.criteriaName
-                                  ? `${award.contestName} • ${award.criteriaName}`
-                                  : award.contestName}
-                              </div>
-                            </div>
-                          </div>
-
-                          <div className="overflow-hidden rounded-2xl border border-[#E2E8F0] bg-white">
-                            <table className="min-w-full border-collapse text-left text-[11px]">
-                              <thead>
-                                {(() => {
-                                  const originalAward = awards.find((a) => a.id === award.awardId);
-                                  const visibleJudges = judges
-                                    .filter((judge) => {
-                                      if (originalAward && originalAward.contest_id) {
-                                        return judgeAssignments.some(
-                                          (ja) =>
-                                            ja.judge_id === judge.id &&
-                                            ja.contest_id === originalAward.contest_id,
-                                        );
-                                      }
-                                      return judge.event_id === activeEventId;
-                                    })
-                                    .sort((a, b) => a.username.localeCompare(b.username));
-                                  return (
-                                    <>
-                                      <tr className="border-b border-[#E2E8F0] bg-[#F5F7FF] text-[10px] uppercase tracking-wide text-slate-500">
-                                        <th className="px-3 py-2 font-medium">Represent</th>
-                                        <th className="px-3 py-2 font-medium">Contestant</th>
-                                        {visibleJudges.map((judge) => (
-                                          <th key={judge.id} className="px-3 py-2 font-medium text-center" colSpan={2}>
-                                            {judge.username}
-                                          </th>
-                                        ))}
-                                        <th className="px-3 py-2 font-medium text-right">Rank total</th>
-                                      </tr>
-                                      <tr className="bg-[#F5F7FF] text-[10px] font-semibold uppercase tracking-wide text-slate-500">
-                                        <th className="px-3 py-2"></th>
-                                        <th className="px-3 py-2"></th>
-                                        {visibleJudges.flatMap((judge) => ([
-                                          <th key={`hdr-s-${judge.id}`} className="px-3 py-2 text-center">Score</th>,
-                                          <th key={`hdr-r-${judge.id}`} className="px-3 py-2 text-center">Rank</th>,
-                                        ]))}
-                                        <th className="px-3 py-2"></th>
-                                      </tr>
-                                    </>
-                                  );
-                                })()}
-                              </thead>
-                              <tbody>
-                                {(() => {
-                                  const originalAward = awards.find((a) => a.id === award.awardId);
-                                  const visibleJudges = judges
-                                    .filter((judge) => {
-                                      if (originalAward && originalAward.contest_id) {
-                                        return judgeAssignments.some(
-                                          (ja) =>
-                                            ja.judge_id === judge.id &&
-                                            ja.contest_id === originalAward.contest_id,
-                                        );
-                                      }
-                                      return judge.event_id === activeEventId;
-                                    })
-                                    .sort((a, b) => a.username.localeCompare(b.username));
-                                  const judgeIds = visibleJudges.map((j) => j.id);
-
-                                  // Build totals per judge for this award
-                                  const totalsByJudge = new Map<number, Map<number, number>>();
-                                  for (const p of award.allParticipants) {
-                                    for (const jid of judgeIds) {
-                                      const val = p.judgeCriteriaScores[jid];
-                                      if (val !== undefined) {
-                                        const map = totalsByJudge.get(jid) ?? new Map<number, number>();
-                                        map.set(p.participantId, val);
-                                        totalsByJudge.set(jid, map);
-                                      }
-                                    }
-                                  }
-                                  // Compute rank per judge
-                                  const rankByJudgeAndParticipant = new Map<string, number>();
-                                  for (const [jid, pmap] of totalsByJudge.entries()) {
-                                    const entries = Array.from(pmap.entries());
-                                    entries.sort((a, b) => b[1] - a[1]);
-                                    let currentRank = 1;
-                                    for (let i = 0; i < entries.length; i++) {
-                                      if (i > 0) {
-                                        const prev = entries[i - 1][1];
-                                        const curr = entries[i][1];
-                                        if (curr < prev) currentRank = i + 1;
-                                      }
-                                      rankByJudgeAndParticipant.set(`${jid}-${entries[i][0]}`, currentRank);
-                                    }
-                                  }
-
-                                  const sorted = [...award.allParticipants].map((p) => {
-                                    let sum = 0;
-                                    let count = 0;
-                                    for (const jid of judgeIds) {
-                                      const r = rankByJudgeAndParticipant.get(`${jid}-${p.participantId}`);
-                                      if (r != null) {
-                                        sum += r;
-                                        count += 1;
-                                      }
-                                    }
-                                    const avg = count === judgeIds.length ? sum / count : Number.POSITIVE_INFINITY;
-                                    return { p, avg };
-                                  }).sort((a, b) => {
-                                    if (a.avg === b.avg) return a.p.participantName.localeCompare(b.p.participantName);
-                                    return a.avg - b.avg;
-                                  });
-                                  return sorted.map(({ p }, index) => (
-                                    <tr key={`${p.contestantNumber}-${index}`} className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC]">
-                                      <td className="px-3 py-2 text-slate-700">
-                                        {p.teamName ?? "—"}
-                                      </td>
-                                      <td className="px-3 py-2">
-                                        <div className="font-medium text-slate-800">{p.participantName}</div>
-                                        <div className="text-[10px] text-slate-500">Contestant #{p.contestantNumber}</div>
-                                      </td>
-                                      {judgeIds.flatMap((jid) => {
-                                        const score = p.judgeCriteriaScores[jid];
-                                        const rank = rankByJudgeAndParticipant.get(`${jid}-${p.participantId}`) ?? null;
-                                        return ([
-                                          <td key={`cell-s-${p.participantId}-${jid}`} className="px-3 py-2 text-center text-slate-600">
-                                            {score !== undefined ? score.toFixed(2) : "—"}
-                                          </td>,
-                                          <td key={`cell-r-${p.participantId}-${jid}`} className="px-3 py-2 text-center font-semibold text-[#1F4D3A]">
-                                            {rank ?? "—"}
-                                          </td>,
-                                        ]);
-                                      })}
-                                      <td className="px-3 py-2 text-right font-semibold text-[#1F4D3A]">
-                                        {(() => {
-                                          let sum = 0;
-                                          let count = 0;
-                                          for (const jid of judgeIds) {
-                                            const r = rankByJudgeAndParticipant.get(`${jid}-${p.participantId}`);
-                                            if (r != null) {
-                                              sum += r;
-                                              count += 1;
-                                            }
-                                          }
-                                          return count === judgeIds.length ? (sum / count).toFixed(2) : "—";
-                                        })()}
-                                      </td>
-                                    </tr>
-                                  ));
-                                })()}
-                              </tbody>
-                            </table>
-                          </div>
-                        </div>
-                      );
-                    })()}
+                  <div className="overflow-hidden rounded-2xl border border-slate-100 bg-white shadow-sm">
+                    <table className="min-w-full border-collapse text-left text-sm">
+                      <thead className="bg-slate-50 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                        <tr>
+                          <th className="px-6 py-4">Represent</th>
+                          <th className="px-6 py-4">Contestant</th>
+                          {tabulationAwardsTable.judges.map((judge) => (
+                            <th key={judge.id} className="px-6 py-4 text-center" colSpan={2}>{judge.username}</th>
+                          ))}
+                          <th className="px-6 py-4 text-right">Rank Total</th>
+                        </tr>
+                        <tr className="border-t border-slate-100 bg-slate-50 text-[9px] font-bold uppercase tracking-widest text-slate-400">
+                          <th className="px-6 py-2"></th>
+                          <th className="px-6 py-2"></th>
+                          {tabulationAwardsTable.judges.flatMap((judge) => ([
+                            <th key={"hdr-s-" + judge.id} className="px-6 py-2 text-center">Score</th>,
+                            <th key={"hdr-r-" + judge.id} className="px-6 py-2 text-center">Rank</th>,
+                          ]))}
+                          <th className="px-6 py-2"></th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {tabulationAwardsTable.rows.map(({ participant, avg }, index) => (
+                          <tr key={participant.participantId} className="group transition-colors hover:bg-slate-50/50">
+                            <td className="px-6 py-4 text-slate-500 font-medium">{participant.teamName ?? "—"}</td>
+                            <td className="px-6 py-4">
+                              <div className="font-bold text-slate-800">{participant.participantName}</div>
+                              <div className="text-[11px] font-medium text-slate-400">Contestant #{participant.contestantNumber}</div>
+                            </td>
+                            {tabulationAwardsTable.judges.flatMap((judge) => {
+                              const score = participant.judgeCriteriaScores[judge.id];
+                              const rank = tabulationAwardsTable.rankByJudgeAndParticipant.get(judge.id + "-" + participant.participantId) ?? null;
+                              return ([
+                                <td key={"cell-s-" + participant.participantId + "-" + judge.id} className="px-6 py-4 text-center text-slate-600 font-medium">
+                                  {score !== undefined ? score.toFixed(2) : "—"}
+                                </td>,
+                                <td key={"cell-r-" + participant.participantId + "-" + judge.id} className="px-6 py-4 text-center font-bold text-[#1F4D3A]">
+                                  {rank ?? "—"}
+                                </td>,
+                              ]);
+                            })}
+                            <td className="px-6 py-4 text-right">
+                              <span className={"inline-flex h-8 w-12 items-center justify-center rounded-xl text-[11px] font-bold " + (index < 3 ? "bg-[#1F4D3A] text-white shadow-sm" : "bg-slate-100 text-slate-600")}>
+                                {avg !== Number.POSITIVE_INFINITY ? avg.toFixed(2) : "—"}
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
                   </div>
                 )}
               </div>
             )}
-          </section>
+
+            {adminTabulationView === "sub-criteria" && (
+              <div className="mt-8 rounded-[32px] border border-white/40 bg-white/80 p-8 shadow-[0_20px_50px_-12px_rgba(0,0,0,0.08)] backdrop-blur-2xl">
+                <div className="mb-6 flex flex-col gap-2">
+                  <h2 className="text-lg font-bold tracking-tight text-slate-800">Sub-Criteria Breakdown</h2>
+                  <p className="text-[13px] text-slate-400">Scores per participant, per criteria, per judge.</p>
+                </div>
+
+                {effectiveTabulationContestId === null ? (
+                  <div className="rounded-2xl border border-slate-100 bg-white p-6 text-center text-xs font-medium text-slate-400">
+                    Select a contest to view sub-criteria scores.
+                  </div>
+                ) : tabulationSubCriteriaTable === null || tabulationSubCriteriaTable.rows.length === 0 ? (
+                  <div className="rounded-2xl border border-slate-100 bg-white p-6 text-center text-xs font-medium text-slate-400">
+                    No sub-criteria scores found for this contest.
+                  </div>
+                ) : (
+                  <div className="overflow-auto rounded-2xl border border-slate-100 bg-white shadow-sm">
+                    <table className="min-w-full border-collapse text-left text-sm">
+                      <thead className="bg-slate-50 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                        <tr>
+                          <th className="px-6 py-4">Contestant</th>
+                          <th className="px-6 py-4">Criteria</th>
+                          {tabulationSubCriteriaTable.judges.map((judge) => (
+                            <th key={judge.id} className="px-6 py-4 text-right">{judge.username}</th>
+                          ))}
+                          <th className="px-6 py-4 text-right">Total</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {tabulationSubCriteriaTable.rows.map((row) => (
+                          <tr key={row.participant.id + "-" + row.criteria.id} className="group transition-colors hover:bg-slate-50/50">
+                            <td className="px-6 py-4">
+                              <div className="font-bold text-slate-800">{row.participant.full_name}</div>
+                              <div className="text-[11px] font-medium text-slate-400">Contestant #{row.participant.contestant_number}</div>
+                            </td>
+                            <td className="px-6 py-4 text-slate-600 font-medium">{row.criteria.name}</td>
+                            {row.cells.map((cell) => (
+                              <td key={cell.judgeId} className="px-6 py-4 text-right text-slate-600 font-medium">
+                                {typeof cell.value === "number" ? cell.value.toFixed(2) : "—"}
+                              </td>
+                            ))}
+                            <td className="px-6 py-4 text-right font-bold text-[#1F4D3A]">
+                              {row.cells.reduce<number>((sum, cell) => typeof cell.value === "number" ? sum + cell.value : sum, 0).toFixed(2)}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            )}
+            </section>
         )}
 
         {selectedJudgeForBreakdown !== null && selectedTabulationAwardResult && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm">
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black p-4 backdrop-blur-sm">
             <div className="flex max-h-[90vh] w-full max-w-5xl flex-col rounded-3xl bg-white shadow-2xl">
               <div className="flex items-center justify-between border-b border-[#E2E8F0] p-6">
                 <div>
@@ -6604,7 +6495,6 @@ export default function AdminDashboard() {
                       <th className="px-4 py-3 font-medium">Contestant</th>
                       {(() => {
                         const originalAward = awards.find(a => a.id === selectedTabulationAwardResult.awardId);
-                        // Determine categories involved
                         let criteriaIds: number[] = [];
                         const rawIds = originalAward?.criteria_ids;
 
@@ -6622,26 +6512,12 @@ export default function AdminDashboard() {
                         }
                         
                         criteriaIds = criteriaIds.filter(n => !isNaN(n));
-                        
-                        // Expand to categories
                         const selectedCriteria = criteriaList.filter(c => criteriaIds.includes(c.id));
-                        const categories = Array.from(new Set(selectedCriteria.map(c => c.category).filter(Boolean)));
-                        
-                        // If categories exist, show columns for each category
-                        if (categories.length > 0) {
-                            return categories.map(cat => (
-                                <th key={cat} className="px-4 py-3 text-center font-medium">
-                                    {cat}
-                                </th>
-                            ));
-                        } else {
-                            // If no categories, maybe just show criteria names? Or just one "Score" column
-                            return selectedCriteria.map(c => (
-                                <th key={c.id} className="px-4 py-3 text-center font-medium">
-                                    {c.name}
-                                </th>
-                            ));
-                        }
+                        return selectedCriteria.map(c => (
+                          <th key={c.id} className="px-4 py-3 text-center font-medium">
+                            {c.name}
+                          </th>
+                        ));
                       })()}
                       <th className="px-4 py-3 text-right font-medium">Total</th>
                     </tr>
@@ -6655,7 +6531,6 @@ export default function AdminDashboard() {
                         </td>
                         {(() => {
                             const originalAward = awards.find(a => a.id === selectedTabulationAwardResult.awardId);
-                            // Re-calculate involved columns
                             let criteriaIds: number[] = [];
                             const rawIds = originalAward?.criteria_ids;
 
@@ -6674,42 +6549,16 @@ export default function AdminDashboard() {
                             
                             criteriaIds = criteriaIds.filter(n => !isNaN(n));
                             const selectedCriteria = criteriaList.filter(c => criteriaIds.includes(c.id));
-                            const categories = Array.from(new Set(selectedCriteria.map(c => c.category).filter(Boolean)));
-                            
                             // Calculate scores for this participant and judge
                             const judgeId = selectedJudgeForBreakdown!;
-                            
-                            if (categories.length > 0) {
-                                return categories.map(cat => {
-                                    // Sum all criteria in this category
-                                    const catCriteria = criteriaList.filter(c => c.category === cat);
-                                    let catTotal = 0;
-                                    let hasVal = false;
-                                    
-                                    for (const c of catCriteria) {
-                                        const s = scores.find(s => s.judge_id === judgeId && s.participant_id === participant.participantId && s.criteria_id === c.id);
-                                        if (s) {
-                                            catTotal += Number(s.score);
-                                            hasVal = true;
-                                        }
-                                    }
-                                    
-                                    return (
-                                        <td key={cat} className="px-4 py-3 text-center text-slate-600">
-                                            {hasVal ? catTotal.toFixed(2) : "—"}
-                                        </td>
-                                    );
-                                });
-                            } else {
-                                return selectedCriteria.map(c => {
-                                    const s = scores.find(s => s.judge_id === judgeId && s.participant_id === participant.participantId && s.criteria_id === c.id);
-                                    return (
-                                        <td key={c.id} className="px-4 py-3 text-center text-slate-600">
-                                            {s ? Number(s.score).toFixed(2) : "—"}
-                                        </td>
-                                    );
-                                });
-                            }
+                            return selectedCriteria.map(c => {
+                              const s = scores.find(s => s.judge_id === judgeId && s.participant_id === participant.participantId && s.criteria_id === c.id);
+                              return (
+                                <td key={c.id} className="px-4 py-3 text-center text-slate-600">
+                                  {s ? Number(s.score).toFixed(2) : "—"}
+                                </td>
+                              );
+                            });
                         })()}
                         {(() => {
                              // Calculate total again for this judge
@@ -6731,19 +6580,7 @@ export default function AdminDashboard() {
                              }
                              
                              criteriaIds = criteriaIds.filter(n => !isNaN(n));
- 
-                             // Include all criteria from categories
-                             if (criteriaIds.length > 0) {
-                               const selectedCriteria = criteriaList.filter(c => criteriaIds.includes(c.id));
-                               const categories = Array.from(new Set(selectedCriteria.map(c => c.category).filter(Boolean)));
-                               
-                               if (categories.length > 0) {
-                                   const allCriteriaInCategories = criteriaList.filter(c => categories.includes(c.category));
-                                   const allIds = allCriteriaInCategories.map(c => c.id);
-                                   criteriaIds = Array.from(new Set([...criteriaIds, ...allIds]));
-                               }
-                             }
-                             
+                             // Do not expand to categories; sum only the explicitly linked criteria
                              const judgeId = selectedJudgeForBreakdown!;
                              let total = 0;
                              let hasVal = false;
@@ -6781,439 +6618,306 @@ export default function AdminDashboard() {
         )}
 
         {activeTab === "event" && (
-          <section className="relative rounded-3xl border border-[#1F4D3A1F] bg-white/95 p-6 shadow-[0_18px_45px_rgba(0,0,0,0.05)]">
-            <div className="mb-3 flex items-center justify-between">
-              <div>
-                <h2 className="text-sm font-semibold tracking-tight text-[#1F4D3A]">
-                  Event setup
-                </h2>
-                <p className="text-[11px] text-slate-500">
-                  Add events, contests, and criteria used for scoring.
-                </p>
+          <section className="animate-in fade-in slide-in-from-bottom-4 duration-500">
+            <div className="rounded-[32px] border border-white/40 bg-white/80 p-8 shadow-[0_20px_50px_-12px_rgba(0,0,0,0.08)] backdrop-blur-2xl">
+              <div className="mb-8 flex items-center justify-between">
+                <div>
+                  <h2 className="text-lg font-bold tracking-tight text-slate-800">
+                    Event Management
+                  </h2>
+                  <p className="text-[13px] text-slate-400">
+                    Configure events, contests, scoring criteria, and award categories.
+                  </p>
+                </div>
+                <div className="hidden items-center gap-3 rounded-2xl border border-slate-100 bg-white/50 px-4 py-2 shadow-sm sm:flex">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Active Event</span>
+                  <span className="text-xs font-bold text-[#1F4D3A]">
+                    {activeEvent ? activeEvent.name : "None Selected"}
+                  </span>
+                </div>
               </div>
-              <div className="hidden items-center gap-2 rounded-full border border-[#E2E8F0] bg-white/90 px-3 py-1 text-[10px] text-slate-600 shadow-sm sm:inline-flex">
-                <span className="uppercase tracking-wide text-[9px] text-slate-400">
-                  Active event
-                </span>
-                <span className="font-semibold text-[#1F4D3A]">
-                  {activeEvent ? activeEvent.name : "None selected"}
-                </span>
+
+              <div className="mb-8 flex gap-2 rounded-2xl bg-slate-100/50 p-1.5 text-[11px] font-bold w-fit">
+                {[
+                  { key: "addEvent", label: "Events" },
+                  { key: "addContest", label: "Contests" },
+                  { key: "addCriteria", label: "Criteria" },
+                  { key: "awards", label: "Awards" },
+                  { key: "template", label: "Templates" }
+                ].map((tab) => (
+                  <button
+                    key={tab.key}
+                    type="button"
+                    onClick={() => setEventTab(tab.key as EventSubTab)}
+                    className={`rounded-xl px-5 py-2 transition-all duration-300 ${
+                      eventTab === tab.key
+                        ? "bg-white text-[#1F4D3A] shadow-sm"
+                        : "text-slate-500 hover:text-[#1F4D3A]"
+                    }`}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
               </div>
-            </div>
 
-            <div className="mb-4 flex gap-2 text-[11px]">
-              <button
-                type="button"
-                onClick={() => setEventTab("addEvent")}
-                className={`rounded-full border px-3 py-1.5 transition ${
-                  eventTab === "addEvent"
-                    ? "border-[#1F4D3A] bg-[#1F4D3A] text-white shadow-sm"
-                    : "border-transparent bg-[#F5F7FF] text-[#1F4D3A] hover:bg-[#E3F2EA]"
-                }`}
-              >
-                Event
-              </button>
-              <button
-                type="button"
-                onClick={() => setEventTab("addContest")}
-                className={`rounded-full border px-3 py-1.5 transition ${
-                  eventTab === "addContest"
-                    ? "border-[#1F4D3A] bg-[#1F4D3A] text-white shadow-sm"
-                    : "border-transparent bg-[#F5F7FF] text-[#1F4D3A] hover:bg-[#E3F2EA]"
-                }`}
-              >
-                Contest
-              </button>
-              <button
-                type="button"
-                onClick={() => setEventTab("addCriteria")}
-                className={`rounded-full border px-3 py-1.5 transition ${
-                  eventTab === "addCriteria"
-                    ? "border-[#1F4D3A] bg-[#1F4D3A] text-white shadow-sm"
-                    : "border-transparent bg-[#F5F7FF] text-[#1F4D3A] hover:bg-[#E3F2EA]"
-                }`}
-              >
-                Criteria
-              </button>
-              <button
-                type="button"
-                onClick={() => setEventTab("awards")}
-                className={`rounded-full border px-3 py-1.5 transition ${
-                  eventTab === "awards"
-                    ? "border-[#1F4D3A] bg-[#1F4D3A] text-white shadow-sm"
-                    : "border-transparent bg-[#F5F7FF] text-[#1F4D3A] hover:bg-[#E3F2EA]"
-                }`}
-              >
-                Awards
-              </button>
-              <button
-                type="button"
-                onClick={() => setEventTab("template")}
-                className={`rounded-full border px-3 py-1.5 transition ${
-                  eventTab === "template"
-                    ? "border-[#1F4D3A] bg-[#1F4D3A] text-white shadow-sm"
-                    : "border-transparent bg-[#F5F7FF] text-[#1F4D3A] hover:bg-[#E3F2EA]"
-                }`}
-              >
-                Template
-              </button>
-            </div>
-
-            <div>
-              {eventTab === "addEvent" && (
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between">
-                    <div className="text-[11px] font-medium text-slate-600">
-                      Events
-                    </div>
-                    <button
-                      type="button"
-                      onClick={openCreateEventModal}
-                      className="inline-flex items-center rounded-full bg-[#1F4D3A] px-3 py-1.5 text-[11px] font-medium text-white shadow-sm transition hover:bg-[#163528]"
-                    >
-                      Add event
-                    </button>
-                  </div>
-
-                  <div className="rounded-2xl border border-[#1F4D3A1F] bg-white p-4">
-                    <div className="mb-2 flex items-center justify-between">
-                      <div className="text-[11px] font-medium text-slate-600">
-                        Event list
-                      </div>
-                      <span className="text-[10px] text-slate-400">
-                        {events.length === 0
-                          ? "No events yet"
-                          : `${events.length} event${events.length > 1 ? "s" : ""}`}
-                      </span>
-                    </div>
-                    <div className="mb-3 grid gap-2 text-[10px] md:grid-cols-3">
-                      <div>
-                        <div className="mb-1 text-slate-500">Search</div>
-                        <input
-                          value={eventSearch}
-                          onChange={(e) => setEventSearch(e.target.value)}
-                          className="w-full max-w-[420px] rounded-xl border border-[#D0D7E2] bg-white px-3 py-1.5 text-[10px] outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
-                          placeholder="Search by name or code"
-                        />
-                      </div>
-                      <div>
-                        <div className="mb-1 text-slate-500">Year</div>
-                        <select
-                          value={eventFilterYear}
-                          onChange={(e) => setEventFilterYear(e.target.value)}
-                          className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-1.5 text-[10px] outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
-                        >
-                          <option value="all">All years</option>
-                          {Array.from(
-                            new Set(events.map((event) => event.year)),
-                          )
-                            .sort((a, b) => b - a)
-                            .map((year) => (
-                              <option key={year} value={year}>
-                                {year}
-                              </option>
-                            ))}
-                        </select>
-                      </div>
-                      <div>
-                        <div className="mb-1 text-slate-500">Month</div>
-                        <select
-                          value={eventFilterMonth}
-                          onChange={(e) => setEventFilterMonth(e.target.value)}
-                          className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-1.5 text-[10px] outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
-                        >
-                          <option value="all">All months</option>
-                          {monthOptions.map((month) => (
-                            <option key={month.value} value={month.value}>
-                              {month.label}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                    </div>
-                    {(eventError || eventSuccess) && (
-                      <div
-                        className={`mb-2 text-[10px] ${
-                          eventError ? "text-red-500" : "text-emerald-600"
-                        }`}
+              <div className="animate-in fade-in slide-in-from-bottom-2 duration-300">
+                {eventTab === "addEvent" && (
+                  <div className="space-y-6">
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-sm font-bold text-slate-700">Events Directory</h3>
+                      <button
+                        type="button"
+                        onClick={openCreateEventModal}
+                        className="group flex items-center gap-2 rounded-xl bg-[#1F4D3A] px-5 py-2.5 text-[11px] font-bold text-white shadow-lg shadow-[#1F4D3A30] transition-all duration-300 hover:scale-[1.02] active:scale-[0.98]"
                       >
-                        {eventError ?? eventSuccess}
+                        <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M12 4v16m8-8H4" />
+                        </svg>
+                        <span>Add New Event</span>
+                      </button>
+                    </div>
+
+                    <div className="rounded-2xl border border-slate-100 bg-white p-6 shadow-sm">
+                      <div className="mb-6 grid gap-4 md:grid-cols-3">
+                        <div className="space-y-1.5">
+                          <label className="ml-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">Search</label>
+                          <div className="relative">
+                            <input
+                              value={eventSearch}
+                              onChange={(e) => setEventSearch(e.target.value)}
+                              className="w-full rounded-xl border border-slate-200 bg-slate-50/50 px-4 py-2 text-xs font-medium outline-none transition-all duration-300 focus:border-[#1F4D3A] focus:ring-4 focus:ring-[#1F4D3A10] focus:bg-white"
+                              placeholder="Name or code..."
+                            />
+                          </div>
+                        </div>
+                        <div className="space-y-1.5">
+                          <label className="ml-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">Filter Year</label>
+                          <select
+                            value={eventFilterYear}
+                            onChange={(e) => setEventFilterYear(e.target.value)}
+                            className="w-full rounded-xl border border-slate-200 bg-slate-50/50 px-4 py-2 text-xs font-medium outline-none transition-all duration-300 focus:border-[#1F4D3A] focus:ring-4 focus:ring-[#1F4D3A10] focus:bg-white"
+                          >
+                            <option value="all">All Years</option>
+                            {Array.from(new Set(events.map((e) => e.year))).sort((a, b) => b - a).map((y) => (
+                              <option key={y} value={y}>{y}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <div className="space-y-1.5">
+                          <label className="ml-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">Filter Month</label>
+                          <select
+                            value={eventFilterMonth}
+                            onChange={(e) => setEventFilterMonth(e.target.value)}
+                            className="w-full rounded-xl border border-slate-200 bg-slate-50/50 px-4 py-2 text-xs font-medium outline-none transition-all duration-300 focus:border-[#1F4D3A] focus:ring-4 focus:ring-[#1F4D3A10] focus:bg-white"
+                          >
+                            <option value="all">All Months</option>
+                            {monthOptions.map((m) => (
+                              <option key={m.value} value={m.value}>{m.label}</option>
+                            ))}
+                          </select>
+                        </div>
                       </div>
-                    )}
-                    <div className="overflow-x-auto">
-                      <table className="min-w-full border-collapse text-left text-[11px]">
-                        <thead>
-                          <tr className="border-b border-[#E2E8F0] bg-[#F5F7FF] text-[10px] uppercase tracking-wide text-slate-500">
-                            <th className="px-3 py-2 font-medium">Event name</th>
-                            <th className="px-3 py-2 font-medium">Code</th>
-                            <th className="px-3 py-2 font-medium">Year</th>
-                            <th className="px-3 py-2 font-medium">Status</th>
-                            <th className="px-3 py-2 font-medium">Actions</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {events.length === 0 ? (
-                            <tr className="border-b border-[#F1F5F9]">
-                              <td
-                                className="px-3 py-2 text-slate-400"
-                                colSpan={5}
-                              >
-                                Once you add events, you can edit or delete them
-                                here.
-                              </td>
+
+                      {(eventError || eventSuccess) && (
+                        <div className={`mb-6 rounded-xl p-4 text-xs font-medium ${eventError ? "bg-red-50 text-red-500" : "bg-emerald-50 text-emerald-600"}`}>
+                          {eventError ?? eventSuccess}
+                        </div>
+                      )}
+
+                      <div className="overflow-hidden rounded-xl border border-slate-100 bg-white">
+                        <table className="min-w-full border-collapse text-left text-sm">
+                          <thead>
+                            <tr className="bg-slate-50 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                              <th className="px-6 py-4">Event Name</th>
+                              <th className="px-6 py-4">Code</th>
+                              <th className="px-6 py-4">Year</th>
+                              <th className="px-6 py-4 text-center">Status</th>
+                              <th className="px-6 py-4 text-right">Actions</th>
                             </tr>
-                          ) : filteredEvents.length === 0 ? (
-                            <tr className="border-b border-[#F1F5F9]">
-                              <td
-                                className="px-3 py-2 text-slate-400"
-                                colSpan={5}
-                              >
-                                No events match your search or filters.
-                              </td>
-                            </tr>
-                          ) : (
-                            filteredEvents.map((event) => (
-                              <tr
-                                key={event.id}
-                                className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC]"
-                              >
-                                <td className="px-3 py-2 font-medium text-slate-700">
-                                  {event.name}
-                                </td>
-                                <td className="px-3 py-2 text-slate-600">
-                                  {event.code}
-                                </td>
-                                <td className="px-3 py-2 text-slate-600">
-                                  {event.year}
-                                </td>
-                                <td className="px-3 py-2">
-                                  {event.is_active ? (
-                                    <span className="inline-flex items-center rounded-full bg-[#DCFCE7] px-2.5 py-0.5 text-[10px] font-medium text-[#166534]">
-                                      Active
-                                    </span>
-                                  ) : (
-                                    <span className="inline-flex items-center rounded-full bg-[#F1F5F9] px-2.5 py-0.5 text-[10px] font-medium text-slate-500">
-                                      Not active
-                                    </span>
-                                  )}
-                                </td>
-                                <td className="px-3 py-2">
-                                  <div className="flex gap-1.5 text-[10px]">
-                                    <button
-                                      type="button"
-                                      onClick={() => handleSetActiveEvent(event.id)}
-                                      disabled={
-                                        event.is_active ||
-                                        isSettingActiveEventId === event.id
-                                      }
-                                      className={`rounded-full border px-2 py-0.5 ${
-                                        event.is_active ||
-                                        isSettingActiveEventId === event.id
-                                          ? "cursor-not-allowed border-slate-300 bg-slate-100 text-slate-400 opacity-70"
-                                          : "border-[#1F4D3A26] text-[#1F4D3A] hover:bg-[#E3F2EA]"
-                                      }`}
-                                    >
-                                      {event.is_active
-                                        ? "Activated"
-                                        : isSettingActiveEventId === event.id
-                                        ? "Activating..."
-                                        : "Activate"}
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() => handleDeactivateEvent(event.id)}
-                                      disabled={
-                                        !event.is_active ||
-                                        isDeactivatingEventId === event.id
-                                      }
-                                      className={`rounded-full border px-2 py-0.5 ${
-                                        !event.is_active ||
-                                        isDeactivatingEventId === event.id
-                                          ? "cursor-not-allowed border-slate-300 bg-slate-100 text-slate-400 opacity-70"
-                                          : "border-[#FCA5A5] text-red-500 hover:bg-[#FEF2F2]"
-                                      }`}
-                                    >
-                                      {!event.is_active
-                                        ? "Deactivated"
-                                        : isDeactivatingEventId === event.id
-                                        ? "Deactivating..."
-                                        : "Deactivate"}
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() => openEditEventModal(event)}
-                                      className="rounded-full border border-[#E2E8F0] px-2 py-0.5 text-slate-600 hover:bg-[#F8FAFC]"
-                                    >
-                                      Edit
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() => handleDeleteEvent(event.id)}
-                                      disabled={isDeletingEventId === event.id}
-                                      className={`rounded-full border border-[#FCA5A5] px-2 py-0.5 text-red-500 hover:bg-[#FEF2F2] ${
-                                        isDeletingEventId === event.id
-                                          ? "cursor-not-allowed opacity-70"
-                                          : ""
-                                      }`}
-                                    >
-                                      {isDeletingEventId === event.id
-                                        ? "Deleting..."
-                                        : "Delete"}
-                                    </button>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100">
+                            {events.length === 0 || filteredEvents.length === 0 ? (
+                              <tr>
+                                <td className="px-6 py-12 text-center text-slate-400" colSpan={5}>
+                                  <div className="flex flex-col items-center gap-2">
+                                    <span className="text-[13px] font-medium">No events found</span>
+                                    <span className="text-[11px] opacity-70">Start by adding a new event to the system.</span>
                                   </div>
                                 </td>
                               </tr>
-                            ))
-                          )}
-                        </tbody>
-                      </table>
+                            ) : (
+                              filteredEvents.map((event) => (
+                                <tr key={event.id} className="group transition-colors hover:bg-slate-50/50">
+                                  <td className="px-6 py-4 font-bold text-slate-800">{event.name}</td>
+                                  <td className="px-6 py-4 text-slate-500 font-medium">{event.code}</td>
+                                  <td className="px-6 py-4 text-slate-500 font-medium">{event.year}</td>
+                                  <td className="px-6 py-4 text-center">
+                                    <span className={`inline-flex items-center rounded-full px-3 py-1 text-[10px] font-bold uppercase tracking-wider ${event.is_active ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-500"}`}>
+                                      {event.is_active ? "Active" : "Inactive"}
+                                    </span>
+                                  </td>
+                                  <td className="px-6 py-4">
+                                    <div className="flex justify-end gap-2">
+                                      <button
+                                        type="button"
+                                        onClick={() => event.is_active ? handleDeactivateEvent(event.id) : handleSetActiveEvent(event.id)}
+                                        disabled={isSettingActiveEventId === event.id || isDeactivatingEventId === event.id}
+                                        className={`rounded-lg px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider transition-all duration-300 ${
+                                          event.is_active
+                                            ? "border-2 border-red-100 text-red-500 hover:bg-red-50"
+                                            : "border-2 border-emerald-100 text-emerald-600 hover:bg-emerald-50"
+                                        }`}
+                                      >
+                                        {event.is_active ? "Deactivate" : "Activate"}
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => openEditEventModal(event)}
+                                        className="rounded-lg border-2 border-slate-100 p-1.5 text-slate-400 transition-all duration-300 hover:border-[#1F4D3A] hover:bg-[#1F4D3A]/5 hover:text-[#1F4D3A]"
+                                      >
+                                        <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                                        </svg>
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleDeleteEvent(event.id)}
+                                        disabled={isDeletingEventId === event.id}
+                                        className="rounded-lg border-2 border-slate-100 p-1.5 text-slate-400 transition-all duration-300 hover:border-red-200 hover:bg-red-50 hover:text-red-500"
+                                      >
+                                        <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                        </svg>
+                                      </button>
+                                    </div>
+                                  </td>
+                                </tr>
+                              ))
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
                     </div>
                   </div>
-                </div>
-              )}
+                )}
 
               {eventTab === "addContest" && (
-                <div className="space-y-4">
-                  <div className="flex items-center gap-3">
+                <div className="space-y-6">
+                  <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
                     <div className="flex-1">
-                      <div className="mb-2 text-[11px] font-medium text-slate-600">
-                        Select Event
-                      </div>
+                      <label className="mb-2 block text-[13px] font-bold text-slate-700">Filter by Event</label>
+                      <div className="relative max-w-md">
                         <select
-                        value={eventTabEventFilterId ?? ""}
-                        onChange={(e) => setEventTabEventFilterId(e.target.value ? Number(e.target.value) : null)}
-                        className="w-full max-w-[420px] rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
-                      >
-                        <option value="">-- Choose an event --</option>
-                        {events.map((event) => (
-                          <option key={event.id} value={event.id}>
-                            {event.name} ({event.year})
-                          </option>
-                        ))}
-                      </select>
+                          value={eventTabEventFilterId ?? ""}
+                          onChange={(e) => setEventTabEventFilterId(e.target.value ? Number(e.target.value) : null)}
+                          className="w-full appearance-none rounded-2xl border border-slate-200 bg-slate-50/50 px-4 py-3 text-[13px] font-medium text-slate-700 outline-none transition-all focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/10"
+                        >
+                          <option value="">All Events</option>
+                          {events.filter(e => e.is_active).map((event) => (
+                            <option key={event.id} value={event.id}>
+                              {event.name} ({event.year})
+                            </option>
+                          ))}
+                        </select>
+                        <div className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-slate-400">
+                          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+                        </div>
+                      </div>
                     </div>
-                    <div className="w-auto">
-                      <button
-                        type="button"
-                        onClick={openCreateContestModal}
-                        className="inline-flex items-center rounded-full bg-[#1F4D3A] px-3 py-1.5 text-[11px] font-medium text-white shadow-sm transition hover:bg-[#163528]"
-                      >
-                        Add contest
-                      </button>
-                    </div>
+                    <button
+                      type="button"
+                      onClick={openCreateContestModal}
+                      className="group flex items-center gap-2 rounded-2xl bg-emerald-600 px-5 py-2.5 text-[13px] font-bold text-white shadow-[0_8px_20px_-4px_rgba(16,185,129,0.3)] transition-all hover:bg-emerald-700 hover:shadow-[0_12px_25px_-4px_rgba(16,185,129,0.4)] active:scale-95"
+                    >
+                      <svg className="h-4 w-4 transition-transform group-hover:rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 4v16m8-8H4" />
+                      </svg>
+                      Add Contest
+                    </button>
                   </div>
 
-                  <div className="rounded-2xl border border-[#1F4D3A1F] bg-white p-4">
-                    <div className="mb-2 flex items-center justify-between">
-                      <div className="text-[11px] font-medium text-slate-600">
-                        Contest list
+                  <div className="overflow-hidden rounded-[32px] border border-white/40 bg-white/80 shadow-[0_8px_30px_rgb(0,0,0,0.04)] backdrop-blur-xl">
+                    <div className="border-b border-slate-100 bg-slate-50/30 px-8 py-5">
+                      <div className="flex items-center justify-between">
+                        <h3 className="text-[15px] font-bold text-slate-800">Contest List</h3>
+                        <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
+                          {contestsForEventTab.length} Total
+                        </span>
                       </div>
-                      <span className="text-[10px] text-slate-400">
-                        {contestsForEventTab.length === 0
-                          ? "No contests yet"
-                          : `${contestsForEventTab.length} contest${
-                              contestsForEventTab.length > 1 ? "s" : ""
-                            }`}
-                      </span>
                     </div>
+
                     {(contestError || contestSuccess) && (
-                      <div
-                        className={`mb-2 text-[10px] ${
-                          contestError ? "text-red-500" : "text-emerald-600"
-                        }`}
-                      >
+                      <div className={`m-6 rounded-xl p-4 text-[13px] font-medium ${contestError ? "bg-red-50 text-red-500" : "bg-emerald-50 text-emerald-600"}`}>
                         {contestError ?? contestSuccess}
                       </div>
                     )}
+
                     <div className="overflow-x-auto">
-                      <table className="min-w-full border-collapse text-left text-[11px]">
+                      <table className="w-full text-left">
                         <thead>
-                          <tr className="border-b border-[#E2E8F0] bg-[#F5F7FF] text-[10px] uppercase tracking-wide text-slate-500">
-                            <th className="px-3 py-2 font-medium">Contest</th>
-                            <th className="px-3 py-2 font-medium">Code</th>
-                            <th className="px-3 py-2 font-medium">Event</th>
-                            <th className="px-3 py-2 font-medium">Divisions</th>
-                            <th className="px-3 py-2 font-medium">Actions</th>
+                          <tr className="bg-slate-50/50 text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                            <th className="px-8 py-4">Contest Name</th>
+                            <th className="px-8 py-4">Code</th>
+                            <th className="px-8 py-4">Event</th>
+                            <th className="px-8 py-4">Divisions</th>
+                            <th className="px-8 py-4 text-right">Actions</th>
                           </tr>
                         </thead>
-                        <tbody>
+                        <tbody className="divide-y divide-slate-100">
                           {contestsForEventTab.length === 0 ? (
-                            <tr className="border-b border-[#F1F5F9]">
-                              <td
-                                className="px-3 py-2 text-slate-400"
-                                colSpan={5}
-                              >
-                                Once you add contests, you can edit or delete
-                                them here.
+                            <tr>
+                              <td colSpan={5} className="px-8 py-12 text-center">
+                                <div className="flex flex-col items-center justify-center text-slate-400">
+                                  <svg className="mb-2 h-10 w-10 opacity-20" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" /></svg>
+                                  <span className="text-sm">No contests found for this selection.</span>
+                                </div>
                               </td>
                             </tr>
                           ) : (
                             contestsForEventTab.map((contest) => (
-                              <tr
-                                key={contest.id}
-                                className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC]"
-                              >
-                                <td className="px-3 py-2 font-medium text-slate-700">
-                                  {contest.name}
+                              <tr key={contest.id} className="group transition-colors hover:bg-slate-50/50">
+                                <td className="px-8 py-5">
+                                  <div className="text-[13px] font-bold text-slate-800">{contest.name}</div>
                                 </td>
-                                <td className="px-3 py-2 text-slate-600">
-                                  {contest.contest_code ?? "—"}
+                                <td className="px-8 py-5">
+                                  <span className="inline-flex items-center rounded-lg bg-slate-100 px-2 py-1 text-[11px] font-bold text-slate-600">
+                                    {contest.contest_code ?? "—"}
+                                  </span>
                                 </td>
-                                <td className="px-3 py-2 text-slate-600">
-                                  {events.find(
-                                    (event) => event.id === contest.event_id,
-                                  )?.name ?? "Unknown event"}
+                                <td className="px-8 py-5 text-[13px] text-slate-600">
+                                  {events.find(e => e.id === contest.event_id)?.name ?? "Unknown"}
                                 </td>
-                                <td className="px-3 py-2">
-                                  {categories
-                                    .filter(
-                                      (category) => category.event_id === contest.event_id,
-                                    )
-                                    .length === 0 ? (
-                                    <span className="text-[10px] text-slate-400">
-                                      No divisions yet
-                                    </span>
-                                  ) : (
-                                    <div className="flex flex-wrap gap-1.5">
-                                      {categories
-                                        .filter(
-                                          (category) => category.event_id === contest.event_id,
-                                        )
-                                        .map((division) => (
-                                          <span
-                                            key={division.id}
-                                            className="inline-flex items-center rounded-full bg-[#E3F2EA] px-2 py-0.5 text-[10px] text-[#1F4D3A]"
-                                          >
-                                            {division.name}
-                                          </span>
-                                        ))}
-                                    </div>
-                                  )}
+                                <td className="px-8 py-5">
+                                  <div className="flex flex-wrap gap-1.5">
+                                    {categories.filter(c => c.event_id === contest.event_id).length === 0 ? (
+                                      <span className="text-[11px] italic text-slate-400">No divisions</span>
+                                    ) : (
+                                      categories.filter(c => c.event_id === contest.event_id).map((division) => (
+                                        <span key={division.id} className="inline-flex items-center rounded-lg bg-emerald-50 px-2 py-0.5 text-[10px] font-bold text-emerald-700 ring-1 ring-emerald-600/10">
+                                          {division.name}
+                                        </span>
+                                      ))
+                                    )}
+                                  </div>
                                 </td>
-                                <td className="px-3 py-2">
-                                  <div className="flex gap-1.5 text-[10px]">
+                                <td className="px-8 py-5 text-right">
+                                  <div className="flex justify-end gap-2">
                                     <button
-                                      type="button"
                                       onClick={() => openEditContestModal(contest)}
-                                      className="rounded-full border border-[#E2E8F0] px-2 py-0.5 text-slate-600 hover:bg-[#F8FAFC]"
+                                      className="flex h-9 w-9 items-center justify-center rounded-xl bg-white text-slate-600 shadow-sm ring-1 ring-slate-200 transition-all hover:bg-slate-50 hover:text-emerald-600"
                                     >
-                                      Edit
+                                      <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
                                     </button>
                                     <button
-                                      type="button"
-                                      onClick={() =>
-                                        handleDeleteContest(contest.id)
-                                      }
+                                      onClick={() => handleDeleteContest(contest.id)}
                                       disabled={isDeletingContestId === contest.id}
-                                      className={`rounded-full border border-[#FCA5A5] px-2 py-0.5 text-red-500 hover:bg-[#FEF2F2] ${
-                                        isDeletingContestId === contest.id
-                                          ? "cursor-not-allowed opacity-70"
-                                          : ""
-                                      }`}
+                                      className="flex h-9 w-9 items-center justify-center rounded-xl bg-white text-slate-600 shadow-sm ring-1 ring-slate-200 transition-all hover:bg-red-50 hover:text-red-600 disabled:opacity-50"
                                     >
-                                      {isDeletingContestId === contest.id
-                                        ? "Deleting..."
-                                        : "Delete"}
+                                      {isDeletingContestId === contest.id ? (
+                                        <div className="h-4 w-4 animate-spin rounded-full border-2 border-red-600 border-t-transparent" />
+                                      ) : (
+                                        <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                                      )}
                                     </button>
                                   </div>
                                 </td>
@@ -7228,126 +6932,108 @@ export default function AdminDashboard() {
               )}
 
               {eventTab === "addCriteria" && (
-                <div className="space-y-4">
-                    <div className="flex items-center gap-3">
-                      <div className="flex-1">
-                        <div className="mb-2 text-[11px] font-medium text-slate-600">
-                          Select Event
-                        </div>
+                <div className="space-y-6">
+                  <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+                    <div className="flex-1">
+                      <label className="mb-2 block text-[13px] font-bold text-slate-700">Filter by Event</label>
+                      <div className="relative max-w-md">
                         <select
                           value={eventTabEventFilterId ?? ""}
                           onChange={(e) => setEventTabEventFilterId(e.target.value ? Number(e.target.value) : null)}
-                          className="w-full max-w-[420px] rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                          className="w-full appearance-none rounded-2xl border border-slate-200 bg-slate-50/50 px-4 py-3 text-[13px] font-medium text-slate-700 outline-none transition-all focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/10"
                         >
-                          <option value="">-- Choose an event --</option>
-                          {events.map((event) => (
+                          <option value="">All Events</option>
+                          {events.filter(e => e.is_active).map((event) => (
                             <option key={event.id} value={event.id}>
                               {event.name} ({event.year})
                             </option>
                           ))}
                         </select>
+                        <div className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-slate-400">
+                          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+                        </div>
                       </div>
-                      <div className="w-auto">
-                        <button
-                          type="button"
-                          onClick={openCreateCriteriaModal}
-                          className="inline-flex items-center rounded-full bg-[#1F4D3A] px-3 py-1.5 text-[11px] font-medium text-white shadow-sm transition hover:bg-[#163528]"
-                        >
-                          Add criteria
-                        </button>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={openCreateCriteriaModal}
+                      className="group flex items-center gap-2 rounded-2xl bg-emerald-600 px-5 py-2.5 text-[13px] font-bold text-white shadow-[0_8px_20px_-4px_rgba(16,185,129,0.3)] transition-all hover:bg-emerald-700 hover:shadow-[0_12px_25px_-4px_rgba(16,185,129,0.4)] active:scale-95"
+                    >
+                      <svg className="h-4 w-4 transition-transform group-hover:rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 4v16m8-8H4" />
+                      </svg>
+                      Add Criteria
+                    </button>
+                  </div>
+
+                  <div className="overflow-hidden rounded-[32px] border border-white/40 bg-white/80 shadow-[0_8px_30px_rgb(0,0,0,0.04)] backdrop-blur-xl">
+                    <div className="border-b border-slate-100 bg-slate-50/30 px-8 py-5">
+                      <div className="flex items-center justify-between">
+                        <h3 className="text-[15px] font-bold text-slate-800">Criteria List</h3>
+                        <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
+                          {criteriaForEventTab.length} Total
+                        </span>
                       </div>
                     </div>
 
-                  <div className="rounded-2xl border border-[#1F4D3A1F] bg-white p-4">
-                    <div className="mb-2 flex items-center justify-between">
-                      <div className="text-[11px] font-medium text-slate-600">
-                        Criteria list
-                      </div>
-                      <span className="text-[10px] text-slate-400">
-                        {criteriaForEventTab.length === 0
-                          ? "No criteria yet"
-                          : `${criteriaForEventTab.length} criteria`}
-                      </span>
-                    </div>
                     {(criteriaError || criteriaSuccess) && (
-                      <div
-                        className={`mb-2 text-[10px] ${
-                          criteriaError ? "text-red-500" : "text-emerald-600"
-                        }`}
-                      >
+                      <div className={`m-6 rounded-xl p-4 text-[13px] font-medium ${criteriaError ? "bg-red-50 text-red-500" : "bg-emerald-50 text-emerald-600"}`}>
                         {criteriaError ?? criteriaSuccess}
                       </div>
                     )}
+
                     <div className="overflow-x-auto">
-                      <table className="min-w-full border-collapse text-left text-[11px]">
+                      <table className="w-full text-left">
                         <thead>
-                          <tr className="border-b border-[#E2E8F0] bg-[#F5F7FF] text-[10px] uppercase tracking-wide text-slate-500">
-                            <th className="px-3 py-2 font-medium">Category</th>
-                            <th className="px-3 py-2 font-medium">Criteria</th>
-                            <th className="px-3 py-2 font-medium">Code</th>
-                            <th className="px-3 py-2 font-medium">Contest</th>
-                            <th className="px-3 py-2 font-medium">
-                              {criteriaValueHeader}
-                            </th>
-                            <th className="px-3 py-2 font-medium">Actions</th>
+                          <tr className="bg-slate-50/50 text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                            <th className="px-8 py-4">Category</th>
+                            <th className="px-8 py-4">Criteria Name</th>
+                            <th className="px-8 py-4">{criteriaValueHeader}</th>
+                            <th className="px-8 py-4 text-right">Actions</th>
                           </tr>
                         </thead>
-                        <tbody>
+                        <tbody className="divide-y divide-slate-100">
                           {criteriaForEventTab.length === 0 ? (
-                            <tr className="border-b border-[#F1F5F9]">
-                              <td
-                                className="px-3 py-2 text-slate-400"
-                                colSpan={6}
-                              >
-                                Once you add criteria, you can edit or delete them
-                                here.
+                            <tr>
+                              <td colSpan={4} className="px-8 py-12 text-center">
+                                <div className="flex flex-col items-center justify-center text-slate-400">
+                                  <svg className="mb-2 h-10 w-10 opacity-20" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+                                  <span className="text-sm">No criteria found for this selection.</span>
+                                </div>
                               </td>
                             </tr>
                           ) : (
                             criteriaForEventTab.map((criteria) => (
-                              <tr
-                                key={criteria.id}
-                                className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC]"
-                              >
-                                <td className="px-3 py-2 text-slate-600">
+                              <tr key={criteria.id} className="group transition-colors hover:bg-slate-50/50">
+                                <td className="px-8 py-5 text-[13px] text-slate-600">
                                   {criteria.category ?? "—"}
                                 </td>
-                                <td className="px-3 py-2 font-medium text-slate-700">
-                                  {criteria.name}
+                                <td className="px-8 py-5">
+                                  <div className="text-[13px] font-bold text-slate-800">{criteria.name}</div>
                                 </td>
-                                <td className="px-3 py-2 text-slate-600">
-                                  {criteria.criteria_code ?? "—"}
+                                <td className="px-8 py-5">
+                                  <span className="inline-flex items-center rounded-lg bg-emerald-50 px-2.5 py-1 text-[11px] font-bold text-emerald-700 ring-1 ring-emerald-600/10">
+                                    {criteria.percentage}
+                                  </span>
                                 </td>
-                                <td className="px-3 py-2 text-slate-600">
-                                  {contests.find(
-                                    (contest) => contest.id === criteria.contest_id,
-                                  )?.name ?? "Unknown contest"}
-                                </td>
-                                <td className="px-3 py-2 text-slate-600">
-                                  {criteria.percentage}
-                                </td>
-                                <td className="px-3 py-2">
-                                  <div className="flex gap-1.5 text-[10px]">
+                                <td className="px-8 py-5 text-right">
+                                  <div className="flex justify-end gap-2">
                                     <button
-                                      type="button"
                                       onClick={() => openEditCriteriaModal(criteria)}
-                                      className="rounded-full border border-[#E2E8F0] px-2 py-0.5 text-slate-600 hover:bg-[#F8FAFC]"
+                                      className="flex h-9 w-9 items-center justify-center rounded-xl bg-white text-slate-600 shadow-sm ring-1 ring-slate-200 transition-all hover:bg-slate-50 hover:text-emerald-600"
                                     >
-                                      Edit
+                                      <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
                                     </button>
                                     <button
-                                      type="button"
                                       onClick={() => handleDeleteCriteria(criteria.id)}
                                       disabled={isDeletingCriteriaId === criteria.id}
-                                      className={`rounded-full border border-[#FCA5A5] px-2 py-0.5 text-red-500 hover:bg-[#FEF2F2] ${
-                                        isDeletingCriteriaId === criteria.id
-                                          ? "cursor-not-allowed opacity-70"
-                                          : ""
-                                      }`}
+                                      className="flex h-9 w-9 items-center justify-center rounded-xl bg-white text-slate-600 shadow-sm ring-1 ring-slate-200 transition-all hover:bg-red-50 hover:text-red-600 disabled:opacity-50"
                                     >
-                                      {isDeletingCriteriaId === criteria.id
-                                        ? "Deleting..."
-                                        : "Delete"}
+                                      {isDeletingCriteriaId === criteria.id ? (
+                                        <div className="h-4 w-4 animate-spin rounded-full border-2 border-red-600 border-t-transparent" />
+                                      ) : (
+                                        <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                                      )}
                                     </button>
                                   </div>
                                 </td>
@@ -7362,148 +7048,136 @@ export default function AdminDashboard() {
               )}
 
               {eventTab === "awards" && (
-                <div className="space-y-4">
-                  <div className="flex items-center gap-3">
+                <div className="space-y-6">
+                  <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
                     <div className="flex-1">
-                      <div className="mb-2 text-[11px] font-medium text-slate-600">
-                        Select Event
+                      <label className="mb-2 block text-[13px] font-bold text-slate-700">Filter by Event</label>
+                      <div className="relative max-w-md">
+                        <select
+                          value={eventTabEventFilterId ?? ""}
+                          onChange={(e) => setEventTabEventFilterId(e.target.value ? Number(e.target.value) : null)}
+                          className="w-full appearance-none rounded-2xl border border-slate-200 bg-slate-50/50 px-4 py-3 text-[13px] font-medium text-slate-700 outline-none transition-all focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/10"
+                        >
+                          <option value="">All Events</option>
+                          {events.filter(e => e.is_active).map((event) => (
+                            <option key={event.id} value={event.id}>
+                              {event.name} ({event.year})
+                            </option>
+                          ))}
+                        </select>
+                        <div className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-slate-400">
+                          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+                        </div>
                       </div>
-                      <select
-                        value={eventTabEventFilterId ?? ""}
-                        onChange={(e) => setEventTabEventFilterId(e.target.value ? Number(e.target.value) : null)}
-                        className="w-full max-w-[420px] rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
-                      >
-                        <option value="">-- Choose an event --</option>
-                        {events.map((event) => (
-                          <option key={event.id} value={event.id}>
-                            {event.name} ({event.year})
-                          </option>
-                        ))}
-                      </select>
                     </div>
-                    <div className="w-auto">
-                      <button
-                        type="button"
-                        onClick={openCreateAwardModal}
-                        className="inline-flex items-center rounded-full bg-[#1F4D3A] px-3 py-1.5 text-[11px] font-medium text-white shadow-sm transition hover:bg-[#163528]"
-                      >
-                        Add award
-                      </button>
-                    </div>
+                    <button
+                      type="button"
+                      onClick={openCreateAwardModal}
+                      className="group flex items-center gap-2 rounded-2xl bg-emerald-600 px-5 py-2.5 text-[13px] font-bold text-white shadow-[0_8px_20px_-4px_rgba(16,185,129,0.3)] transition-all hover:bg-emerald-700 hover:shadow-[0_12px_25px_-4px_rgba(16,185,129,0.4)] active:scale-95"
+                    >
+                      <svg className="h-4 w-4 transition-transform group-hover:rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 4v16m8-8H4" />
+                      </svg>
+                      Add Award
+                    </button>
                   </div>
 
-                  <div className="rounded-2xl border border-[#1F4D3A1F] bg-white p-4">
-                    <div className="mb-2 flex items-center justify-between">
-                      <div className="text-[11px] font-medium text-slate-600">
-                        Awards list
-                      </div>
-                      <div className="flex items-center gap-3">
-                        <input
-                          placeholder="Search awards"
-                          value={awardSearch}
-                          onChange={(e) => setAwardSearch(e.target.value)}
-                          className="rounded-xl border border-[#D0D7E2] bg-white px-3 py-1 text-xs outline-none"
-                        />
-                        <span className="text-[10px] text-slate-400">
-                          {awardsForEventTab.length === 0
-                            ? "No awards"
-                            : `${awardsForEventTab.length} award${awardsForEventTab.length > 1 ? "s" : ""}`}
-                        </span>
+                  <div className="overflow-hidden rounded-[32px] border border-white/40 bg-white/80 shadow-[0_8px_30px_rgb(0,0,0,0.04)] backdrop-blur-xl">
+                    <div className="border-b border-slate-100 bg-slate-50/30 px-8 py-5">
+                      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                        <h3 className="text-[15px] font-bold text-slate-800">Awards List</h3>
+                        <div className="flex items-center gap-3">
+                          <div className="relative">
+                            <input
+                              placeholder="Search awards..."
+                              value={awardSearch}
+                              onChange={(e) => setAwardSearch(e.target.value)}
+                              className="w-full rounded-xl border border-slate-200 bg-white px-9 py-2 text-[12px] font-medium text-slate-700 outline-none transition-all focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10"
+                            />
+                            <div className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400">
+                              <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+                            </div>
+                          </div>
+                          <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
+                            {awardsForEventTab.length} Total
+                          </span>
+                        </div>
                       </div>
                     </div>
+
                     {(awardError || awardSuccess) && (
-                      <div
-                        className={`mb-2 text-[10px] ${
-                          awardError ? "text-red-500" : "text-emerald-600"
-                        }`}
-                      >
+                      <div className={`m-6 rounded-xl p-4 text-[13px] font-medium ${awardError ? "bg-red-50 text-red-500" : "bg-emerald-50 text-emerald-600"}`}>
                         {awardError ?? awardSuccess}
                       </div>
                     )}
+
                     <div className="overflow-x-auto">
-                      <table className="min-w-full border-collapse text-left text-[11px]">
+                      <table className="w-full text-left">
                         <thead>
-                          <tr className="border-b border-[#E2E8F0] bg-[#F5F7FF] text-[10px] uppercase tracking-wide text-slate-500">
-                            <th className="px-3 py-2 font-medium">Name</th>
-                            <th className="px-3 py-2 font-medium">Type</th>
-                            <th className="px-3 py-2 font-medium">Contest</th>
-                            <th className="px-3 py-2 font-medium">Category</th>
-                            <th className="px-3 py-2 font-medium">Active</th>
-                            <th className="px-3 py-2 font-medium">Actions</th>
+                          <tr className="bg-slate-50/50 text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                            <th className="px-8 py-4">Award Name</th>
+                            <th className="px-8 py-4">Type</th>
+                            <th className="px-8 py-4">Contest</th>
+                            <th className="px-8 py-4">Criteria Category</th>
+                            <th className="px-8 py-4 text-right">Actions</th>
                           </tr>
                         </thead>
-                        <tbody>
+                        <tbody className="divide-y divide-slate-100">
                           {awardsForEventTab.length === 0 ? (
-                            <tr className="border-b border-[#F1F5F9]">
-                              <td
-                                className="px-3 py-2 text-slate-400"
-                                colSpan={6}
-                              >
-                                Once you add awards, you can edit or delete them
-                                here.
+                            <tr>
+                              <td colSpan={5} className="px-8 py-12 text-center">
+                                <div className="flex flex-col items-center justify-center text-slate-400">
+                                  <svg className="mb-2 h-10 w-10 opacity-20" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" /></svg>
+                                  <span className="text-sm">No awards found for this selection.</span>
+                                </div>
                               </td>
                             </tr>
                           ) : (
                             awardsForEventTab.map((award) => (
-                              <tr
-                                key={award.id}
-                                className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC]"
-                              >
-                                <td className="px-3 py-2 font-medium text-slate-700">
-                                  {award.name}
+                              <tr key={award.id} className="group transition-colors hover:bg-slate-50/50">
+                                <td className="px-8 py-5">
+                                  <div className="text-[13px] font-bold text-slate-800">{award.name}</div>
                                 </td>
-                                <td className="px-3 py-2 text-slate-600">
-                                  {award.award_type === "criteria"
-                                    ? "Criteria-based"
-                                    : "Special"}
+                                <td className="px-8 py-5">
+                                  <span className={`inline-flex items-center rounded-lg px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${award.award_type === "criteria" ? "bg-blue-50 text-blue-700 ring-1 ring-blue-600/10" : "bg-purple-50 text-purple-700 ring-1 ring-purple-600/10"}`}>
+                                    {award.award_type === "criteria" ? "Criteria-based" : "Special"}
+                                  </span>
                                 </td>
-                                <td className="px-3 py-2 text-slate-600">
-                                  {award.contest_id === null
-                                    ? "All contests"
-                                    : contests.find(
-                                        (contest) =>
-                                          contest.id === award.contest_id,
-                                      )?.name ?? "Unknown contest"}
+                                <td className="px-8 py-5 text-[13px] text-slate-600">
+                                  {award.contest_id === null ? (
+                                    <span className="italic">All contests</span>
+                                  ) : (
+                                    contests.find(c => c.id === award.contest_id)?.name ?? "Unknown"
+                                  )}
                                 </td>
-                                <td className="px-3 py-2 text-slate-600">
-                                  {award.award_type === "criteria"
-                                    ? (() => {
-                                        const ids = award.criteria_ids ?? (award.criteria_id ? [award.criteria_id] : []);
-                                        if (ids.length === 0) return "—";
-                                        
-                                        const categories = Array.from(new Set(ids
-                                          .map(id => criteriaList.find(c => c.id === id)?.category || "Uncategorized")
-                                          .filter(Boolean)));
-                                          
-                                        return categories.length > 0 ? categories.join(", ") : "Unknown category";
-                                      })()
-                                    : "—"}
+                                <td className="px-8 py-5">
+                                  <div className="text-[13px] text-slate-600">
+                                    {award.award_type === "criteria" ? (() => {
+                                      const ids = award.criteria_ids ?? (award.criteria_id ? [award.criteria_id] : []);
+                                      if (ids.length === 0) return "—";
+                                      const cats = Array.from(new Set(ids.map(id => criteriaList.find(c => c.id === id)?.category || "Uncategorized").filter(Boolean)));
+                                      return cats.length > 0 ? cats.join(", ") : "Unknown category";
+                                    })() : "—"}
+                                  </div>
                                 </td>
-                                <td className="px-3 py-2 text-slate-600">
-                                  {award.is_active ? "Yes" : "No"}
-                                </td>
-                                <td className="px-3 py-2">
-                                  <div className="flex gap-1.5 text-[10px]">
+                                <td className="px-8 py-5 text-right">
+                                  <div className="flex justify-end gap-2">
                                     <button
-                                      type="button"
                                       onClick={() => openEditAwardModal(award)}
-                                      className="rounded-full border border-[#E2E8F0] px-2 py-0.5 text-slate-600 hover:bg-[#F8FAFC]"
+                                      className="flex h-9 w-9 items-center justify-center rounded-xl bg-white text-slate-600 shadow-sm ring-1 ring-slate-200 transition-all hover:bg-slate-50 hover:text-emerald-600"
                                     >
-                                      Edit
+                                      <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
                                     </button>
                                     <button
-                                      type="button"
                                       onClick={() => handleDeleteAward(award.id)}
                                       disabled={isDeletingAwardId === award.id}
-                                      className={`rounded-full border border-[#FCA5A5] px-2 py-0.5 text-red-500 hover:bg-[#FEF2F2] ${
-                                        isDeletingAwardId === award.id
-                                          ? "cursor-not-allowed opacity-70"
-                                          : ""
-                                      }`}
+                                      className="flex h-9 w-9 items-center justify-center rounded-xl bg-white text-slate-600 shadow-sm ring-1 ring-slate-200 transition-all hover:bg-red-50 hover:text-red-600 disabled:opacity-50"
                                     >
-                                      {isDeletingAwardId === award.id
-                                        ? "Deleting..."
-                                        : "Delete"}
+                                      {isDeletingAwardId === award.id ? (
+                                        <div className="h-4 w-4 animate-spin rounded-full border-2 border-red-600 border-t-transparent" />
+                                      ) : (
+                                        <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                                      )}
                                     </button>
                                   </div>
                                 </td>
@@ -7518,20 +7192,11 @@ export default function AdminDashboard() {
               )}
 
               {eventTab === "template" && (
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between">
-                    <div className="text-[11px] font-medium text-slate-600">
-                      Templates
-                    </div>
-                    <div className="text-[10px] text-slate-500">
-                      Choose how the judge scoring layout should look.
-                    </div>
-                  </div>
-
-                  <div className="rounded-2xl border border-[#1F4D3A1F] bg-white p-4">
-                    <div className="mb-3 grid gap-3 text-[10px] sm:grid-cols-2">
-                      <div>
-                        <div className="mb-1 text-slate-500">Contest</div>
+                <div className="space-y-6">
+                  <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
+                    <div className="flex-1">
+                      <label className="mb-2 block text-[13px] font-bold text-slate-700">Select Contest</label>
+                      <div className="relative max-w-md">
                         <select
                           value={selectedContestIdForTemplate ?? ""}
                           onChange={(event) => {
@@ -7540,193 +7205,190 @@ export default function AdminDashboard() {
                               value ? Number.parseInt(value, 10) : null,
                             );
                           }}
-                          className="w-full rounded-full border border-[#D0D7E2] bg-white px-3 py-1.5 text-[10px] outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                          className="w-full appearance-none rounded-2xl border border-slate-200 bg-slate-50/50 px-4 py-3 text-[13px] font-medium text-slate-700 outline-none transition-all focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/10"
                         >
-                          <option value="">Select contest</option>
-                          {contestsForActiveEvent.map((contest) => (
+                          <option value="">Choose contest</option>
+                          {contestsForEventTab.map((contest) => (
                             <option key={contest.id} value={contest.id}>
                               {contest.name}
                             </option>
                           ))}
                         </select>
-                      </div>
-                      <div>
-                        <div className="mb-1 text-slate-500">Template</div>
-                        <div className="flex flex-wrap gap-2">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setSelectedTemplateKey("standard");
-                              setSelectedTemplateId(null);
-                            }}
-                            className={`rounded-full border px-3 py-1.5 text-[10px] ${
-                              selectedTemplateKey === "standard"
-                                ? "border-[#1F4D3A] bg-[#1F4D3A] text-white"
-                                : "border-[#D0D7E2] bg-[#F5F7FF] text-[#1F4D3A]"
-                            }`}
-                          >
-                            Standard
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setSelectedTemplateKey("pageant");
-                              setSelectedTemplateId(null);
-                            }}
-                            className={`rounded-full border px-3 py-1.5 text-[10px] ${
-                              selectedTemplateKey === "pageant"
-                                ? "border-[#1F4D3A] bg-[#1F4D3A] text-white"
-                                : "border-[#D0D7E2] bg-[#F5F7FF] text-[#1F4D3A]"
-                            }`}
-                          >
-                            Pageant
-                          </button>
+                        <div className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-slate-400">
+                          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
                         </div>
                       </div>
                     </div>
 
+                    <div className="flex flex-col gap-2">
+                      <label className="text-[13px] font-bold text-slate-700">Layout Theme</label>
+                      <div className="flex items-center gap-1 rounded-2xl bg-slate-100/50 p-1.5">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedTemplateKey("standard");
+                            setSelectedTemplateId(null);
+                          }}
+                          className={`rounded-xl px-5 py-2 text-[13px] font-semibold transition-all duration-300 ${
+                            selectedTemplateKey === "standard"
+                              ? "bg-white text-emerald-700 shadow-sm"
+                              : "text-slate-500 hover:text-slate-700"
+                          }`}
+                        >
+                          Standard
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedTemplateKey("pageant");
+                            setSelectedTemplateId(null);
+                          }}
+                          className={`rounded-xl px-5 py-2 text-[13px] font-semibold transition-all duration-300 ${
+                            selectedTemplateKey === "pageant"
+                              ? "bg-white text-emerald-700 shadow-sm"
+                              : "text-slate-500 hover:text-slate-700"
+                          }`}
+                        >
+                          Pageant
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="overflow-hidden rounded-[32px] border border-white/40 bg-white/80 p-8 shadow-[0_8px_30px_rgb(0,0,0,0.04)] backdrop-blur-xl">
                     {selectedTemplateKey === "pageant" && (
-                      <div className="mb-3 space-y-3 text-[10px]">
+                      <div className="space-y-4">
                         <PageantSection
                           title="Groups and badges"
                           sectionKey="groupsAndBadges"
                           isOpen={openPageantSections.groupsAndBadges}
                           onToggle={handleTogglePageantSection}
                         >
-                          <div className="grid gap-3 sm:grid-cols-4">
-                            <div className="space-y-1">
-                              <div className="text-slate-500">Workspace background</div>
-                              <input
-                                type="color"
-                                className="h-8 w-full cursor-pointer rounded-full border border-[#D0D7E2] bg-white px-2"
-                                value={templateTheme.workspaceBg ?? "#F8FAFC"}
-                                onChange={(event) =>
-                                  updateTemplateTheme({
-                                    workspaceBg: event.target.value,
-                                  })
-                                }
-                              />
-                              <div className="text-[9px] text-slate-400">Opacity (%)</div>
-                              <input
-                                type="range"
-                                min={0}
-                                max={100}
-                                className="w-full rounded-full border border-[#D0D7E2] bg-white px-3 py-1 text-[10px] outline-none"
-                                value={templateTheme.workspaceBgOpacity ?? 100}
-                                onChange={(event) =>
-                                  updateTemplateTheme({
-                                    workspaceBgOpacity: Number(event.target.value) || 0,
-                                  })
-                                }
-                              />
+                          <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+                            <div className="space-y-3">
+                              <label className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Workspace Background</label>
+                              <div className="flex items-center gap-3">
+                                <input
+                                  type="color"
+                                  className="h-10 w-10 cursor-pointer rounded-xl border border-slate-200 bg-white p-1 shadow-sm transition-all hover:scale-105"
+                                  value={templateTheme.workspaceBg ?? "#F8FAFC"}
+                                  onChange={(event) => updateTemplateTheme({ workspaceBg: event.target.value })}
+                                />
+                                <div className="flex-1 space-y-1">
+                                  <div className="flex items-center justify-between">
+                                    <span className="text-[11px] font-medium text-slate-500">Opacity</span>
+                                    <span className="text-[11px] font-bold text-slate-700">{templateTheme.workspaceBgOpacity ?? 100}%</span>
+                                  </div>
+                                  <input
+                                    type="range"
+                                    min={0}
+                                    max={100}
+                                    className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-slate-100 accent-emerald-500"
+                                    value={templateTheme.workspaceBgOpacity ?? 100}
+                                    onChange={(event) => updateTemplateTheme({ workspaceBgOpacity: Number(event.target.value) || 0 })}
+                                  />
+                                </div>
+                              </div>
                             </div>
-                            <div className="space-y-1">
-                              <div className="text-slate-500">Female group background</div>
-                              <input
-                                type="color"
-                                className="h-8 w-full cursor-pointer rounded-full border border-[#D0D7E2] bg-white px-2"
-                                value={templateTheme.femaleGroupBg ?? "#ffe4e6"}
-                                onChange={(event) =>
-                                  updateTemplateTheme({
-                                    femaleGroupBg: event.target.value,
-                                  })
-                                }
-                              />
-                              <div className="text-[9px] text-slate-400">Opacity (%)</div>
-                              <input
-                                type="range"
-                                min={0}
-                                max={100}
-                                className="w-full rounded-full border border-[#D0D7E2] bg-white px-3 py-1 text-[10px] outline-none"
-                                value={templateTheme.femaleGroupBgOpacity ?? 100}
-                                onChange={(event) =>
-                                  updateTemplateTheme({
-                                    femaleGroupBgOpacity:
-                                      Number(event.target.value) || 0,
-                                  })
-                                }
-                              />
+
+                            <div className="space-y-3">
+                              <label className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Female Group Theme</label>
+                              <div className="flex items-center gap-3">
+                                <div className="flex flex-col gap-2">
+                                  <input
+                                    type="color"
+                                    className="h-8 w-16 cursor-pointer rounded-lg border border-slate-200 bg-white p-1 shadow-sm transition-all hover:scale-105"
+                                    value={templateTheme.femaleGroupBg ?? "#ffe4e6"}
+                                    onChange={(event) => updateTemplateTheme({ femaleGroupBg: event.target.value })}
+                                  />
+                                  <input
+                                    type="color"
+                                    className="h-8 w-16 cursor-pointer rounded-lg border border-slate-200 bg-white p-1 shadow-sm transition-all hover:scale-105"
+                                    value={templateTheme.femaleBadgeBg ?? "#ec4899"}
+                                    onChange={(event) => updateTemplateTheme({ femaleBadgeBg: event.target.value })}
+                                  />
+                                </div>
+                                <div className="flex-1 space-y-2">
+                                  <div className="space-y-1">
+                                    <div className="flex items-center justify-between text-[10px]">
+                                      <span className="font-medium text-slate-500">Group Opacity</span>
+                                      <span className="font-bold text-slate-700">{templateTheme.femaleGroupBgOpacity ?? 100}%</span>
+                                    </div>
+                                    <input
+                                      type="range"
+                                      min={0}
+                                      max={100}
+                                      className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-slate-100 accent-pink-500"
+                                      value={templateTheme.femaleGroupBgOpacity ?? 100}
+                                      onChange={(event) => updateTemplateTheme({ femaleGroupBgOpacity: Number(event.target.value) || 0 })}
+                                    />
+                                  </div>
+                                  <div className="space-y-1">
+                                    <div className="flex items-center justify-between text-[10px]">
+                                      <span className="font-medium text-slate-500">Badge Opacity</span>
+                                      <span className="font-bold text-slate-700">{templateTheme.femaleBadgeBgOpacity ?? 100}%</span>
+                                    </div>
+                                    <input
+                                      type="range"
+                                      min={0}
+                                      max={100}
+                                      className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-slate-100 accent-pink-600"
+                                      value={templateTheme.femaleBadgeBgOpacity ?? 100}
+                                      onChange={(event) => updateTemplateTheme({ femaleBadgeBgOpacity: Number(event.target.value) || 0 })}
+                                    />
+                                  </div>
+                                </div>
+                              </div>
                             </div>
-                            <div className="space-y-1">
-                              <div className="text-slate-500">Female badge color</div>
-                              <input
-                                type="color"
-                                className="h-8 w-full cursor-pointer rounded-full border border-[#D0D7E2] bg-white px-2"
-                                value={templateTheme.femaleBadgeBg ?? "#ec4899"}
-                                onChange={(event) =>
-                                  updateTemplateTheme({
-                                    femaleBadgeBg: event.target.value,
-                                  })
-                                }
-                              />
-                              <div className="text-[9px] text-slate-400">Opacity (%)</div>
-                              <input
-                                type="range"
-                                min={0}
-                                max={100}
-                                className="w-full rounded-full border border-[#D0D7E2] bg-white px-3 py-1 text-[10px] outline-none"
-                                value={templateTheme.femaleBadgeBgOpacity ?? 100}
-                                onChange={(event) =>
-                                  updateTemplateTheme({
-                                    femaleBadgeBgOpacity:
-                                      Number(event.target.value) || 0,
-                                  })
-                                }
-                              />
-                            </div>
-                            <div className="space-y-1">
-                              <div className="text-slate-500">Male group background</div>
-                              <input
-                                type="color"
-                                className="h-8 w-full cursor-pointer rounded-full border border-[#D0D7E2] bg-white px-2"
-                                value={templateTheme.maleGroupBg ?? "#e0f2fe"}
-                                onChange={(event) =>
-                                  updateTemplateTheme({
-                                    maleGroupBg: event.target.value,
-                                  })
-                                }
-                              />
-                              <div className="text-[9px] text-slate-400">Opacity (%)</div>
-                              <input
-                                type="range"
-                                min={0}
-                                max={100}
-                                className="w-full rounded-full border border-[#D0D7E2] bg-white px-3 py-1 text-[10px] outline-none"
-                                value={templateTheme.maleGroupBgOpacity ?? 100}
-                                onChange={(event) =>
-                                  updateTemplateTheme({
-                                    maleGroupBgOpacity:
-                                      Number(event.target.value) || 0,
-                                  })
-                                }
-                              />
-                            </div>
-                            <div className="space-y-1">
-                              <div className="text-slate-500">Male badge color</div>
-                              <input
-                                type="color"
-                                className="h-8 w-full cursor-pointer rounded-full border border-[#D0D7E2] bg-white px-2"
-                                value={templateTheme.maleBadgeBg ?? "#0ea5e9"}
-                                onChange={(event) =>
-                                  updateTemplateTheme({
-                                    maleBadgeBg: event.target.value,
-                                  })
-                                }
-                              />
-                              <div className="text-[9px] text-slate-400">Opacity (%)</div>
-                              <input
-                                type="range"
-                                min={0}
-                                max={100}
-                                className="w-full rounded-full border border-[#D0D7E2] bg-white px-3 py-1 text-[10px] outline-none"
-                                value={templateTheme.maleBadgeBgOpacity ?? 100}
-                                onChange={(event) =>
-                                  updateTemplateTheme({
-                                    maleBadgeBgOpacity:
-                                      Number(event.target.value) || 0,
-                                  })
-                                }
-                              />
+
+                            <div className="space-y-3">
+                              <label className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Male Group Theme</label>
+                              <div className="flex items-center gap-3">
+                                <div className="flex flex-col gap-2">
+                                  <input
+                                    type="color"
+                                    className="h-8 w-16 cursor-pointer rounded-lg border border-slate-200 bg-white p-1 shadow-sm transition-all hover:scale-105"
+                                    value={templateTheme.maleGroupBg ?? "#e0f2fe"}
+                                    onChange={(event) => updateTemplateTheme({ maleGroupBg: event.target.value })}
+                                  />
+                                  <input
+                                    type="color"
+                                    className="h-8 w-16 cursor-pointer rounded-lg border border-slate-200 bg-white p-1 shadow-sm transition-all hover:scale-105"
+                                    value={templateTheme.maleBadgeBg ?? "#0ea5e9"}
+                                    onChange={(event) => updateTemplateTheme({ maleBadgeBg: event.target.value })}
+                                  />
+                                </div>
+                                <div className="flex-1 space-y-2">
+                                  <div className="space-y-1">
+                                    <div className="flex items-center justify-between text-[10px]">
+                                      <span className="font-medium text-slate-500">Group Opacity</span>
+                                      <span className="font-bold text-slate-700">{templateTheme.maleGroupBgOpacity ?? 100}%</span>
+                                    </div>
+                                    <input
+                                      type="range"
+                                      min={0}
+                                      max={100}
+                                      className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-slate-100 accent-blue-500"
+                                      value={templateTheme.maleGroupBgOpacity ?? 100}
+                                      onChange={(event) => updateTemplateTheme({ maleGroupBgOpacity: Number(event.target.value) || 0 })}
+                                    />
+                                  </div>
+                                  <div className="space-y-1">
+                                    <div className="flex items-center justify-between text-[10px]">
+                                      <span className="font-medium text-slate-500">Badge Opacity</span>
+                                      <span className="font-bold text-slate-700">{templateTheme.maleBadgeBgOpacity ?? 100}%</span>
+                                    </div>
+                                    <input
+                                      type="range"
+                                      min={0}
+                                      max={100}
+                                      className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-slate-100 accent-blue-600"
+                                      value={templateTheme.maleBadgeBgOpacity ?? 100}
+                                      onChange={(event) => updateTemplateTheme({ maleBadgeBgOpacity: Number(event.target.value) || 0 })}
+                                    />
+                                  </div>
+                                </div>
+                              </div>
                             </div>
                           </div>
                         </PageantSection>
@@ -7737,120 +7399,111 @@ export default function AdminDashboard() {
                           isOpen={openPageantSections.cardsAndNames}
                           onToggle={handleTogglePageantSection}
                         >
-                          <div className="grid gap-3 sm:grid-cols-4">
-                            <div className="space-y-1">
-                              <div className="text-slate-500">Card background</div>
-                              <input
-                                type="color"
-                                className="h-8 w-full cursor-pointer rounded-full border border-[#D0D7E2] bg-white px-2"
-                                value={templateTheme.cardBg ?? "#ffffff"}
-                                onChange={(event) =>
-                                  updateTemplateTheme({
-                                    cardBg: event.target.value,
-                                  })
-                                }
-                              />
-                              <div className="text-[9px] text-slate-400">Opacity (%)</div>
-                              <input
-                                type="range"
-                                min={0}
-                                max={100}
-                                className="w-full rounded-full border border-[#D0D7E2] bg-white px-3 py-1 text-[10px] outline-none"
-                                value={templateTheme.cardBgOpacity ?? 100}
-                                onChange={(event) =>
-                                  updateTemplateTheme({
-                                    cardBgOpacity: Number(event.target.value) || 0,
-                                  })
-                                }
-                              />
+                          <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+                            <div className="space-y-3">
+                              <label className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Card Background</label>
+                              <div className="flex items-center gap-3">
+                                <input
+                                  type="color"
+                                  className="h-10 w-10 cursor-pointer rounded-xl border border-slate-200 bg-white p-1 shadow-sm transition-all hover:scale-105"
+                                  value={templateTheme.cardBg ?? "#ffffff"}
+                                  onChange={(event) => updateTemplateTheme({ cardBg: event.target.value })}
+                                />
+                                <div className="flex-1 space-y-1">
+                                  <div className="flex items-center justify-between text-[10px]">
+                                    <span className="font-medium text-slate-500">Opacity</span>
+                                    <span className="font-bold text-slate-700">{templateTheme.cardBgOpacity ?? 100}%</span>
+                                  </div>
+                                  <input
+                                    type="range"
+                                    min={0}
+                                    max={100}
+                                    className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-slate-100 accent-emerald-500"
+                                    value={templateTheme.cardBgOpacity ?? 100}
+                                    onChange={(event) => updateTemplateTheme({ cardBgOpacity: Number(event.target.value) || 0 })}
+                                  />
+                                </div>
+                              </div>
                             </div>
-                            <div className="space-y-1">
-                              <div className="text-slate-500">Number text color</div>
-                              <input
-                                type="color"
-                                className="h-8 w-full cursor-pointer rounded-full border border-[#D0D7E2] bg-white px-2"
-                                value={templateTheme.numberTextColor ?? "#ffffff"}
-                                onChange={(event) =>
-                                  updateTemplateTheme({
-                                    numberTextColor: event.target.value,
-                                  })
-                                }
-                              />
-                              <div className="text-[9px] text-slate-400">Opacity (%)</div>
-                              <input
-                                type="range"
-                                min={0}
-                                max={100}
-                                className="w-full rounded-full border border-[#D0D7E2] bg-white px-3 py-1 text-[10px] outline-none"
-                                value={templateTheme.numberTextColorOpacity ?? 100}
-                                onChange={(event) =>
-                                  updateTemplateTheme({
-                                    numberTextColorOpacity:
-                                      Number(event.target.value) || 0,
-                                  })
-                                }
-                              />
+
+                            <div className="space-y-3">
+                              <label className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Number Badge</label>
+                              <div className="flex items-center gap-3">
+                                <div className="flex flex-col gap-2">
+                                  <input
+                                    type="color"
+                                    className="h-8 w-16 cursor-pointer rounded-lg border border-slate-200 bg-white p-1 shadow-sm transition-all hover:scale-105"
+                                    value={templateTheme.numberBadgeBg ?? "#000000"}
+                                    onChange={(event) => updateTemplateTheme({ numberBadgeBg: event.target.value })}
+                                  />
+                                  <input
+                                    type="color"
+                                    className="h-8 w-16 cursor-pointer rounded-lg border border-slate-200 bg-white p-1 shadow-sm transition-all hover:scale-105"
+                                    value={templateTheme.numberTextColor ?? "#ffffff"}
+                                    onChange={(event) => updateTemplateTheme({ numberTextColor: event.target.value })}
+                                  />
+                                </div>
+                                <div className="flex-1 space-y-2">
+                                  <div className="space-y-1">
+                                    <div className="flex items-center justify-between text-[10px]">
+                                      <span className="font-medium text-slate-500">Badge Opacity</span>
+                                      <span className="font-bold text-slate-700">{templateTheme.numberBadgeBgOpacity ?? 100}%</span>
+                                    </div>
+                                    <input
+                                      type="range"
+                                      min={0}
+                                      max={100}
+                                      className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-slate-100 accent-slate-700"
+                                      value={templateTheme.numberBadgeBgOpacity ?? 100}
+                                      onChange={(event) => updateTemplateTheme({ numberBadgeBgOpacity: Number(event.target.value) || 0 })}
+                                    />
+                                  </div>
+                                  <div className="space-y-1">
+                                    <div className="flex items-center justify-between text-[10px]">
+                                      <span className="font-medium text-slate-500">Text Opacity</span>
+                                      <span className="font-bold text-slate-700">{templateTheme.numberTextColorOpacity ?? 100}%</span>
+                                    </div>
+                                    <input
+                                      type="range"
+                                      min={0}
+                                      max={100}
+                                      className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-slate-100 accent-slate-400"
+                                      value={templateTheme.numberTextColorOpacity ?? 100}
+                                      onChange={(event) => updateTemplateTheme({ numberTextColorOpacity: Number(event.target.value) || 0 })}
+                                    />
+                                  </div>
+                                </div>
+                              </div>
                             </div>
-                            <div className="space-y-1">
-                              <div className="text-slate-500">Number font size (px)</div>
-                              <input
-                                type="number"
-                                min={8}
-                                max={32}
-                                className="w-full rounded-full border border-[#D0D7E2] bg-white px-3 py-1 text-[10px] outline-none"
-                                value={templateTheme.numberFontSize ?? 10}
-                                onChange={(event) =>
-                                  setTemplateTheme((previous) => ({
-                                    ...previous,
-                                    numberFontSize: Number(event.target.value) || 10,
-                                  }))
-                                }
-                              />
-                            </div>
-                            <div className="space-y-1">
-                              <div className="text-slate-500">Number font family</div>
-                              <select
-                                className="w-full rounded-full border border-[#D0D7E2] bg-white px-3 py-1 text-[10px] outline-none"
-                                value={templateTheme.numberFontFamily ?? "system"}
-                                onChange={(event) =>
-                                  setTemplateTheme((previous) => ({
-                                    ...previous,
-                                    numberFontFamily: event.target.value,
-                                  }))
-                                }
-                              >
-                                <option value="system">Default</option>
-                                <option value="sans">Sans-serif</option>
-                                <option value="serif">Serif</option>
-                                <option value="mono">Monospace</option>
-                              </select>
-                            </div>
-                            <div className="space-y-1">
-                              <div className="text-slate-500">Number badge background</div>
-                              <input
-                                type="color"
-                                className="h-8 w-full cursor-pointer rounded-full border border-[#D0D7E2] bg-white px-2"
-                                value={templateTheme.numberBadgeBg ?? "#000000"}
-                                onChange={(event) =>
-                                  updateTemplateTheme({
-                                    numberBadgeBg: event.target.value,
-                                  })
-                                }
-                              />
-                              <div className="text-[9px] text-slate-400">Opacity (%)</div>
-                              <input
-                                type="range"
-                                min={0}
-                                max={100}
-                                className="w-full rounded-full border border-[#D0D7E2] bg-white px-3 py-1 text-[10px] outline-none"
-                                value={templateTheme.numberBadgeBgOpacity ?? 100}
-                                onChange={(event) =>
-                                  updateTemplateTheme({
-                                    numberBadgeBgOpacity:
-                                      Number(event.target.value) || 0,
-                                  })
-                                }
-                              />
+
+                            <div className="space-y-3">
+                              <label className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Typography</label>
+                              <div className="grid grid-cols-2 gap-3">
+                                <div className="space-y-1">
+                                  <span className="text-[10px] font-medium text-slate-500">Size (px)</span>
+                                  <input
+                                    type="number"
+                                    min={8}
+                                    max={32}
+                                    className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-bold outline-none transition-all focus:border-emerald-500 focus:bg-white"
+                                    value={templateTheme.numberFontSize ?? 10}
+                                    onChange={(event) => setTemplateTheme(prev => ({ ...prev, numberFontSize: Number(event.target.value) || 10 }))}
+                                  />
+                                </div>
+                                <div className="space-y-1">
+                                  <span className="text-[10px] font-medium text-slate-500">Family</span>
+                                  <select
+                                    className="w-full rounded-xl border border-slate-200 bg-slate-50 px-2 py-1.5 text-xs font-bold outline-none transition-all focus:border-emerald-500 focus:bg-white"
+                                    value={templateTheme.numberFontFamily ?? "system"}
+                                    onChange={(event) => setTemplateTheme(prev => ({ ...prev, numberFontFamily: event.target.value }))}
+                                  >
+                                    <option value="system">Default</option>
+                                    <option value="sans">Sans-serif</option>
+                                    <option value="serif">Serif</option>
+                                    <option value="mono">Monospace</option>
+                                  </select>
+                                </div>
+                              </div>
                             </div>
                           </div>
                         </PageantSection>
@@ -7861,67 +7514,61 @@ export default function AdminDashboard() {
                           isOpen={openPageantSections.participantName}
                           onToggle={handleTogglePageantSection}
                         >
-                          <div className="grid gap-3 sm:grid-cols-3">
-                            <div className="space-y-1">
-                              <div className="text-slate-500">Name text color</div>
-                              <input
-                                type="color"
-                                className="h-8 w-full cursor-pointer rounded-full border border-[#D0D7E2] bg-white px-2"
-                                value={templateTheme.nameTextColor ?? "#111827"}
-                                onChange={(event) =>
-                                  updateTemplateTheme({
-                                    nameTextColor: event.target.value,
-                                  })
-                                }
-                              />
-                              <div className="text-[9px] text-slate-400">Opacity (%)</div>
-                              <input
-                                type="range"
-                                min={0}
-                                max={100}
-                                className="w-full rounded-full border border-[#D0D7E2] bg-white px-3 py-1 text-[10px] outline-none"
-                                value={templateTheme.nameTextColorOpacity ?? 100}
-                                onChange={(event) =>
-                                  updateTemplateTheme({
-                                    nameTextColorOpacity:
-                                      Number(event.target.value) || 0,
-                                  })
-                                }
-                              />
+                          <div className="grid gap-6 sm:grid-cols-2">
+                            <div className="space-y-3">
+                              <label className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Name Text Color</label>
+                              <div className="flex items-center gap-3">
+                                <input
+                                  type="color"
+                                  className="h-10 w-10 cursor-pointer rounded-xl border border-slate-200 bg-white p-1 shadow-sm transition-all hover:scale-105"
+                                  value={templateTheme.nameTextColor ?? "#111827"}
+                                  onChange={(event) => updateTemplateTheme({ nameTextColor: event.target.value })}
+                                />
+                                <div className="flex-1 space-y-1">
+                                  <div className="flex items-center justify-between text-[10px]">
+                                    <span className="font-medium text-slate-500">Opacity</span>
+                                    <span className="font-bold text-slate-700">{templateTheme.nameTextColorOpacity ?? 100}%</span>
+                                  </div>
+                                  <input
+                                    type="range"
+                                    min={0}
+                                    max={100}
+                                    className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-slate-100 accent-emerald-500"
+                                    value={templateTheme.nameTextColorOpacity ?? 100}
+                                    onChange={(event) => updateTemplateTheme({ nameTextColorOpacity: Number(event.target.value) || 0 })}
+                                  />
+                                </div>
+                              </div>
                             </div>
-                            <div className="space-y-1">
-                              <div className="text-slate-500">Name font size (px)</div>
-                              <input
-                                type="number"
-                                min={8}
-                                max={32}
-                                className="w-full rounded-full border border-[#D0D7E2] bg-white px-3 py-1 text-[10px] outline-none"
-                                value={templateTheme.nameFontSize ?? 10}
-                                onChange={(event) =>
-                                  setTemplateTheme((previous) => ({
-                                    ...previous,
-                                    nameFontSize: Number(event.target.value) || 10,
-                                  }))
-                                }
-                              />
-                            </div>
-                            <div className="space-y-1">
-                              <div className="text-slate-500">Name font family</div>
-                              <select
-                                className="w-full rounded-full border border-[#D0D7E2] bg-white px-3 py-1 text-[10px] outline-none"
-                                value={templateTheme.nameFontFamily ?? "system"}
-                                onChange={(event) =>
-                                  setTemplateTheme((previous) => ({
-                                    ...previous,
-                                    nameFontFamily: event.target.value,
-                                  }))
-                                }
-                              >
-                                <option value="system">Default</option>
-                                <option value="sans">Sans-serif</option>
-                                <option value="serif">Serif</option>
-                                <option value="mono">Monospace</option>
-                              </select>
+
+                            <div className="space-y-3">
+                              <label className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Typography</label>
+                              <div className="grid grid-cols-2 gap-3">
+                                <div className="space-y-1">
+                                  <span className="text-[10px] font-medium text-slate-500">Size (px)</span>
+                                  <input
+                                    type="number"
+                                    min={8}
+                                    max={32}
+                                    className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-bold outline-none transition-all focus:border-emerald-500 focus:bg-white"
+                                    value={templateTheme.nameFontSize ?? 10}
+                                    onChange={(event) => setTemplateTheme(prev => ({ ...prev, nameFontSize: Number(event.target.value) || 10 }))}
+                                  />
+                                </div>
+                                <div className="space-y-1">
+                                  <span className="text-[10px] font-medium text-slate-500">Family</span>
+                                  <select
+                                    className="w-full rounded-xl border border-slate-200 bg-slate-50 px-2 py-1.5 text-xs font-bold outline-none transition-all focus:border-emerald-500 focus:bg-white"
+                                    value={templateTheme.nameFontFamily ?? "system"}
+                                    onChange={(event) => setTemplateTheme(prev => ({ ...prev, nameFontFamily: event.target.value }))}
+                                  >
+                                    <option value="system">Default</option>
+                                    <option value="sans">Sans-serif</option>
+                                    <option value="serif">Serif</option>
+                                    <option value="mono">Monospace</option>
+                                  </select>
+                                </div>
+                              </div>
                             </div>
                           </div>
                         </PageantSection>
@@ -7932,159 +7579,147 @@ export default function AdminDashboard() {
                           isOpen={openPageantSections.criteriaHeaderAndRows}
                           onToggle={handleTogglePageantSection}
                         >
-                          <div className="grid gap-3 sm:grid-cols-4">
-                            <div className="space-y-1">
-                              <div className="text-slate-500">Header background</div>
-                              <input
-                                type="color"
-                                className="h-8 w-full cursor-pointer rounded-full border border-[#D0D7E2] bg-white px-2"
-                                value={templateTheme.criteriaHeaderBg ?? "#f5f7ff"}
-                                onChange={(event) =>
-                                  updateTemplateTheme({
-                                    criteriaHeaderBg: event.target.value,
-                                  })
-                                }
-                              />
-                              <div className="text-[9px] text-slate-400">Opacity (%)</div>
-                              <input
-                                type="range"
-                                min={0}
-                                max={100}
-                                className="w-full rounded-full border border-[#D0D7E2] bg-white px-3 py-1 text-[10px] outline-none"
-                                value={templateTheme.criteriaHeaderBgOpacity ?? 100}
-                                onChange={(event) =>
-                                  updateTemplateTheme({
-                                    criteriaHeaderBgOpacity:
-                                      Number(event.target.value) || 0,
-                                  })
-                                }
-                              />
+                          <div className="space-y-6">
+                            <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+                              <div className="space-y-3">
+                                <label className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Header Background</label>
+                                <div className="flex items-center gap-3">
+                                  <input
+                                    type="color"
+                                    className="h-10 w-10 cursor-pointer rounded-xl border border-slate-200 bg-white p-1 shadow-sm transition-all hover:scale-105"
+                                    value={templateTheme.criteriaHeaderBg ?? "#f5f7ff"}
+                                    onChange={(event) => updateTemplateTheme({ criteriaHeaderBg: event.target.value })}
+                                  />
+                                  <div className="flex-1 space-y-1">
+                                    <div className="flex items-center justify-between text-[10px]">
+                                      <span className="font-medium text-slate-500">Opacity</span>
+                                      <span className="font-bold text-slate-700">{templateTheme.criteriaHeaderBgOpacity ?? 100}%</span>
+                                    </div>
+                                    <input
+                                      type="range"
+                                      min={0}
+                                      max={100}
+                                      className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-slate-100 accent-emerald-500"
+                                      value={templateTheme.criteriaHeaderBgOpacity ?? 100}
+                                      onChange={(event) => updateTemplateTheme({ criteriaHeaderBgOpacity: Number(event.target.value) || 0 })}
+                                    />
+                                  </div>
+                                </div>
+                              </div>
+
+                              <div className="space-y-3">
+                                <label className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Header Text</label>
+                                <div className="flex items-center gap-3">
+                                  <input
+                                    type="color"
+                                    className="h-10 w-10 cursor-pointer rounded-xl border border-slate-200 bg-white p-1 shadow-sm transition-all hover:scale-105"
+                                    value={templateTheme.criteriaHeaderTextColor ?? "#1f2937"}
+                                    onChange={(event) => updateTemplateTheme({ criteriaHeaderTextColor: event.target.value })}
+                                  />
+                                  <div className="flex-1 space-y-1">
+                                    <div className="flex items-center justify-between text-[10px]">
+                                      <span className="font-medium text-slate-500">Opacity</span>
+                                      <span className="font-bold text-slate-700">{templateTheme.criteriaHeaderTextColorOpacity ?? 100}%</span>
+                                    </div>
+                                    <input
+                                      type="range"
+                                      min={0}
+                                      max={100}
+                                      className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-slate-100 accent-slate-700"
+                                      value={templateTheme.criteriaHeaderTextColorOpacity ?? 100}
+                                      onChange={(event) => updateTemplateTheme({ criteriaHeaderTextColorOpacity: Number(event.target.value) || 0 })}
+                                    />
+                                  </div>
+                                </div>
+                              </div>
+
+                              <div className="space-y-3">
+                                <label className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Header Typography</label>
+                                <div className="grid grid-cols-2 gap-3">
+                                  <div className="space-y-1">
+                                    <span className="text-[10px] font-medium text-slate-500">Size (px)</span>
+                                    <input
+                                      type="number"
+                                      min={8}
+                                      max={20}
+                                      className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-bold outline-none transition-all focus:border-emerald-500 focus:bg-white"
+                                      value={templateTheme.criteriaHeaderFontSize ?? 11}
+                                      onChange={(event) => setTemplateTheme(prev => ({ ...prev, criteriaHeaderFontSize: Number(event.target.value) || 11 }))}
+                                    />
+                                  </div>
+                                  <div className="space-y-1">
+                                    <span className="text-[10px] font-medium text-slate-500">Family</span>
+                                    <select
+                                      className="w-full rounded-xl border border-slate-200 bg-slate-50 px-2 py-1.5 text-xs font-bold outline-none transition-all focus:border-emerald-500 focus:bg-white"
+                                      value={templateTheme.criteriaHeaderFontFamily ?? "system"}
+                                      onChange={(event) => setTemplateTheme(prev => ({ ...prev, criteriaHeaderFontFamily: event.target.value }))}
+                                    >
+                                      <option value="system">Default</option>
+                                      <option value="sans">Sans-serif</option>
+                                      <option value="serif">Serif</option>
+                                      <option value="mono">Monospace</option>
+                                    </select>
+                                  </div>
+                                </div>
+                              </div>
                             </div>
-                            <div className="space-y-1">
-                              <div className="text-slate-500">Header text color</div>
-                              <input
-                                type="color"
-                                className="h-8 w-full cursor-pointer rounded-full border border-[#D0D7E2] bg-white px-2"
-                                value={templateTheme.criteriaHeaderTextColor ?? "#1f2937"}
-                                onChange={(event) =>
-                                  updateTemplateTheme({
-                                    criteriaHeaderTextColor: event.target.value,
-                                  })
-                                }
-                              />
-                              <div className="text-[9px] text-slate-400">Opacity (%)</div>
-                              <input
-                                type="number"
-                                min={0}
-                                max={100}
-                                className="w-full rounded-full border border-[#D0D7E2] bg-white px-3 py-1 text-[10px] outline-none"
-                                value={templateTheme.criteriaHeaderTextColorOpacity ?? 100}
-                                onChange={(event) =>
-                                  updateTemplateTheme({
-                                    criteriaHeaderTextColorOpacity:
-                                      Number(event.target.value) || 0,
-                                  })
-                                }
-                              />
-                            </div>
-                            <div className="space-y-1">
-                              <div className="text-slate-500">Header font size (px)</div>
-                              <input
-                                type="number"
-                                min={8}
-                                max={20}
-                                className="w-full rounded-full border border-[#D0D7E2] bg-white px-3 py-1 text-[10px] outline-none"
-                                value={templateTheme.criteriaHeaderFontSize ?? 11}
-                                onChange={(event) =>
-                                  setTemplateTheme((previous) => ({
-                                    ...previous,
-                                    criteriaHeaderFontSize:
-                                      Number(event.target.value) || 11,
-                                  }))
-                                }
-                              />
-                            </div>
-                            <div className="space-y-1">
-                              <div className="text-slate-500">Header font family</div>
-                              <select
-                                className="w-full rounded-full border border-[#D0D7E2] bg-white px-3 py-1 text-[10px] outline-none"
-                                value={templateTheme.criteriaHeaderFontFamily ?? "system"}
-                                onChange={(event) =>
-                                  setTemplateTheme((previous) => ({
-                                    ...previous,
-                                    criteriaHeaderFontFamily: event.target.value,
-                                  }))
-                                }
-                              >
-                                <option value="system">Default</option>
-                                <option value="sans">Sans-serif</option>
-                                <option value="serif">Serif</option>
-                                <option value="mono">Monospace</option>
-                              </select>
-                            </div>
-                          </div>
-                          <div className="mt-3 grid gap-3 sm:grid-cols-3">
-                            <div className="space-y-1">
-                              <div className="text-slate-500">Criteria text color</div>
-                              <input
-                                type="color"
-                                className="h-8 w-full cursor-pointer rounded-full border border-[#D0D7E2] bg-white px-2"
-                                value={templateTheme.criteriaTextColor ?? "#111827"}
-                                onChange={(event) =>
-                                  updateTemplateTheme({
-                                    criteriaTextColor: event.target.value,
-                                  })
-                                }
-                              />
-                              <div className="text-[9px] text-slate-400">Opacity (%)</div>
-                              <input
-                                type="number"
-                                min={0}
-                                max={100}
-                                className="w-full rounded-full border border-[#D0D7E2] bg-white px-3 py-1 text-[10px] outline-none"
-                                value={templateTheme.criteriaTextColorOpacity ?? 100}
-                                onChange={(event) =>
-                                  updateTemplateTheme({
-                                    criteriaTextColorOpacity:
-                                      Number(event.target.value) || 0,
-                                  })
-                                }
-                              />
-                            </div>
-                            <div className="space-y-1">
-                              <div className="text-slate-500">Criteria font size (px)</div>
-                              <input
-                                type="number"
-                                min={8}
-                                max={20}
-                                className="w-full rounded-full border border-[#D0D7E2] bg-white px-3 py-1 text-[10px] outline-none"
-                                value={templateTheme.criteriaTextFontSize ?? 14}
-                                onChange={(event) =>
-                                  setTemplateTheme((previous) => ({
-                                    ...previous,
-                                    criteriaTextFontSize:
-                                      Number(event.target.value) || 14,
-                                  }))
-                                }
-                              />
-                            </div>
-                            <div className="space-y-1">
-                              <div className="text-slate-500">Criteria font family</div>
-                              <select
-                                className="w-full rounded-full border border-[#D0D7E2] bg-white px-3 py-1 text-[10px] outline-none"
-                                value={templateTheme.criteriaTextFontFamily ?? "system"}
-                                onChange={(event) =>
-                                  setTemplateTheme((previous) => ({
-                                    ...previous,
-                                    criteriaTextFontFamily: event.target.value,
-                                  }))
-                                }
-                              >
-                                <option value="system">Default</option>
-                                <option value="sans">Sans-serif</option>
-                                <option value="serif">Serif</option>
-                                <option value="mono">Monospace</option>
-                              </select>
+
+                            <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+                              <div className="space-y-3">
+                                <label className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Criteria Text</label>
+                                <div className="flex items-center gap-3">
+                                  <input
+                                    type="color"
+                                    className="h-10 w-10 cursor-pointer rounded-xl border border-slate-200 bg-white p-1 shadow-sm transition-all hover:scale-105"
+                                    value={templateTheme.criteriaTextColor ?? "#111827"}
+                                    onChange={(event) => updateTemplateTheme({ criteriaTextColor: event.target.value })}
+                                  />
+                                  <div className="flex-1 space-y-1">
+                                    <div className="flex items-center justify-between text-[10px]">
+                                      <span className="font-medium text-slate-500">Opacity</span>
+                                      <span className="font-bold text-slate-700">{templateTheme.criteriaTextColorOpacity ?? 100}%</span>
+                                    </div>
+                                    <input
+                                      type="range"
+                                      min={0}
+                                      max={100}
+                                      className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-slate-100 accent-emerald-500"
+                                      value={templateTheme.criteriaTextColorOpacity ?? 100}
+                                      onChange={(event) => updateTemplateTheme({ criteriaTextColorOpacity: Number(event.target.value) || 0 })}
+                                    />
+                                  </div>
+                                </div>
+                              </div>
+
+                              <div className="space-y-3">
+                                <label className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Criteria Typography</label>
+                                <div className="grid grid-cols-2 gap-3">
+                                  <div className="space-y-1">
+                                    <span className="text-[10px] font-medium text-slate-500">Size (px)</span>
+                                    <input
+                                      type="number"
+                                      min={8}
+                                      max={20}
+                                      className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-bold outline-none transition-all focus:border-emerald-500 focus:bg-white"
+                                      value={templateTheme.criteriaTextFontSize ?? 14}
+                                      onChange={(event) => setTemplateTheme(prev => ({ ...prev, criteriaTextFontSize: Number(event.target.value) || 14 }))}
+                                    />
+                                  </div>
+                                  <div className="space-y-1">
+                                    <span className="text-[10px] font-medium text-slate-500">Family</span>
+                                    <select
+                                      className="w-full rounded-xl border border-slate-200 bg-slate-50 px-2 py-1.5 text-xs font-bold outline-none transition-all focus:border-emerald-500 focus:bg-white"
+                                      value={templateTheme.criteriaTextFontFamily ?? "system"}
+                                      onChange={(event) => setTemplateTheme(prev => ({ ...prev, criteriaTextFontFamily: event.target.value }))}
+                                    >
+                                      <option value="system">Default</option>
+                                      <option value="sans">Sans-serif</option>
+                                      <option value="serif">Serif</option>
+                                      <option value="mono">Monospace</option>
+                                    </select>
+                                  </div>
+                                </div>
+                              </div>
                             </div>
                           </div>
                         </PageantSection>
@@ -8095,176 +7730,159 @@ export default function AdminDashboard() {
                           isOpen={openPageantSections.scoringTable}
                           onToggle={handleTogglePageantSection}
                         >
-                          <div className="grid gap-3 sm:grid-cols-3">
-                            <div className="space-y-1">
-                              <div className="text-slate-500">Table background</div>
-                              <input
-                                type="color"
-                                className="h-8 w-full cursor-pointer rounded-full border border-[#D0D7E2] bg-white px-2"
-                                value={templateTheme.scoringTableBg ?? "#ffffff"}
-                                onChange={(event) =>
-                                  updateTemplateTheme({
-                                    scoringTableBg: event.target.value,
-                                  })
-                                }
-                              />
-                              <div className="text-[9px] text-slate-400">Opacity (%)</div>
-                              <input
-                                type="range"
-                                min={0}
-                                max={100}
-                                className="w-full cursor-pointer"
-                                value={templateTheme.scoringTableBgOpacity ?? 100}
-                                onChange={(event) =>
-                                  updateTemplateTheme({
-                                    scoringTableBgOpacity:
-                                      Number(event.target.value) || 0,
-                                  })
-                                }
-                              />
+                          <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+                            <div className="space-y-3">
+                              <label className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Table Background</label>
+                              <div className="flex items-center gap-3">
+                                <input
+                                  type="color"
+                                  className="h-10 w-10 cursor-pointer rounded-xl border border-slate-200 bg-white p-1 shadow-sm transition-all hover:scale-105"
+                                  value={templateTheme.scoringTableBg ?? "#ffffff"}
+                                  onChange={(event) => updateTemplateTheme({ scoringTableBg: event.target.value })}
+                                />
+                                <div className="flex-1 space-y-1">
+                                  <div className="flex items-center justify-between text-[10px]">
+                                    <span className="font-medium text-slate-500">Opacity</span>
+                                    <span className="font-bold text-slate-700">{templateTheme.scoringTableBgOpacity ?? 100}%</span>
+                                  </div>
+                                  <input
+                                    type="range"
+                                    min={0}
+                                    max={100}
+                                    className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-slate-100 accent-emerald-500"
+                                    value={templateTheme.scoringTableBgOpacity ?? 100}
+                                    onChange={(event) => updateTemplateTheme({ scoringTableBgOpacity: Number(event.target.value) || 0 })}
+                                  />
+                                </div>
+                              </div>
                             </div>
-                            <div className="space-y-1">
-                              <div className="text-slate-500">Category row background</div>
-                              <input
-                                type="color"
-                                className="h-8 w-full cursor-pointer rounded-full border border-[#D0D7E2] bg-white px-2"
-                                value={templateTheme.scoringCategoryRowBg ?? "#f9fafb"}
-                                onChange={(event) =>
-                                  updateTemplateTheme({
-                                    scoringCategoryRowBg: event.target.value,
-                                  })
-                                }
-                              />
-                              <div className="text-[9px] text-slate-400">Opacity (%)</div>
-                              <input
-                                type="range"
-                                min={0}
-                                max={100}
-                                className="w-full cursor-pointer"
-                                value={templateTheme.scoringCategoryRowBgOpacity ?? 100}
-                                onChange={(event) =>
-                                  updateTemplateTheme({
-                                    scoringCategoryRowBgOpacity:
-                                      Number(event.target.value) || 0,
-                                  })
-                                }
-                              />
+
+                            <div className="space-y-3">
+                              <label className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Category Row</label>
+                              <div className="flex items-center gap-3">
+                                <input
+                                  type="color"
+                                  className="h-10 w-10 cursor-pointer rounded-xl border border-slate-200 bg-white p-1 shadow-sm transition-all hover:scale-105"
+                                  value={templateTheme.scoringCategoryRowBg ?? "#f9fafb"}
+                                  onChange={(event) => updateTemplateTheme({ scoringCategoryRowBg: event.target.value })}
+                                />
+                                <div className="flex-1 space-y-1">
+                                  <div className="flex items-center justify-between text-[10px]">
+                                    <span className="font-medium text-slate-500">Opacity</span>
+                                    <span className="font-bold text-slate-700">{templateTheme.scoringCategoryRowBgOpacity ?? 100}%</span>
+                                  </div>
+                                  <input
+                                    type="range"
+                                    min={0}
+                                    max={100}
+                                    className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-slate-100 accent-emerald-500"
+                                    value={templateTheme.scoringCategoryRowBgOpacity ?? 100}
+                                    onChange={(event) => updateTemplateTheme({ scoringCategoryRowBgOpacity: Number(event.target.value) || 0 })}
+                                  />
+                                </div>
+                              </div>
                             </div>
-                            <div className="space-y-1">
-                              <div className="text-slate-500">Total row background</div>
-                              <input
-                                type="color"
-                                className="h-8 w-full cursor-pointer rounded-full border border-[#D0D7E2] bg-white px-2"
-                                value={templateTheme.scoringTotalRowBg ?? "#f5f7ff"}
-                                onChange={(event) =>
-                                  updateTemplateTheme({
-                                    scoringTotalRowBg: event.target.value,
-                                  })
-                                }
-                              />
-                              <div className="text-[9px] text-slate-400">Opacity (%)</div>
-                              <input
-                                type="range"
-                                min={0}
-                                max={100}
-                                className="w-full cursor-pointer"
-                                value={templateTheme.scoringTotalRowBgOpacity ?? 100}
-                                onChange={(event) =>
-                                  updateTemplateTheme({
-                                    scoringTotalRowBgOpacity:
-                                      Number(event.target.value) || 0,
-                                  })
-                                }
-                              />
+
+                            <div className="space-y-3">
+                              <label className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Total Row</label>
+                              <div className="flex items-center gap-3">
+                                <input
+                                  type="color"
+                                  className="h-10 w-10 cursor-pointer rounded-xl border border-slate-200 bg-white p-1 shadow-sm transition-all hover:scale-105"
+                                  value={templateTheme.scoringTotalRowBg ?? "#f5f7ff"}
+                                  onChange={(event) => updateTemplateTheme({ scoringTotalRowBg: event.target.value })}
+                                />
+                                <div className="flex-1 space-y-1">
+                                  <div className="flex items-center justify-between text-[10px]">
+                                    <span className="font-medium text-slate-500">Opacity</span>
+                                    <span className="font-bold text-slate-700">{templateTheme.scoringTotalRowBgOpacity ?? 100}%</span>
+                                  </div>
+                                  <input
+                                    type="range"
+                                    min={0}
+                                    max={100}
+                                    className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-slate-100 accent-emerald-500"
+                                    value={templateTheme.scoringTotalRowBgOpacity ?? 100}
+                                    onChange={(event) => updateTemplateTheme({ scoringTotalRowBgOpacity: Number(event.target.value) || 0 })}
+                                  />
+                                </div>
+                              </div>
                             </div>
-                            <div className="space-y-1">
-                              <div className="text-slate-500">Score input background</div>
-                              <input
-                                type="color"
-                                className="h-8 w-full cursor-pointer rounded-full border border-[#D0D7E2] bg-white px-2"
-                                value={templateTheme.scoreInputBg ?? "#ffffff"}
-                                onChange={(event) =>
-                                  updateTemplateTheme({
-                                    scoreInputBg: event.target.value,
-                                  })
-                                }
-                              />
-                              <div className="text-[9px] text-slate-400">Opacity (%)</div>
-                              <input
-                                type="range"
-                                min={0}
-                                max={100}
-                                className="w-full cursor-pointer"
-                                value={templateTheme.scoreInputBgOpacity ?? 100}
-                                onChange={(event) =>
-                                  updateTemplateTheme({
-                                    scoreInputBgOpacity:
-                                      Number(event.target.value) || 0,
-                                  })
-                                }
-                              />
+
+                            <div className="space-y-3">
+                              <label className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Score Input</label>
+                              <div className="flex items-center gap-3">
+                                <div className="flex flex-col gap-2">
+                                  <input
+                                    type="color"
+                                    className="h-8 w-16 cursor-pointer rounded-lg border border-slate-200 bg-white p-1 shadow-sm transition-all hover:scale-105"
+                                    value={templateTheme.scoreInputBg ?? "#ffffff"}
+                                    onChange={(event) => updateTemplateTheme({ scoreInputBg: event.target.value })}
+                                  />
+                                  <input
+                                    type="color"
+                                    className="h-8 w-16 cursor-pointer rounded-lg border border-slate-200 bg-white p-1 shadow-sm transition-all hover:scale-105"
+                                    value={templateTheme.scoreInputBorderColor ?? "#cbd5e1"}
+                                    onChange={(event) => updateTemplateTheme({ scoreInputBorderColor: event.target.value })}
+                                  />
+                                </div>
+                                <div className="flex-1 space-y-2">
+                                  <div className="space-y-1">
+                                    <div className="flex items-center justify-between text-[10px]">
+                                      <span className="font-medium text-slate-500">Bg Opacity</span>
+                                      <span className="font-bold text-slate-700">{templateTheme.scoreInputBgOpacity ?? 100}%</span>
+                                    </div>
+                                    <input
+                                      type="range"
+                                      min={0}
+                                      max={100}
+                                      className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-slate-100 accent-emerald-500"
+                                      value={templateTheme.scoreInputBgOpacity ?? 100}
+                                      onChange={(event) => updateTemplateTheme({ scoreInputBgOpacity: Number(event.target.value) || 0 })}
+                                    />
+                                  </div>
+                                  <div className="space-y-1">
+                                    <div className="flex items-center justify-between text-[10px]">
+                                      <span className="font-medium text-slate-500">Border Opacity</span>
+                                      <span className="font-bold text-slate-700">{templateTheme.scoreInputBorderColorOpacity ?? 100}%</span>
+                                    </div>
+                                    <input
+                                      type="range"
+                                      min={0}
+                                      max={100}
+                                      className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-slate-100 accent-slate-400"
+                                      value={templateTheme.scoreInputBorderColorOpacity ?? 100}
+                                      onChange={(event) => updateTemplateTheme({ scoreInputBorderColorOpacity: Number(event.target.value) || 0 })}
+                                    />
+                                  </div>
+                                </div>
+                              </div>
                             </div>
-                            <div className="space-y-1">
-                              <div className="text-slate-500">Score input border</div>
-                              <input
-                                type="color"
-                                className="h-8 w-full cursor-pointer rounded-full border border-[#D0D7E2] bg-white px-2"
-                                value={
-                                  templateTheme.scoreInputBorderColor ?? "#cbd5e1"
-                                }
-                                onChange={(event) =>
-                                  updateTemplateTheme({
-                                    scoreInputBorderColor: event.target.value,
-                                  })
-                                }
-                              />
-                              <div className="text-[9px] text-slate-400">Opacity (%)</div>
-                              <input
-                                type="range"
-                                min={0}
-                                max={100}
-                                className="w-full cursor-pointer"
-                                value={
-                                  templateTheme.scoreInputBorderColorOpacity ?? 100
-                                }
-                                onChange={(event) =>
-                                  updateTemplateTheme({
-                                    scoreInputBorderColorOpacity:
-                                      Number(event.target.value) || 0,
-                                  })
-                                }
-                              />
-                            </div>
-                            <div className="space-y-1">
-                              <div className="text-slate-500">Score input text color</div>
-                              <input
-                                type="color"
-                                className="h-8 w-full cursor-pointer rounded-full border border-[#D0D7E2] bg-white px-2"
-                                value={
-                                  templateTheme.scoreInputTextColor ?? "#0f172a"
-                                }
-                                onChange={(event) =>
-                                  updateTemplateTheme({
-                                    scoreInputTextColor: event.target.value,
-                                  })
-                                }
-                              />
-                              <div className="text-[9px] text-slate-400">Opacity (%)</div>
-                              <input
-                                type="range"
-                                min={0}
-                                max={100}
-                                className="w-full cursor-pointer"
-                                value={
-                                  templateTheme.scoreInputTextColorOpacity ?? 100
-                                }
-                                onChange={(event) =>
-                                  updateTemplateTheme({
-                                    scoreInputTextColorOpacity:
-                                      Number(event.target.value) || 0,
-                                  })
-                                }
-                              />
+
+                            <div className="space-y-3">
+                              <label className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Input Text</label>
+                              <div className="flex items-center gap-3">
+                                <input
+                                  type="color"
+                                  className="h-10 w-10 cursor-pointer rounded-xl border border-slate-200 bg-white p-1 shadow-sm transition-all hover:scale-105"
+                                  value={templateTheme.scoreInputTextColor ?? "#0f172a"}
+                                  onChange={(event) => updateTemplateTheme({ scoreInputTextColor: event.target.value })}
+                                />
+                                <div className="flex-1 space-y-1">
+                                  <div className="flex items-center justify-between text-[10px]">
+                                    <span className="font-medium text-slate-500">Opacity</span>
+                                    <span className="font-bold text-slate-700">{templateTheme.scoreInputTextColorOpacity ?? 100}%</span>
+                                  </div>
+                                  <input
+                                    type="range"
+                                    min={0}
+                                    max={100}
+                                    className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-slate-100 accent-slate-700"
+                                    value={templateTheme.scoreInputTextColorOpacity ?? 100}
+                                    onChange={(event) => updateTemplateTheme({ scoreInputTextColorOpacity: Number(event.target.value) || 0 })}
+                                  />
+                                </div>
+                              </div>
                             </div>
                           </div>
                         </PageantSection>
@@ -8625,122 +8243,88 @@ export default function AdminDashboard() {
                     )}
 
                     {(templateError || templateSuccess) && (
-                      <div
-                        className={`mb-2 text-[10px] ${
-                          templateError ? "text-red-500" : "text-emerald-600"
-                        }`}
-                      >
+                      <div className={`mb-6 rounded-xl p-4 text-[13px] font-medium ${templateError ? "bg-red-50 text-red-500" : "bg-emerald-50 text-emerald-600"}`}>
                         {templateError ?? templateSuccess}
                       </div>
                     )}
 
-                    <div className="mb-4 grid gap-3 text-[10px] sm:grid-cols-2">
-                      <div className="rounded-2xl border border-[#E2E8F0] bg-white p-3">
-                        <div className="mb-2 flex items-center justify-between">
-                          <div className="text-[10px] font-medium text-slate-600">
-                            Template name
-                          </div>
-                          <div className="text-[9px] text-slate-400">
-                            Shown only to admins
-                          </div>
+                    <div className="mb-8 grid gap-6 lg:grid-cols-2">
+                      <div className="rounded-3xl border border-slate-100 bg-slate-50/50 p-6">
+                        <div className="mb-4 flex items-center justify-between">
+                          <h4 className="text-[13px] font-bold text-slate-700">Template Library</h4>
+                          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Internal Name</span>
                         </div>
-                        <input
-                          type="text"
-                          value={templateName}
-                          onChange={(event) => setTemplateName(event.target.value)}
-                          placeholder="e.g. Pageant – Imperial Topaz"
-                          className="w-full rounded-full border border-[#D0D7E2] bg-[#F8FAFC] px-3 py-1.5 text-[10px] outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
-                        />
-                        <div className="mt-2 flex items-center justify-between gap-2">
-                          <div className="text-[9px] text-slate-400">
-                            Save this style to reuse across events and contests.
+                        <div className="space-y-4">
+                          <div className="relative">
+                            <input
+                              type="text"
+                              value={templateName}
+                              onChange={(e) => setTemplateName(e.target.value)}
+                              placeholder="e.g. Pageant – Emerald Theme"
+                              className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-[13px] font-medium text-slate-700 outline-none transition-all focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10"
+                            />
                           </div>
-                          <button
-                            type="button"
-                            onClick={handleSaveTemplateToLibrary}
-                            disabled={isSavingTemplateToLibrary}
-                            className="inline-flex items-center rounded-full bg-[#0F172A] px-3 py-1.5 text-[10px] font-medium text-white shadow-sm disabled:cursor-not-allowed disabled:opacity-60"
-                          >
-                            {isSavingTemplateToLibrary ? "Saving..." : "Save as new template"}
-                          </button>
+                          <div className="flex items-center justify-between gap-4">
+                            <p className="text-[11px] leading-relaxed text-slate-400">
+                              Save this configuration as a reusable template for other contests.
+                            </p>
+                            <button
+                              type="button"
+                              onClick={handleSaveTemplateToLibrary}
+                              disabled={isSavingTemplateToLibrary}
+                              className="whitespace-nowrap rounded-xl bg-slate-800 px-4 py-2 text-[11px] font-bold text-white transition-all hover:bg-slate-900 active:scale-95 disabled:opacity-50"
+                            >
+                              {isSavingTemplateToLibrary ? "Saving..." : "Save to Library"}
+                            </button>
+                          </div>
                         </div>
                       </div>
-                      <div className="rounded-2xl border border-[#E2E8F0] bg-white p-3">
-                        <div className="mb-2 flex items-center justify-between">
-                          <div className="text-[10px] font-medium text-slate-600">
-                            Saved templates
-                          </div>
-                          {layoutTemplates.length > 0 && (
-                            <div className="text-[9px] text-slate-400">
-                              Load to edit, apply to use for this contest
-                            </div>
-                          )}
+
+                      <div className="rounded-3xl border border-slate-100 bg-slate-50/50 p-6">
+                        <div className="mb-4 flex items-center justify-between">
+                          <h4 className="text-[13px] font-bold text-slate-700">Saved Presets</h4>
+                          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">{layoutTemplates.length} Available</span>
                         </div>
-                            <div className="max-h-40 space-y-1 overflow-y-auto rounded-xl bg-[#F8FAFC] p-2">
+                        <div className="max-h-[160px] space-y-2 overflow-y-auto pr-2 custom-scrollbar">
                           {layoutTemplates.length === 0 ? (
-                            <div className="py-4 text-center text-[9px] text-slate-400">
-                              No templates saved yet.
+                            <div className="flex flex-col items-center justify-center py-8 text-slate-400">
+                              <svg className="mb-2 h-8 w-8 opacity-20" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" /></svg>
+                              <span className="text-[11px]">No saved presets found.</span>
                             </div>
                           ) : (
                             layoutTemplates.map((template) => {
-                            const isBuiltIn =
-                                template.layout_json.templateKey === "pageant" &&
-                                (template.name === "Pageant \u2013 Default" ||
-                                  template.name === "Platinum Mist" ||
-                                  template.name === "Imperial Topaz" ||
-                                  template.name === "Royal");
-
+                              const isBuiltIn = template.layout_json.templateKey === "pageant" && 
+                                ["Pageant \u2013 Default", "Platinum Mist", "Imperial Topaz", "Royal"].includes(template.name);
                               return (
-                                <div
-                                  key={template.id}
-                                  className="flex items-center justify-between gap-2 rounded-lg bg-white px-2 py-1.5 text-[10px]"
-                                >
+                                <div key={template.id} className="group flex items-center justify-between gap-3 rounded-2xl bg-white p-3 shadow-sm transition-all hover:shadow-md">
                                   <div className="min-w-0">
-                                    <div className="truncate font-medium text-slate-700">
-                                      {template.name}
-                                    </div>
-                                    <div className="text-[9px] text-slate-400">
-                                      {(template.layout_json.templateKey === "pageant"
-                                        ? "Pageant"
-                                        : "Standard") +
-                                        " \u00b7 " +
-                                        new Date(
-                                          template.created_at,
-                                        ).toLocaleDateString()}
+                                    <div className="truncate text-[12px] font-bold text-slate-700">{template.name}</div>
+                                    <div className="text-[10px] text-slate-400">
+                                      {template.layout_json.templateKey === "pageant" ? "Pageant" : "Standard"} • {new Date(template.created_at).toLocaleDateString()}
                                     </div>
                                   </div>
-                                  <div className="flex flex-shrink-0 items-center gap-1.5">
+                                  <div className="flex items-center gap-1.5">
                                     {!isBuiltIn && (
                                       <button
-                                        type="button"
-                                        onClick={() =>
-                                          handleDeleteTemplateFromLibrary(template.id)
-                                        }
+                                        onClick={() => handleDeleteTemplateFromLibrary(template.id)}
                                         disabled={isDeletingTemplateId === template.id}
-                                        className="rounded-full border border-transparent px-2 py-0.5 text-[9px] text-red-500 hover:border-red-100 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
+                                        className="rounded-lg p-1.5 text-slate-400 hover:bg-red-50 hover:text-red-500 disabled:opacity-50"
                                       >
-                                        {isDeletingTemplateId === template.id
-                                          ? "Deleting..."
-                                          : "Delete"}
+                                        <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
                                       </button>
                                     )}
                                     <button
-                                      type="button"
                                       onClick={() => handleLoadTemplateFromLibrary(template)}
-                                      className="rounded-full border border-[#D0D7E2] px-2 py-0.5 text-[9px] text-slate-700 hover:bg-[#F8FAFC]"
+                                      className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[10px] font-bold text-slate-600 transition-all hover:bg-slate-50 active:scale-95"
                                     >
-                                      Load
+                                      Edit
                                     </button>
                                     <button
-                                      type="button"
                                       onClick={() => handleApplyTemplateToContest(template)}
-                                      disabled={
-                                        isSavingTemplate ||
-                                        selectedContestIdForTemplate === null
-                                      }
-                                      className="rounded-full bg-[#1F4D3A] px-2 py-0.5 text-[9px] font-medium text-white shadow-sm disabled:cursor-not-allowed disabled:opacity-60"
+                                      disabled={isSavingTemplate || selectedContestIdForTemplate === null}
+                                      className="rounded-lg bg-emerald-600 px-2.5 py-1 text-[10px] font-bold text-white transition-all hover:bg-emerald-700 active:scale-95 disabled:opacity-50"
                                     >
-                                      {isSavingTemplate ? "Applying..." : "Apply"}
+                                      Apply
                                     </button>
                                   </div>
                                 </div>
@@ -9838,1037 +9422,801 @@ export default function AdminDashboard() {
               </div>
             )}
             {isEventModalOpen && (
-              <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 px-4">
-                <div className="w-full max-w-md rounded-2xl border border-[#1F4D3A1F] bg-white shadow-xl">
-                  <div className="flex items-center justify-between border-b border-[#E2E8F0] px-5 py-3">
+              <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-md animate-in fade-in duration-300">
+                <div className="w-full max-w-md scale-100 rounded-[40px] border border-white/40 bg-white/90 p-8 shadow-[0_32px_64px_-12px_rgba(0,0,0,0.14)] backdrop-blur-2xl animate-in zoom-in-95 duration-300">
+                  <div className="mb-8 flex items-center justify-between">
                     <div>
-                      <div className="text-sm font-semibold text-[#1F4D3A]">
-                        {editingEventId === null ? "Add event" : "Edit event"}
-                      </div>
-                      <div className="text-[11px] text-slate-500">
-                        {editingEventId === null
-                          ? "Create a new event for tabulation."
-                          : "Update the details of this event."}
-                      </div>
+                      <h3 className="text-xl font-black tracking-tight text-slate-900">
+                        {editingEventId === null ? "Create Event" : "Edit Event"}
+                      </h3>
+                      <p className="text-[13px] font-medium text-slate-500">
+                        {editingEventId === null ? "Launch a new tabulation event." : "Update event configuration."}
+                      </p>
                     </div>
-                    <button
-                      type="button"
+                    <button 
                       onClick={() => setIsEventModalOpen(false)}
-                      className="rounded-full bg-[#F1F5F9] px-2 py-1 text-[11px] text-slate-500 hover:bg-[#E2E8F0]"
+                      className="flex h-10 w-10 items-center justify-center rounded-2xl bg-slate-100 text-slate-500 transition-all hover:bg-slate-200 hover:text-slate-900 active:scale-90"
                     >
-                      Close
+                      <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" /></svg>
                     </button>
                   </div>
-                  <div className="space-y-3 px-5 py-4 text-[11px]">
-                    <div className="space-y-1">
-                      <div className="text-[10px] text-slate-500">Event name</div>
+
+                  <div className="space-y-6">
+                    <div className="space-y-2">
+                      <label className="text-[13px] font-bold text-slate-700">Event Name</label>
                       <input
-                        className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
-                      placeholder="Event name"
-                      value={eventName}
-                      onChange={(event) => setEventName(event.target.value)}
-                    />
-                    </div>
-                    <div className="flex gap-3">
-                      <div className="w-1/2 space-y-1">
-                        <div className="text-[10px] text-slate-500">Code</div>
-                        <input
-                          className="w-full max-w-[420px] rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
-                        placeholder="Code"
-                        value={eventCode}
-                        onChange={(event) => setEventCode(event.target.value)}
+                        placeholder="e.g. Annual Sports Fest 2026"
+                        value={eventName}
+                        onChange={(e) => setEventName(e.target.value)}
+                        className="w-full rounded-2xl border border-slate-200 bg-slate-50/50 px-5 py-3.5 text-[14px] font-medium text-slate-900 outline-none transition-all focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/10"
                       />
-                      </div>
-                      <div className="w-1/2 space-y-1">
-                        <div className="text-[10px] text-slate-500">Year</div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <label className="text-[13px] font-bold text-slate-700">Code</label>
                         <input
-                        type="number"
-                          className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
-                        placeholder="Year"
-                        value={eventYear}
-                        onChange={(event) => setEventYear(event.target.value)}
-                      />
+                          placeholder="ASF-26"
+                          value={eventCode}
+                          onChange={(e) => setEventCode(e.target.value)}
+                          className="w-full rounded-2xl border border-slate-200 bg-slate-50/50 px-5 py-3.5 text-[14px] font-medium text-slate-900 outline-none transition-all focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/10"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-[13px] font-bold text-slate-700">Year</label>
+                        <input
+                          type="number"
+                          placeholder="2026"
+                          value={eventYear}
+                          onChange={(e) => setEventYear(e.target.value)}
+                          className="w-full rounded-2xl border border-slate-200 bg-slate-50/50 px-5 py-3.5 text-[14px] font-medium text-slate-900 outline-none transition-all focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/10"
+                        />
                       </div>
                     </div>
-                  {(eventError || eventSuccess) && (
-                    <div
-                      className={`text-[10px] ${
-                        eventError ? "text-red-500" : "text-emerald-600"
-                      }`}
-                    >
-                      {eventError ?? eventSuccess}
+
+                    {(eventError || eventSuccess) && (
+                      <div className={`rounded-2xl px-4 py-3 text-[13px] font-bold flex items-center gap-2 ${
+                        eventError ? "bg-red-50 text-red-600 border border-red-100" : "bg-emerald-50 text-emerald-700 border border-emerald-100"
+                      }`}>
+                        <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          {eventError ? (
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                          ) : (
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                          )}
+                        </svg>
+                        {eventError ?? eventSuccess}
+                      </div>
+                    )}
+
+                    <div className="flex gap-3 pt-4">
+                      <button
+                        onClick={() => setIsEventModalOpen(false)}
+                        className="flex-1 rounded-2xl border border-slate-200 py-4 text-[14px] font-bold text-slate-600 transition-all hover:bg-slate-50 active:scale-95"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={handleSaveEvent}
+                        disabled={isSavingEvent}
+                        className="flex-[1.5] rounded-2xl bg-slate-900 py-4 text-[14px] font-bold text-white shadow-xl transition-all hover:bg-black active:scale-95 disabled:opacity-50"
+                      >
+                        {isSavingEvent ? (
+                          <div className="flex items-center justify-center gap-2">
+                            <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                            <span>Saving...</span>
+                          </div>
+                        ) : (
+                          editingEventId === null ? "Create Event" : "Update Event"
+                        )}
+                      </button>
                     </div>
-                  )}
-                  </div>
-                  <div className="flex items-center justify-end gap-2 border-t border-[#E2E8F0] px-5 py-3">
-                    <button
-                      type="button"
-                      onClick={() => setIsEventModalOpen(false)}
-                      className="rounded-full border border-[#E2E8F0] px-3 py-1.5 text-[11px] text-slate-600 hover:bg-[#F8FAFC]"
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleSaveEvent}
-                      disabled={isSavingEvent}
-                      className={`rounded-full bg-[#1F4D3A] px-4 py-1.5 text-[11px] font-medium text-white shadow-sm hover:bg-[#163528] ${
-                        isSavingEvent ? "cursor-not-allowed opacity-70" : ""
-                      }`}
-                    >
-                      {isSavingEvent
-                        ? "Saving..."
-                        : editingEventId === null
-                        ? "Save event"
-                        : "Update event"}
-                    </button>
                   </div>
                 </div>
               </div>
             )}
 
+
             {isContestModalOpen && (
-              <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 px-4">
-                <div className="w-full max-w-md rounded-2xl border border-[#1F4D3A1F] bg-white shadow-xl">
-                  <div className="flex items-center justify-between border-b border-[#E2E8F0] px-5 py-3">
+              <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-md animate-in fade-in duration-300">
+                <div className="w-full max-w-md scale-100 rounded-[40px] border border-white/40 bg-white/90 p-8 shadow-[0_32px_64px_-12px_rgba(0,0,0,0.14)] backdrop-blur-2xl animate-in zoom-in-95 duration-300">
+                  <div className="mb-8 flex items-center justify-between">
                     <div>
-                      <div className="text-sm font-semibold text-[#1F4D3A]">
-                        {editingContestId === null ? "Add contest" : "Edit contest"}
-                      </div>
-                      <div className="text-[11px] text-slate-500">
-                        Link a new contest to an event.
-                      </div>
+                      <h3 className="text-xl font-black tracking-tight text-slate-900">
+                        {editingContestId === null ? "Add Contest" : "Edit Contest"}
+                      </h3>
+                      <p className="text-[13px] font-medium text-slate-500">
+                        Configure a contest for this event.
+                      </p>
                     </div>
-                    <button
-                      type="button"
+                    <button 
                       onClick={() => setIsContestModalOpen(false)}
-                      className="rounded-full bg-[#F1F5F9] px-2 py-1 text-[11px] text-slate-500 hover:bg-[#E2E8F0]"
+                      className="flex h-10 w-10 items-center justify-center rounded-2xl bg-slate-100 text-slate-500 transition-all hover:bg-slate-200 hover:text-slate-900 active:scale-90"
                     >
-                      Close
+                      <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" /></svg>
                     </button>
                   </div>
-                  <div className="space-y-3 px-5 py-4 text-[11px]">
-                    <div className="space-y-1">
-                      <div className="text-[10px] text-slate-500">
-                        Select Event *
+
+                  <div className="space-y-6">
+                    <div className="space-y-2">
+                      <label className="text-[13px] font-bold text-slate-700">Select Event *</label>
+                      <div className="relative">
+                        <select
+                          value={selectedEventIdForContest ?? ""}
+                          onChange={(e) => setSelectedEventIdForContest(e.target.value ? Number(e.target.value) : null)}
+                          className="w-full appearance-none rounded-2xl border border-slate-200 bg-slate-50/50 px-4 py-3 text-[14px] font-medium text-slate-900 outline-none transition-all focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/10"
+                        >
+                          <option value="">Choose an event</option>
+                          {events.filter(e => e.is_active).map((event) => (
+                            <option key={event.id} value={event.id}>{event.name} ({event.year})</option>
+                          ))}
+                        </select>
+                        <div className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-slate-400">
+                          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+                        </div>
                       </div>
-                      <select
-                        value={selectedEventIdForContest ?? ""}
-                        onChange={(e) =>
-                          setSelectedEventIdForContest(
-                            e.target.value ? Number(e.target.value) : null,
-                          )
-                        }
-                        className="w-full max-w-[420px] rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
-                      >
-                        <option value="">-- Choose an event --</option>
-                        {events.filter((event) => event.is_active).map((event) => (
-                          <option key={event.id} value={event.id}>
-                            {event.name} ({event.year})
-                          </option>
-                        ))}
-                      </select>
                     </div>
-                    <div className="space-y-1">
-                      <div className="text-[10px] text-slate-500">
-                        Contest Name *
-                      </div>
+
+                    <div className="space-y-2">
+                      <label className="text-[13px] font-bold text-slate-700">Contest Name *</label>
                       <input
+                        placeholder="e.g. Swimsuit Competition"
                         value={contestName}
-                        onChange={(event) => setContestName(event.target.value)}
-                        className="w-full max-w-[420px] rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
-                        placeholder="Enter contest name"
+                        onChange={(e) => setContestName(e.target.value)}
+                        className="w-full rounded-2xl border border-slate-200 bg-slate-50/50 px-5 py-3.5 text-[14px] font-medium text-slate-900 outline-none transition-all focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/10"
                       />
                     </div>
-                    <div className="space-y-1">
-                      <div className="text-[10px] text-slate-500">
-                        Scoring system *
-                      </div>
-                      <div className="inline-flex rounded-full bg-[#F1F5F9] p-0.5 text-[11px]">
+
+                    <div className="space-y-3">
+                      <label className="text-[13px] font-bold text-slate-700">Scoring System *</label>
+                      <div className="flex gap-2 rounded-2xl bg-slate-100 p-1">
                         <button
-                          type="button"
                           onClick={() => setContestScoringType("percentage")}
-                          className={`flex-1 rounded-full px-3 py-1 text-xs ${
-                            contestScoringType === "percentage"
-                              ? "bg-white text-[#1F4D3A] shadow-sm"
-                              : "text-slate-500"
+                          className={`flex-1 rounded-xl py-2 text-[13px] font-bold transition-all ${
+                            contestScoringType === "percentage" ? "bg-white text-emerald-700 shadow-sm" : "text-slate-500 hover:text-slate-700"
                           }`}
                         >
                           Percentage
                         </button>
                         <button
-                          type="button"
                           onClick={() => setContestScoringType("points")}
-                          className={`flex-1 rounded-full px-3 py-1 text-xs ${
-                            contestScoringType === "points"
-                              ? "bg-white text-[#1F4D3A] shadow-sm"
-                              : "text-slate-500"
+                          className={`flex-1 rounded-xl py-2 text-[13px] font-bold transition-all ${
+                            contestScoringType === "points" ? "bg-white text-emerald-700 shadow-sm" : "text-slate-500 hover:text-slate-700"
                           }`}
                         >
-                          Points
+                          Raw Points
                         </button>
                       </div>
-                      <div className="text-[10px] text-slate-400">
-                        Percentage: scores are 0–100 with weighted criteria.
-                        Points: scores are raw points per criteria.
-                      </div>
+                      <p className="px-2 text-[11px] font-medium text-slate-400 italic">
+                        {contestScoringType === "percentage" 
+                          ? "Scores are 0–100 with weighted criteria percentages." 
+                          : "Scores are total points based on raw criteria values."}
+                      </p>
                     </div>
-                    <div className="space-y-1">
-                      <div className="text-[10px] text-slate-500">Divisions (optional)</div>
+
+                    <div className="space-y-3">
+                      <label className="text-[13px] font-bold text-slate-700">Divisions (Optional)</label>
                       <div className="flex gap-2">
                         <input
+                          placeholder="e.g. Male / Female"
                           value={contestCategoryText}
-                          onChange={(event) =>
-                            setContestCategoryText(event.target.value)
-                          }
-                          onKeyDown={(event) => {
-                            if (event.key === "Enter") {
-                              event.preventDefault();
-                              const value = contestCategoryText.trim();
-                              if (!value) {
-                                return;
+                          onChange={(e) => setContestCategoryText(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.preventDefault();
+                              const val = contestCategoryText.trim();
+                              if (val && !contestDivisionNames.includes(val)) {
+                                setContestDivisionNames(prev => [...prev, val]);
+                                setContestCategoryText("");
                               }
-                              const lower = value.toLowerCase();
-                              const exists = contestDivisionNames.some(
-                                (name) => name.toLowerCase() === lower,
-                              );
-                              if (!exists) {
-                                setContestDivisionNames((previous) => [
-                                  ...previous,
-                                  value,
-                                ]);
-                              }
+                            }
+                          }}
+                          className="flex-1 rounded-2xl border border-slate-200 bg-slate-50/50 px-5 py-3 text-[14px] font-medium text-slate-900 outline-none transition-all focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/10"
+                        />
+                        <button
+                          onClick={() => {
+                            const val = contestCategoryText.trim();
+                            if (val && !contestDivisionNames.includes(val)) {
+                              setContestDivisionNames(prev => [...prev, val]);
                               setContestCategoryText("");
                             }
                           }}
-                          className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
-                          placeholder="Add a division, e.g., Male"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const value = contestCategoryText.trim();
-                            if (!value) {
-                              return;
-                            }
-                            const lower = value.toLowerCase();
-                            const exists = contestDivisionNames.some(
-                              (name) => name.toLowerCase() === lower,
-                            );
-                            if (!exists) {
-                              setContestDivisionNames((previous) => [
-                                ...previous,
-                                value,
-                              ]);
-                            }
-                            setContestCategoryText("");
-                          }}
-                          className="flex h-8 w-8 items-center justify-center rounded-full bg-[#1F4D3A] text-xs font-semibold text-white shadow-sm transition hover:bg-[#163528]"
+                          className="flex h-12 w-12 items-center justify-center rounded-2xl bg-emerald-600 text-white shadow-lg transition-all hover:bg-emerald-700 active:scale-90"
                         >
-                          +
+                          <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 4v16m8-8H4" /></svg>
                         </button>
                       </div>
+
                       {contestDivisionNames.length > 0 && (
-                        <div className="flex flex-wrap gap-1.5 pt-1">
+                        <div className="flex flex-wrap gap-2 pt-1">
                           {contestDivisionNames.map((name) => (
                             <button
                               key={name}
-                              type="button"
-                              onClick={() =>
-                                setContestDivisionNames((previous) =>
-                                  previous.filter((item) => item !== name),
-                                )
-                              }
-                              className="flex items-center gap-1 rounded-full bg-[#F1F5F9] px-2 py-0.5 text-[10px] text-slate-700"
+                              onClick={() => setContestDivisionNames(prev => prev.filter(n => n !== name))}
+                              className="group flex items-center gap-2 rounded-xl bg-emerald-50 px-3 py-1.5 text-[12px] font-bold text-emerald-700 ring-1 ring-emerald-600/10 transition-all hover:bg-red-50 hover:text-red-700 hover:ring-red-600/10"
                             >
                               <span>{name}</span>
-                              <span className="rounded-full bg-[#E2E8F0] px-1 text-[9px] text-slate-500">
-                                ×
-                              </span>
+                              <svg className="h-3 w-3 opacity-50 group-hover:opacity-100" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" /></svg>
                             </button>
                           ))}
                         </div>
                       )}
-                      <div className="text-[10px] text-slate-400">
-                        Add one division at a time and click +. They appear in
-                        the participant division dropdown.
-                      </div>
-                      {selectedEventIdForContest !== null && (
-                        <div className="mt-3 space-y-2">
-                          <div className="text-[10px] font-semibold text-slate-600">
-                            Existing divisions for this event
-                          </div>
-                          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                            {categories
-                              .filter((d) => d.event_id === selectedEventIdForContest)
-                              .map((division) => (
-                                <div
-                                  key={division.id}
-                                  className="flex items-center justify-between rounded-xl border border-[#E2E8F0] bg-white px-3 py-2 text-[11px]"
-                                >
-                                  {editingDivisionIdForEvent === division.id ? (
-                                    <div className="flex w-full items-center gap-2">
-                                      <input
-                                        value={editingDivisionNameForEvent}
-                                        onChange={(e) =>
-                                          setEditingDivisionNameForEvent(e.target.value)
-                                        }
-                                        className="flex-1 rounded-lg border border-[#D0D7E2] bg-white px-2 py-1 outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
-                                      />
-                                      <button
-                                        type="button"
-                                        onClick={handleSaveDivisionNameForEvent}
-                                        className="rounded-full bg-[#1F4D3A] px-3 py-1 text-[10px] font-semibold text-white hover:bg-[#163528]"
-                                      >
-                                        Save
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() => {
-                                          setEditingDivisionIdForEvent(null);
-                                          setEditingDivisionNameForEvent("");
-                                        }}
-                                        className="rounded-full border border-[#E2E8F0] px-3 py-1 text-[10px] text-slate-600 hover:bg-[#F8FAFC]"
-                                      >
-                                        Cancel
-                                      </button>
-                                    </div>
-                                  ) : (
-                                    <>
-                                      <div className="font-medium text-slate-700">
-                                        {division.name}
-                                      </div>
-                                      <button
-                                        type="button"
-                                        onClick={() => {
-                                          setEditingDivisionIdForEvent(division.id);
-                                          setEditingDivisionNameForEvent(division.name);
-                                        }}
-                                        className="rounded-full border border-[#E2E8F0] px-3 py-1 text-[10px] text-slate-600 hover:bg-[#F8FAFC]"
-                                      >
-                                        Edit
-                                      </button>
-                                    </>
-                                  )}
-                                </div>
-                              ))}
-                          </div>
-                        </div>
-                      )}
                     </div>
+
                     {(contestError || contestSuccess) && (
-                      <div
-                        className={`text-[10px] ${
-                          contestError ? "text-red-500" : "text-emerald-600"
-                        }`}
-                      >
+                      <div className={`rounded-2xl px-4 py-3 text-[13px] font-bold flex items-center gap-2 ${
+                        contestError ? "bg-red-50 text-red-600 border border-red-100" : "bg-emerald-50 text-emerald-700 border border-emerald-100"
+                      }`}>
+                        <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          {contestError ? (
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                          ) : (
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                          )}
+                        </svg>
                         {contestError ?? contestSuccess}
                       </div>
                     )}
-                  </div>
-                  <div className="flex items-center justify-end gap-2 border-t border-[#E2E8F0] px-5 py-3">
-                    <button
-                      type="button"
-                      onClick={() => setIsContestModalOpen(false)}
-                      className="rounded-full border border-[#E2E8F0] px-3 py-1.5 text-[11px] text-slate-600 hover:bg-[#F8FAFC]"
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleSaveContest}
-                      disabled={isSavingContest || activeEventId === null}
-                      className={`rounded-full bg-[#1F4D3A] px-4 py-1.5 text-[11px] font-medium text-white shadow-sm hover:bg-[#163528] ${
-                        isSavingContest ? "cursor-not-allowed opacity-70" : ""
-                      }`}
-                    >
-                      {isSavingContest
-                        ? editingContestId === null
-                          ? "Creating..."
-                          : "Updating..."
-                        : editingContestId === null
-                        ? "Create contest"
-                        : "Update contest"}
-                    </button>
+
+                    <div className="flex gap-3 pt-4">
+                      <button
+                        onClick={() => setIsContestModalOpen(false)}
+                        className="flex-1 rounded-2xl border border-slate-200 py-4 text-[14px] font-bold text-slate-600 transition-all hover:bg-slate-50 active:scale-95"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={handleSaveContest}
+                        disabled={isSavingContest}
+                        className="flex-[1.5] rounded-2xl bg-slate-900 py-4 text-[14px] font-bold text-white shadow-xl transition-all hover:bg-black active:scale-95 disabled:opacity-50"
+                      >
+                        {isSavingContest ? (
+                          <div className="flex items-center justify-center gap-2">
+                            <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                            <span>Saving...</span>
+                          </div>
+                        ) : (
+                          editingContestId === null ? "Create Contest" : "Update Contest"
+                        )}
+                      </button>
+                    </div>
                   </div>
                 </div>
               </div>
             )}
 
+
             {isCriteriaModalOpen && (
-              <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 px-4">
-                <div className="w-full max-w-md rounded-2xl border border-[#1F4D3A1F] bg-white shadow-xl">
-                  <div className="flex items-center justify-between border-b border-[#E2E8F0] px-5 py-3">
+              <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-md animate-in fade-in duration-300">
+                <div className="w-full max-w-lg scale-100 rounded-[40px] border border-white/40 bg-white/90 p-8 shadow-[0_32px_64px_-12px_rgba(0,0,0,0.14)] backdrop-blur-2xl animate-in zoom-in-95 duration-300">
+                  <div className="mb-8 flex items-center justify-between">
                     <div>
-                      <div className="text-sm font-semibold text-[#1F4D3A]">
-                        {editingCriteriaId === null
-                          ? "Add criteria"
-                          : "Edit criteria"}
-                      </div>
-                      <div className="text-[11px] text-slate-500">
-                        Define how this contest will be scored.
-                      </div>
+                      <h3 className="text-xl font-black tracking-tight text-slate-900">
+                        {editingCriteriaId === null ? "Add Criteria" : "Edit Criteria"}
+                      </h3>
+                      <p className="text-[13px] font-medium text-slate-500">
+                        {editingCriteriaId === null ? "Define scoring criteria categories and items." : "Update criteria details."}
+                      </p>
                     </div>
-                    <button
-                      type="button"
+                    <button 
                       onClick={() => setIsCriteriaModalOpen(false)}
-                      className="rounded-full bg-[#F1F5F9] px-2 py-1 text-[11px] text-slate-500 hover:bg-[#E2E8F0]"
+                      className="flex h-10 w-10 items-center justify-center rounded-2xl bg-slate-100 text-slate-500 transition-all hover:bg-slate-200 hover:text-slate-900 active:scale-90"
                     >
-                      Close
+                      <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" /></svg>
                     </button>
                   </div>
-                  <div className="space-y-3 px-5 py-4 text-[11px]">
+
+                  <div className="max-h-[60vh] overflow-y-auto pr-2 space-y-6 custom-scrollbar">
                     {editingCriteriaId === null ? (
                       <>
-                        <div className="space-y-1">
-                          <div className="text-[10px] text-slate-500">
-                            Select contest *
-                          </div>
-                          <select
-                            value={selectedContestIdForCriteria ?? ""}
-                            onChange={(event) => {
-                              const value = event.target.value;
-                              setSelectedContestIdForCriteria(
-                                value ? Number(value) : null,
-                              );
-                            }}
-                            className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
-                          >
-                            <option value="">-- Select Contest --</option>
-                            {contests
-                              .filter(
-                                (contest) =>
-                                  activeEventId === null ||
-                                  contest.event_id === activeEventId,
-                              )
-                              .map((contest) => (
-                                <option key={contest.id} value={contest.id}>
-                                  {contest.name}
-                                </option>
+                        <div className="space-y-2">
+                          <label className="text-[13px] font-bold text-slate-700">Select Contest *</label>
+                          <div className="relative">
+                            <select
+                              value={selectedContestIdForCriteria ?? ""}
+                              onChange={(e) => setSelectedContestIdForCriteria(e.target.value ? Number(e.target.value) : null)}
+                              className="w-full appearance-none rounded-2xl border border-slate-200 bg-slate-50/50 px-4 py-3 text-[14px] font-medium text-slate-900 outline-none transition-all focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/10"
+                            >
+                              <option value="">Choose a contest</option>
+                              {contests.filter(c => activeEventId === null || c.event_id === activeEventId).map((contest) => (
+                                <option key={contest.id} value={contest.id}>{contest.name}</option>
                               ))}
-                          </select>
-                        </div>
-                        <div className="space-y-1">
-                          <div className="text-[10px] text-slate-500">
-                            Criteria Category Name *
+                            </select>
+                            <div className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-slate-400">
+                              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+                            </div>
                           </div>
+                        </div>
+
+                        <div className="space-y-2">
+                          <label className="text-[13px] font-bold text-slate-700">Criteria Category Name *</label>
                           <input
+                            placeholder="e.g. Technical Skills"
                             value={criteriaCategory}
-                            onChange={(event) =>
-                              setCriteriaCategory(event.target.value)
-                            }
-                            className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
-                            placeholder="e.g., Beauty"
+                            onChange={(e) => setCriteriaCategory(e.target.value)}
+                            className="w-full rounded-2xl border border-slate-200 bg-slate-50/50 px-5 py-3.5 text-[14px] font-medium text-slate-900 outline-none transition-all focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/10"
                           />
                         </div>
-                        <div className="flex items-center justify-between pt-1">
-                          <div className="text-[10px] text-slate-500">
-                            Criteria list
+
+                        <div className="space-y-4">
+                          <div className="flex items-center justify-between">
+                            <label className="text-[13px] font-bold text-slate-700">Criteria Items</label>
+                            <button
+                              onClick={handleAddCriteriaItem}
+                              className="flex items-center gap-1.5 text-[11px] font-bold text-emerald-600 hover:text-emerald-700"
+                            >
+                              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 4v16m8-8H4" /></svg>
+                              Add Item
+                            </button>
                           </div>
-                          <button
-                            type="button"
-                            onClick={handleAddCriteriaItem}
-                            className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-[#D0D7E2] text-xs font-semibold text-[#1F4D3A] hover:bg-[#F5F7FF]"
-                          >
-                            +
-                          </button>
+
+                          <div className="space-y-3">
+                            {criteriaItems.map((item, index) => (
+                              <div key={index} className="group relative grid grid-cols-[1fr_100px_40px] gap-3 rounded-3xl border border-slate-100 bg-slate-50/30 p-4 transition-all hover:bg-white hover:shadow-sm">
+                                <div className="space-y-1">
+                                  <input
+                                    placeholder="Criteria Name"
+                                    value={item.name}
+                                    onChange={(e) => handleChangeCriteriaItem(index, "name", e.target.value)}
+                                    className="w-full bg-transparent text-[13px] font-bold text-slate-800 outline-none placeholder:text-slate-300"
+                                  />
+                                </div>
+                                <div className="space-y-1">
+                                  <input
+                                    type="number"
+                                    placeholder="Points"
+                                    value={item.weight}
+                                    onChange={(e) => handleChangeCriteriaItem(index, "weight", e.target.value)}
+                                    className="w-full bg-transparent text-[13px] font-bold text-emerald-600 outline-none placeholder:text-slate-300"
+                                  />
+                                </div>
+                                <button
+                                  onClick={() => setCriteriaItems(prev => prev.filter((_, i) => i !== index))}
+                                  className="flex h-8 w-8 items-center justify-center rounded-xl text-slate-300 transition-all hover:bg-red-50 hover:text-red-500"
+                                >
+                                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                                </button>
+                              </div>
+                            ))}
+                          </div>
                         </div>
-                        {criteriaItems.map((item, index) => (
-                          <div
-                            key={index}
-                            className="grid grid-cols-1 gap-2 sm:grid-cols-2"
-                          >
-                            <div className="space-y-1">
-                              <div className="text-[10px] text-slate-500">
-                                Criteria
-                              </div>
-                              <input
-                                value={item.name}
-                                onChange={(event) =>
-                                  handleChangeCriteriaItem(
-                                    index,
-                                    "name",
-                                    event.target.value,
-                                  )
-                                }
-                                className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
-                                placeholder="Enter criteria name"
-                              />
-                            </div>
-                            <div className="space-y-1">
-                              <div className="text-[10px] text-slate-500">
-                                Points
-                              </div>
-                              <input
-                                type="number"
-                                value={item.weight}
-                                onChange={(event) =>
-                                  handleChangeCriteriaItem(
-                                    index,
-                                    "weight",
-                                    event.target.value,
-                                  )
-                                }
-                                className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
-                                placeholder="Enter points (0-100)"
-                              />
-                            </div>
-                          </div>
-                        ))}
                       </>
                     ) : (
                       <>
-                        <div className="space-y-1">
-                          <div className="text-[10px] text-slate-500">
-                            Select contest *
+                        <div className="space-y-2">
+                          <label className="text-[13px] font-bold text-slate-700">Contest</label>
+                          <div className="rounded-2xl border border-slate-100 bg-slate-50/50 px-5 py-3.5 text-[14px] font-bold text-slate-400">
+                            {contests.find(c => c.id === selectedContestIdForCriteria)?.name ?? "Unknown Contest"}
                           </div>
-                          <select
-                            value={selectedContestIdForCriteria ?? ""}
-                            onChange={(event) => {
-                              const value = event.target.value;
-                              setSelectedContestIdForCriteria(
-                                value ? Number(value) : null,
-                              );
-                            }}
-                            className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
-                          >
-                            <option value="">-- Select Contest --</option>
-                            {contests
-                              .filter(
-                                (contest) =>
-                                  activeEventId === null ||
-                                  contest.event_id === activeEventId,
-                              )
-                              .map((contest) => (
-                                <option key={contest.id} value={contest.id}>
-                                  {contest.name}
-                                </option>
-                              ))}
-                          </select>
                         </div>
-                        <div className="space-y-1">
-                          <div className="text-[10px] text-slate-500">
-                            Criteria Category Name
-                          </div>
+
+                        <div className="space-y-2">
+                          <label className="text-[13px] font-bold text-slate-700">Category Name</label>
                           <input
                             value={editingCriteriaCategory}
-                            onChange={(event) =>
-                              setEditingCriteriaCategory(event.target.value)
-                            }
-                            className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
-                            placeholder="e.g., Beauty"
+                            onChange={(e) => setEditingCriteriaCategory(e.target.value)}
+                            className="w-full rounded-2xl border border-slate-200 bg-slate-50/50 px-5 py-3.5 text-[14px] font-medium text-slate-900 outline-none transition-all focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/10"
                           />
                         </div>
-                        
-                        <div className="space-y-1">
-                          <div className="text-[10px] text-slate-500">
-                            Criteria Name *
-                          </div>
+
+                        <div className="space-y-2">
+                          <label className="text-[13px] font-bold text-slate-700">Criteria Name *</label>
                           <input
                             value={criteriaName}
-                            onChange={(event) =>
-                              setCriteriaName(event.target.value)
-                            }
-                            className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
-                            placeholder="e.g., Technique, Presentation, etc."
+                            onChange={(e) => setCriteriaName(e.target.value)}
+                            className="w-full rounded-2xl border border-slate-200 bg-slate-50/50 px-5 py-3.5 text-[14px] font-medium text-slate-900 outline-none transition-all focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/10"
                           />
                         </div>
-                        <div className="space-y-1">
-                          <div className="text-[10px] text-slate-500">
-                            Points *
-                          </div>
+
+                        <div className="space-y-2">
+                          <label className="text-[13px] font-bold text-slate-700">Points *</label>
                           <input
                             type="number"
                             value={criteriaWeight}
-                            onChange={(event) =>
-                              setCriteriaWeight(event.target.value)
-                            }
-                            className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
-                            placeholder="Enter points (0-100)"
+                            onChange={(e) => setCriteriaWeight(e.target.value)}
+                            className="w-full rounded-2xl border border-slate-200 bg-slate-50/50 px-5 py-3.5 text-[14px] font-medium text-slate-900 outline-none transition-all focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/10"
                           />
                         </div>
-                        <div className="space-y-1">
-                          <div className="text-[10px] text-slate-500">
-                            Description
-                          </div>
+
+                        <div className="space-y-2">
+                          <label className="text-[13px] font-bold text-slate-700">Description</label>
                           <textarea
+                            rows={3}
                             value={criteriaDescription}
-                            onChange={(event) =>
-                              setCriteriaDescription(event.target.value)
-                            }
-                            className="min-h-[70px] w-full resize-none rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
-                            placeholder="Enter criteria description"
+                            onChange={(e) => setCriteriaDescription(e.target.value)}
+                            className="w-full resize-none rounded-2xl border border-slate-200 bg-slate-50/50 px-5 py-3.5 text-[14px] font-medium text-slate-900 outline-none transition-all focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/10"
                           />
                         </div>
                       </>
                     )}
+                  </div>
+
+                  <div className="mt-8 space-y-4">
                     {(criteriaError || criteriaSuccess) && (
-                      <div
-                        className={`text-[10px] ${
-                          criteriaError ? "text-red-500" : "text-emerald-600"
-                        }`}
-                      >
+                      <div className={`rounded-2xl px-4 py-3 text-[13px] font-bold flex items-center gap-2 ${
+                        criteriaError ? "bg-red-50 text-red-600 border border-red-100" : "bg-emerald-50 text-emerald-700 border border-emerald-100"
+                      }`}>
+                        <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          {criteriaError ? (
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                          ) : (
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                          )}
+                        </svg>
                         {criteriaError ?? criteriaSuccess}
                       </div>
                     )}
-                  </div>
-                  <div className="flex items-center justify-end gap-2 border-t border-[#E2E8F0] px-5 py-3">
-                    <button
-                      type="button"
-                      onClick={() => setIsCriteriaModalOpen(false)}
-                      className="rounded-full border border-[#E2E8F0] px-3 py-1.5 text-[11px] text-slate-600 hover:bg-[#F8FAFC]"
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleSaveCriteria}
-                      disabled={isSavingCriteria}
-                      className={`rounded-full bg-[#1F4D3A] px-4 py-1.5 text-[11px] font-medium text-white shadow-sm hover:bg-[#163528] ${
-                        isSavingCriteria ? "cursor-not-allowed opacity-70" : ""
-                      }`}
-                    >
-                      {isSavingCriteria
-                        ? "Saving..."
-                        : editingCriteriaId === null
-                        ? "Add criteria"
-                        : "Update criteria"}
-                    </button>
+
+                    <div className="flex gap-3">
+                      <button
+                        onClick={() => setIsCriteriaModalOpen(false)}
+                        className="flex-1 rounded-2xl border border-slate-200 py-4 text-[14px] font-bold text-slate-600 transition-all hover:bg-slate-50 active:scale-95"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={handleSaveCriteria}
+                        disabled={isSavingCriteria}
+                        className="flex-[1.5] rounded-2xl bg-slate-900 py-4 text-[14px] font-bold text-white shadow-xl transition-all hover:bg-black active:scale-95 disabled:opacity-50"
+                      >
+                        {isSavingCriteria ? (
+                          <div className="flex items-center justify-center gap-2">
+                            <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                            <span>Saving...</span>
+                          </div>
+                        ) : (
+                          editingCriteriaId === null ? "Save Criteria" : "Update Criteria"
+                        )}
+                      </button>
+                    </div>
                   </div>
                 </div>
               </div>
             )}
 
+
             {isAwardModalOpen && (
-              <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 px-4">
-                <div className="w-full max-w-md rounded-2xl border border-[#1F4D3A1F] bg-white shadow-xl">
-                  <div className="flex items-center justify-between border-b border-[#E2E8F0] px-5 py-3">
+              <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-md animate-in fade-in duration-300">
+                <div className="w-full max-w-lg scale-100 rounded-[40px] border border-white/40 bg-white/90 p-8 shadow-[0_32px_64px_-12px_rgba(0,0,0,0.14)] backdrop-blur-2xl animate-in zoom-in-95 duration-300">
+                  <div className="mb-8 flex items-center justify-between">
                     <div>
-                      <div className="text-sm font-semibold text-[#1F4D3A]">
-                        {editingAwardId === null ? "Add award" : "Edit award"}
-                      </div>
-                      <div className="text-[11px] text-slate-500">
+                      <h3 className="text-xl font-black tracking-tight text-slate-900">
+                        {editingAwardId === null ? "Add Award" : "Edit Award"}
+                      </h3>
+                      <p className="text-[13px] font-medium text-slate-500">
                         Configure awards for this event.
-                      </div>
+                      </p>
                     </div>
-                    <button
-                      type="button"
+                    <button 
                       onClick={() => setIsAwardModalOpen(false)}
-                      className="rounded-full bg-[#F1F5F9] px-2 py-1 text-[11px] text-slate-500 hover:bg-[#E2E8F0]"
+                      className="flex h-10 w-10 items-center justify-center rounded-2xl bg-slate-100 text-slate-500 transition-all hover:bg-slate-200 hover:text-slate-900 active:scale-90"
                     >
-                      Close
+                      <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" /></svg>
                     </button>
                   </div>
-                  <div className="space-y-3 px-5 py-4 text-[11px]">
-                    <div className="space-y-1">
-                      <div className="text-[10px] text-slate-500">
-                        Award name *
-                      </div>
+
+                  <div className="max-h-[60vh] overflow-y-auto pr-2 space-y-6 custom-scrollbar">
+                    <div className="space-y-2">
+                      <label className="text-[13px] font-bold text-slate-700">Award Name *</label>
                       <input
+                        placeholder="e.g. Best in Talent"
                         value={awardName}
-                        onChange={(event) => setAwardName(event.target.value)}
-                        className="w-full max-w-[420px] rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
-                        placeholder="e.g., Best in Talent"
+                        onChange={(e) => setAwardName(e.target.value)}
+                        className="w-full rounded-2xl border border-slate-200 bg-slate-50/50 px-5 py-3.5 text-[14px] font-medium text-slate-900 outline-none transition-all focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/10"
                       />
                     </div>
-                      <div className="space-y-1">
-                        <div className="text-[10px] text-slate-500">Select Event *</div>
+
+                    <div className="space-y-2">
+                      <label className="text-[13px] font-bold text-slate-700">Select Event *</label>
+                      <div className="relative">
                         <select
                           value={selectedEventIdForAward ?? ""}
                           onChange={(e) => setSelectedEventIdForAward(e.target.value ? Number(e.target.value) : null)}
-                          className="w-full max-w-[420px] rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                          className="w-full appearance-none rounded-2xl border border-slate-200 bg-slate-50/50 px-4 py-3 text-[14px] font-medium text-slate-900 outline-none transition-all focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/10"
                         >
-                          <option value="">-- Choose an event --</option>
-                          {events.map((event) => (
-                            <option key={event.id} value={event.id}>
-                              {event.name} ({event.year})
-                            </option>
+                          <option value="">Choose an event</option>
+                          {events.filter(e => e.is_active).map((event) => (
+                            <option key={event.id} value={event.id}>{event.name} ({event.year})</option>
                           ))}
                         </select>
-                      </div>
-                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                      <div className="space-y-1">
-                        <div className="text-[10px] text-slate-500">
-                          Award type *
+                        <div className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-slate-400">
+                          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
                         </div>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <label className="text-[13px] font-bold text-slate-700">Award Type *</label>
                         <select
                           value={awardType}
-                          onChange={(event) =>
-                            setAwardType(event.target.value as AwardType)
-                          }
-                          className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                          onChange={(e) => setAwardType(e.target.value as AwardType)}
+                          className="w-full appearance-none rounded-2xl border border-slate-200 bg-slate-50/50 px-4 py-3 text-[14px] font-medium text-slate-900 outline-none transition-all focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/10"
                         >
                           <option value="criteria">Criteria-based</option>
                           <option value="special">Special</option>
                         </select>
                       </div>
-                      <div className="space-y-1">
-                        <div className="text-[10px] text-slate-500">
-                          Limit to contest
-                        </div>
-                          <select
-                            value={awardContestId ?? ""}
-                            onChange={(event) => {
-                              const value = event.target.value;
-                              setAwardContestId(
-                                value ? Number.parseInt(value, 10) : null,
-                              );
-                            }}
-                            className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
-                          >
-                            <option value="">All contests</option>
-                            {(contests.filter((c) => (selectedEventIdForAward ?? activeEventId) === null ? true : c.event_id === (selectedEventIdForAward ?? activeEventId))).map((contest) => (
-                              <option key={contest.id} value={contest.id}>
-                                {contest.name}
-                              </option>
-                            ))}
-                          </select>
+                      <div className="space-y-2">
+                        <label className="text-[13px] font-bold text-slate-700">Limit to Contest</label>
+                        <select
+                          value={awardContestId ?? ""}
+                          onChange={(e) => setAwardContestId(e.target.value ? Number(e.target.value) : null)}
+                          className="w-full appearance-none rounded-2xl border border-slate-200 bg-slate-50/50 px-4 py-3 text-[14px] font-medium text-slate-900 outline-none transition-all focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/10"
+                        >
+                          <option value="">All contests</option>
+                          {contests.filter(c => (selectedEventIdForAward ?? activeEventId) === null ? true : c.event_id === (selectedEventIdForAward ?? activeEventId)).map((contest) => (
+                            <option key={contest.id} value={contest.id}>{contest.name}</option>
+                          ))}
+                        </select>
                       </div>
                     </div>
+
                     {awardType === "criteria" && (
-                      <div className="space-y-1">
-                        <div className="text-[10px] text-slate-500">
-                          Linked criteria category *
-                        </div>
+                      <div className="space-y-2">
+                        <label className="text-[13px] font-bold text-slate-700">Linked Criteria *</label>
                         <div className="relative" ref={awardCriteriaDropdownRef}>
                           <button
-                            type="button"
                             onClick={() => setIsAwardCriteriaDropdownOpen(!isAwardCriteriaDropdownOpen)}
-                            className="flex w-full items-center justify-between rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                            className="flex w-full items-center justify-between rounded-2xl border border-slate-200 bg-slate-50/50 px-4 py-3 text-[14px] font-medium text-slate-900 outline-none transition-all focus:border-emerald-500 focus:bg-white"
                           >
                             <span className={awardCriteriaIds.length === 0 ? "text-slate-400" : "text-slate-900"}>
-                              {awardCriteriaIds.length === 0
-                                ? "Select criteria"
-                                : `${awardCriteriaIds.length} criterion${awardCriteriaIds.length > 1 ? "a" : ""} selected`}
+                              {awardCriteriaIds.length === 0 ? "Select criteria" : `${awardCriteriaIds.length} criteria selected`}
                             </span>
-                            <svg
-                              xmlns="http://www.w3.org/2000/svg"
-                              fill="none"
-                              viewBox="0 0 24 24"
-                              strokeWidth={1.5}
-                              stroke="currentColor"
-                              className={`h-4 w-4 text-slate-400 transition-transform ${isAwardCriteriaDropdownOpen ? "rotate-180" : ""}`}
-                            >
-                              <path strokeLinecap="round" strokeLinejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
-                            </svg>
+                            <svg className={`h-4 w-4 text-slate-400 transition-transform ${isAwardCriteriaDropdownOpen ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
                           </button>
                           
                           {isAwardCriteriaDropdownOpen && (
-                            <div className="absolute left-0 top-full z-10 mt-1 max-h-60 w-full overflow-auto rounded-xl border border-[#E2E8F0] bg-white shadow-lg">
+                            <div className="absolute left-0 top-full z-[110] mt-2 max-h-60 w-full overflow-auto rounded-3xl border border-slate-100 bg-white p-2 shadow-2xl animate-in fade-in zoom-in-95 duration-200">
                               {criteriaForActiveEvent.length === 0 ? (
-                                <div className="px-3 py-2 text-xs text-slate-400">No criteria available.</div>
+                                <div className="px-4 py-3 text-[13px] text-slate-400">No criteria available.</div>
                               ) : (
-                                <div className="p-1">
-                                  {Array.from(new Set(criteriaForActiveEvent.map(c => c.category || "Uncategorized"))).map((category) => {
-                                    const criteriaInCategory = criteriaForActiveEvent.filter(c => (c.category || "Uncategorized") === category);
-                                    const isExpanded = expandedAwardCategories.has(category);
-                                    
-                                    return (
-                                      <div key={category} className="border-b border-[#F1F5F9] last:border-0">
-                                        <div className="flex items-center gap-2 px-2 py-1.5 hover:bg-[#F8FAFC]">
-                                          <div 
-                                            className="flex flex-1 cursor-pointer items-center justify-between py-0.5"
-                                            onClick={() => {
-                                              const next = new Set(expandedAwardCategories);
-                                              if (next.has(category)) next.delete(category);
-                                              else next.add(category);
-                                              setExpandedAwardCategories(next);
-                                            }}
-                                          >
-                                            <span className="text-xs font-medium text-slate-700">
-                                              {category}
-                                            </span>
-                                            <svg
-                                              xmlns="http://www.w3.org/2000/svg"
-                                              fill="none"
-                                              viewBox="0 0 24 24"
-                                              strokeWidth={2}
-                                              stroke="currentColor"
-                                              className={`h-3 w-3 text-slate-400 transition-transform ${isExpanded ? "rotate-180" : ""}`}
-                                            >
-                                              <path strokeLinecap="round" strokeLinejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
-                                            </svg>
-                                          </div>
+                                Array.from(new Set(criteriaForActiveEvent.map(c => c.category || "Uncategorized"))).map((category) => {
+                                  const criteriaInCategory = criteriaForActiveEvent.filter(c => (c.category || "Uncategorized") === category);
+                                  const isExpanded = expandedAwardCategories.has(category);
+                                  return (
+                                    <div key={category} className="mb-1">
+                                      <button
+                                        onClick={() => {
+                                          const next = new Set(expandedAwardCategories);
+                                          if (next.has(category)) next.delete(category);
+                                          else next.add(category);
+                                          setExpandedAwardCategories(next);
+                                        }}
+                                        className="flex w-full items-center justify-between rounded-xl px-3 py-2 text-left hover:bg-slate-50"
+                                      >
+                                        <span className="text-[12px] font-bold text-slate-700">{category}</span>
+                                        <svg className={`h-3 w-3 text-slate-400 transition-transform ${isExpanded ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M19 9l-7 7-7-7" /></svg>
+                                      </button>
+                                      {isExpanded && (
+                                        <div className="ml-2 mt-1 space-y-1 pl-4 border-l-2 border-slate-100">
+                                          {criteriaInCategory.map((criterion) => (
+                                            <label key={criterion.id} className="flex items-center gap-3 rounded-lg px-2 py-1.5 transition-colors hover:bg-emerald-50/50 cursor-pointer">
+                                              <input
+                                                type="checkbox"
+                                                checked={awardCriteriaIds.includes(criterion.id)}
+                                                onChange={(e) => {
+                                                  if (e.target.checked) setAwardCriteriaIds(prev => [...prev, criterion.id]);
+                                                  else setAwardCriteriaIds(prev => prev.filter(id => id !== criterion.id));
+                                                }}
+                                                className="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500/20"
+                                              />
+                                              <span className="text-[12px] font-medium text-slate-600">{criterion.name}</span>
+                                            </label>
+                                          ))}
                                         </div>
-                                        
-                                        {isExpanded && (
-                                          <div className="bg-slate-50/50 py-1 pl-7 pr-2">
-                                            {criteriaInCategory.map((criterion) => (
-                                              <div key={criterion.id} className="flex items-center gap-2 py-1.5">
-                                                <input
-                                                  type="checkbox"
-                                                  id={`criterion-${criterion.id}`}
-                                                  checked={awardCriteriaIds.includes(criterion.id)}
-                                                  onChange={(e) => {
-                                                    if (e.target.checked) {
-                                                      setAwardCriteriaIds((prev) => [...prev, criterion.id]);
-                                                    } else {
-                                                      setAwardCriteriaIds((prev) => prev.filter((id) => id !== criterion.id));
-                                                    }
-                                                  }}
-                                                  className="h-3 w-3 rounded border-[#D0D7E2] text-[#1F4D3A] focus:ring-[#1F4D3A]"
-                                                />
-                                                <label 
-                                                  htmlFor={`criterion-${criterion.id}`} 
-                                                  className="cursor-pointer text-[11px] text-slate-600 hover:text-[#1F4D3A]"
-                                                >
-                                                  {criterion.name}
-                                                </label>
-                                              </div>
-                                            ))}
-                                          </div>
-                                        )}
-                                      </div>
-                                    );
-                                  })}
-                                </div>
+                                      )}
+                                    </div>
+                                  );
+                                })
                               )}
                             </div>
                           )}
                         </div>
                       </div>
                     )}
-                    <div className="space-y-1">
-                      <div className="text-[10px] text-slate-500">
-                        Description
-                      </div>
+
+                    <div className="space-y-2">
+                      <label className="text-[13px] font-bold text-slate-700">Description</label>
                       <textarea
+                        rows={3}
                         value={awardDescription}
-                        onChange={(event) =>
-                          setAwardDescription(event.target.value)
-                        }
-                        className="min-h-[70px] w-full resize-none rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                        onChange={(e) => setAwardDescription(e.target.value)}
+                        className="w-full resize-none rounded-2xl border border-slate-200 bg-slate-50/50 px-5 py-3.5 text-[14px] font-medium text-slate-900 outline-none transition-all focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/10"
                         placeholder="Describe this award"
                       />
                     </div>
-                    <div className="flex items-center gap-2 pt-1">
+
+                    <div className="flex items-center gap-3 rounded-2xl bg-slate-50/50 p-4 border border-slate-100">
                       <input
                         id="award-active"
                         type="checkbox"
                         checked={awardIsActive}
-                        onChange={(event) =>
-                          setAwardIsActive(event.target.checked)
-                        }
-                        className="h-3 w-3 rounded border-[#D0D7E2] text-[#1F4D3A] focus:ring-[#1F4D3A]"
+                        onChange={(e) => setAwardIsActive(e.target.checked)}
+                        className="h-5 w-5 rounded-lg border-slate-300 text-emerald-600 focus:ring-emerald-500/20"
                       />
-                      <label
-                        htmlFor="award-active"
-                        className="text-[10px] text-slate-600"
-                      >
-                        Award is active
-                      </label>
+                      <label htmlFor="award-active" className="text-[13px] font-bold text-slate-700 cursor-pointer">Award is active</label>
                     </div>
+                  </div>
+
+                  <div className="mt-8 space-y-4">
                     {(awardError || awardSuccess) && (
-                      <div
-                        className={`text-[10px] ${
-                          awardError ? "text-red-500" : "text-emerald-600"
-                        }`}
-                      >
+                      <div className={`rounded-2xl px-4 py-3 text-[13px] font-bold flex items-center gap-2 ${
+                        awardError ? "bg-red-50 text-red-600 border border-red-100" : "bg-emerald-50 text-emerald-700 border border-emerald-100"
+                      }`}>
+                        <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          {awardError ? (
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                          ) : (
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                          )}
+                        </svg>
                         {awardError ?? awardSuccess}
                       </div>
                     )}
-                  </div>
-                  <div className="flex items-center justify-end gap-2 border-t border-[#E2E8F0] px-5 py-3">
-                    <button
-                      type="button"
-                      onClick={() => setIsAwardModalOpen(false)}
-                      className="rounded-full border border-[#E2E8F0] px-3 py-1.5 text-[11px] text-slate-600 hover:bg-[#F8FAFC]"
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleSaveAward}
-                      disabled={isSavingAward}
-                      className={`rounded-full bg-[#1F4D3A] px-4 py-1.5 text-[11px] font-medium text-white shadow-sm hover:bg-[#163528] ${
-                        isSavingAward ? "cursor-not-allowed opacity-70" : ""
-                      }`}
-                    >
-                      {isSavingAward
-                        ? "Saving..."
-                        : editingAwardId === null
-                        ? "Add award"
-                        : "Update award"}
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
-          </section>
-        )}
 
-        {activeTab === "participants" && (
-          <section className="relative space-y-4 rounded-3xl border border-[#1F4D3A1F] bg-white/95 p-6 shadow-[0_18px_45px_rgba(0,0,0,0.05)]">
-            <div className="mb-2 flex items-center justify-between">
-              <div>
-                <h2 className="text-sm font-semibold tracking-tight text-[#1F4D3A]">
-                  Participants
-                </h2>
-                <p className="text-[11px] text-slate-500">
-                  Add teams and participants for each contest.
-                </p>
-              </div>
-            </div>
-
-            <div className="mb-4 flex gap-2 text-[11px]">
-              <button
-                type="button"
-                onClick={() => setParticipantTab("category")}
-                className={`rounded-full border px-3 py-1.5 transition ${
-                  participantTab === "category"
-                    ? "border-[#1F4D3A] bg-[#1F4D3A] text-white shadow-sm"
-                    : "border-transparent bg-[#F5F7FF] text-[#1F4D3A] hover:bg-[#E3F2EA]"
-                }`}
-              >
-                Team
-              </button>
-              <button
-                type="button"
-                onClick={() => setParticipantTab("participant")}
-                className={`rounded-full border px-3 py-1.5 transition ${
-                  participantTab === "participant"
-                    ? "border-[#1F4D3A] bg-[#1F4D3A] text-white shadow-sm"
-                    : "border-transparent bg-[#F5F7FF] text-[#1F4D3A] hover:bg-[#E3F2EA]"
-                }`}
-              >
-                Participant
-              </button>
-              <button
-                type="button"
-                onClick={() => setParticipantTab("judge")}
-                className={`rounded-full border px-3 py-1.5 transition ${
-                  participantTab === "judge"
-                    ? "border-[#1F4D3A] bg-[#1F4D3A] text-white shadow-sm"
-                    : "border-transparent bg-[#F5F7FF] text-[#1F4D3A] hover:bg-[#E3F2EA]"
-                }`}
-              >
-                Judge
-              </button>
-              <button
-                type="button"
-                onClick={() => setParticipantTab("monitoring")}
-                className={`rounded-full border px-3 py-1.5 transition ${
-                  participantTab === "monitoring"
-                    ? "border-[#1F4D3A] bg-[#1F4D3A] text-white shadow-sm"
-                    : "border-transparent bg-[#F5F7FF] text-[#1F4D3A] hover:bg-[#E3F2EA]"
-                }`}
-              >
-                Score Monitoring
-              </button>
-            </div>
-
-            <div>
-              {participantTab === "category" && (
-                <div className="space-y-4">
-                  <div className="flex items-center gap-3">
-                    <div className="flex-1">
-                      <div className="mb-2 text-[11px] font-medium text-slate-600">
-                        Select Event
-                      </div>
-                      <select
-                        value={participantsTabEventFilterId ?? ""}
-                        onChange={(e) => setParticipantsTabEventFilterId(e.target.value ? Number(e.target.value) : null)}
-                        className="w-full max-w-[420px] rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
-                      >
-                        <option value="">-- Choose an event --</option>
-                        {events.map((event) => (
-                          <option key={event.id} value={event.id}>
-                            {event.name} ({event.year})
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                    <div className="w-auto">
+                    <div className="flex gap-3">
                       <button
-                        type="button"
-                        onClick={openCreateCategoryModal}
-                        className="inline-flex items-center rounded-full bg-[#1F4D3A] px-3 py-1.5 text-[11px] font-medium text-white shadow-sm transition hover:bg-[#163528]"
+                        onClick={() => setIsAwardModalOpen(false)}
+                        className="flex-1 rounded-2xl border border-slate-200 py-4 text-[14px] font-bold text-slate-600 transition-all hover:bg-slate-50 active:scale-95"
                       >
-                        Add team
+                        Cancel
+                      </button>
+                      <button
+                        onClick={handleSaveAward}
+                        disabled={isSavingAward}
+                        className="flex-[1.5] rounded-2xl bg-slate-900 py-4 text-[14px] font-bold text-white shadow-xl transition-all hover:bg-black active:scale-95 disabled:opacity-50"
+                      >
+                        {isSavingAward ? (
+                          <div className="flex items-center justify-center gap-2">
+                            <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                            <span>Saving...</span>
+                          </div>
+                        ) : (
+                          editingAwardId === null ? "Add Award" : "Update Award"
+                        )}
                       </button>
                     </div>
                   </div>
+                </div>
+              </div>
+                )}
+              </div>
+            </section>
+          )}
 
-                  <div className="rounded-2xl border border-[#1F4D3A1F] bg-white p-4">
-                    <div className="mb-3 flex items-center justify-between gap-4">
-                      <div className="space-y-0.5">
-                        <div className="text-[11px] font-medium text-slate-600">
-                          Team list
-                        </div>
-                        <div className="text-[10px] text-slate-400">
-                          {teamsForParticipantsTab.length === 0
-                            ? "No teams yet"
-                            : `${teamsForParticipantsTab.length} team${
-                                teamsForParticipantsTab.length > 1 ? "s" : ""
-                              }`}
+        {activeTab === "participants" && (
+          <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-700">
+            {/* Sub-tab Navigation */}
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div className="flex items-center gap-1 rounded-2xl bg-slate-100/50 p-1.5 backdrop-blur-sm">
+                {[
+                  { id: "category", label: "Teams", icon: "Group" },
+                  { id: "participant", label: "Participants", icon: "User" },
+                ].map((tab) => (
+                  <button
+                    key={tab.id}
+                    onClick={() => setParticipantTab(tab.id as ParticipantSubTab)}
+                    className={`flex items-center gap-2 rounded-xl px-4 py-2 text-[13px] font-semibold transition-all duration-300 ${
+                      participantTab === tab.id
+                        ? "bg-white text-emerald-700 shadow-[0_4px_12px_rgba(0,0,0,0.05)] ring-1 ring-slate-200"
+                        : "text-slate-500 hover:bg-white/50 hover:text-slate-700"
+                    }`}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+
+              {participantTab === "category" && (
+                <button
+                  onClick={openCreateCategoryModal}
+                  className="group flex items-center gap-2 rounded-2xl bg-emerald-600 px-5 py-2.5 text-[13px] font-bold text-white shadow-[0_8px_20px_-4px_rgba(16,185,129,0.3)] transition-all hover:bg-emerald-700 hover:shadow-[0_12px_25px_-4px_rgba(16,185,129,0.4)] active:scale-95"
+                >
+                  <svg className="h-4 w-4 transition-transform group-hover:rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 4v16m8-8H4" />
+                  </svg>
+                  Add Team
+                </button>
+              )}
+              {participantTab === "participant" && (
+                <button
+                  onClick={openCreateParticipantModal}
+                  className="group flex items-center gap-2 rounded-2xl bg-emerald-600 px-5 py-2.5 text-[13px] font-bold text-white shadow-[0_8px_20px_-4px_rgba(16,185,129,0.3)] transition-all hover:bg-emerald-700 hover:shadow-[0_12px_25px_-4px_rgba(16,185,129,0.4)] active:scale-95"
+                >
+                  <svg className="h-4 w-4 transition-transform group-hover:rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 4v16m8-8H4" />
+                  </svg>
+                  Add Participant
+                </button>
+              )}
+            </div>
+
+            <div className="grid gap-6">
+              {participantTab === "category" && (
+                <div className="space-y-6">
+                  {/* Filter Section */}
+                  <div className="rounded-[32px] border border-white/40 bg-white/80 p-6 shadow-[0_8px_30px_rgb(0,0,0,0.04)] backdrop-blur-xl">
+                    <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
+                      <div className="flex-1">
+                        <label className="mb-2 block text-[13px] font-bold text-slate-700">Filter by Event</label>
+                        <div className="relative">
+                          <select
+                            value={participantsTabEventFilterId ?? ""}
+                            onChange={(e) => setParticipantsTabEventFilterId(e.target.value ? Number(e.target.value) : null)}
+                            className="w-full appearance-none rounded-2xl border border-slate-200 bg-slate-50/50 px-4 py-3 text-[13px] font-medium text-slate-700 outline-none transition-all focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/10"
+                          >
+                            <option value="">All Events</option>
+                            {events.filter(e => e.is_active).map((event) => (
+                              <option key={event.id} value={event.id}>
+                                {event.name} ({event.year})
+                              </option>
+                            ))}
+                          </select>
+                          <div className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-slate-400">
+                            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+                          </div>
                         </div>
                       </div>
                     </div>
-                    {(categoryError || categorySuccess) && (
-                      <div
-                        className={`mb-2 text-[10px] ${
-                          categoryError ? "text-red-500" : "text-emerald-600"
-                        }`}
-                      >
-                        {categoryError ?? categorySuccess}
-                      </div>
-                    )}
+                  </div>
+
+                  {/* Table Section */}
+                  <div className="overflow-hidden rounded-[32px] border border-white/40 bg-white/80 shadow-[0_8px_30px_rgb(0,0,0,0.04)] backdrop-blur-xl">
+                    <div className="border-b border-slate-100 bg-slate-50/30 px-8 py-5">
+                      <h3 className="text-[15px] font-bold text-slate-800">Team List</h3>
+                    </div>
+                    
                     <div className="overflow-x-auto">
-                      <table className="min-w-full border-collapse text-left text-[11px]">
+                      <table className="w-full text-left">
                         <thead>
-                          <tr className="border-b border-[#E2E8F0] bg-[#F5F7FF] text-[10px] uppercase tracking-wide text-slate-500">
-                            <th className="px-3 py-2 font-medium">Event</th>
-                            <th className="px-3 py-2 font-medium">Team name</th>
-                            <th className="px-3 py-2 font-medium">Actions</th>
+                          <tr className="bg-slate-50/50 text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                            <th className="px-8 py-4">Event</th>
+                            <th className="px-8 py-4">Team Name</th>
+                            <th className="px-8 py-4 text-right">Actions</th>
                           </tr>
                         </thead>
-                        <tbody>
+                        <tbody className="divide-y divide-slate-100">
                           {teamsForParticipantsTab.length === 0 ? (
-                            <tr className="border-b border-[#F1F5F9]">
-                              <td
-                                className="px-3 py-2 text-slate-400"
-                                colSpan={3}
-                              >
-                                Once you add teams, you can edit or delete them
-                                here.
+                            <tr>
+                              <td colSpan={3} className="px-8 py-12 text-center">
+                                <div className="flex flex-col items-center justify-center text-slate-400">
+                                  <svg className="mb-2 h-10 w-10 opacity-20" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" /></svg>
+                                  <span className="text-sm">No teams found for this event.</span>
+                                </div>
                               </td>
                             </tr>
                           ) : (
                             teamsForParticipantsTab.map((team) => (
-                              <tr
-                                key={team.id}
-                                className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC]"
-                              >
-                                <td className="px-3 py-2 text-slate-600">
-                                  {events.find(
-                                    (event) => event.id === team.event_id,
-                                  )?.name ?? "Unknown event"}
+                              <tr key={team.id} className="group transition-colors hover:bg-slate-50/50">
+                                <td className="px-8 py-5">
+                                  <span className="inline-flex items-center rounded-lg bg-emerald-50 px-2.5 py-1 text-[11px] font-bold text-emerald-700 ring-1 ring-inset ring-emerald-600/10">
+                                    {events.find(e => e.id === team.event_id)?.name ?? "Unknown"}
+                                  </span>
                                 </td>
-                                <td className="px-3 py-2 font-medium text-slate-700">
-                                  {team.name}
+                                <td className="px-8 py-5">
+                                  <div className="text-[13px] font-bold text-slate-800">{team.name}</div>
                                 </td>
-                                <td className="px-3 py-2">
-                                  <div className="flex gap-1.5 text-[10px] text-slate-500">
+                                <td className="px-8 py-5">
+                                  <div className="flex justify-end gap-2">
                                     <button
-                                      type="button"
-                                      onClick={() =>
-                                        openEditCategoryModal(team)
-                                      }
-                                      className="rounded-full border border-[#E2E8F0] px-2 py-0.5 text-[10px] hover:bg-[#F8FAFC]"
+                                      onClick={() => openEditCategoryModal(team)}
+                                      className="flex h-9 w-9 items-center justify-center rounded-xl bg-white text-slate-600 shadow-sm ring-1 ring-slate-200 transition-all hover:bg-slate-50 hover:text-emerald-600"
+                                      title="Edit Team"
                                     >
-                                      Edit
+                                      <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
                                     </button>
                                     <button
-                                      type="button"
-                                      onClick={() =>
-                                        handleDeleteCategory(team.id)
-                                      }
+                                      onClick={() => handleDeleteCategory(team.id)}
                                       disabled={isDeletingCategoryId === team.id}
-                                      className="rounded-full border border-[#FEE2E2] px-2 py-0.5 text-[10px] text-red-500 hover:bg-[#FEF2F2] disabled:opacity-60"
+                                      className="flex h-9 w-9 items-center justify-center rounded-xl bg-white text-slate-600 shadow-sm ring-1 ring-slate-200 transition-all hover:bg-red-50 hover:text-red-600 disabled:opacity-50"
+                                      title="Delete Team"
                                     >
-                                      {isDeletingCategoryId === team.id
-                                        ? "Deleting..."
-                                        : "Delete"}
+                                      {isDeletingCategoryId === team.id ? (
+                                        <div className="h-4 w-4 animate-spin rounded-full border-2 border-red-600 border-t-transparent" />
+                                      ) : (
+                                        <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                                      )}
                                     </button>
                                   </div>
                                 </td>
@@ -10883,136 +10231,122 @@ export default function AdminDashboard() {
               )}
 
               {participantTab === "participant" && (
-                <div className="space-y-4">
-                  <div className="flex items-start gap-3">
-                    <div className="flex-1">
-                      <div className="mb-2 text-[11px] font-medium text-slate-600">Select Event</div>
-                      <select
-                        value={participantsTabEventFilterId ?? ""}
-                        onChange={(e) => setParticipantsTabEventFilterId(e.target.value ? Number(e.target.value) : null)}
-                        className="w-full max-w-[420px] rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
-                      >
-                        <option value="">-- Choose an event --</option>
-                        {events.map((event) => (
-                          <option key={event.id} value={event.id}>
-                            {event.name} ({event.year})
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                    <div className="w-auto">
-                      <button
-                        type="button"
-                        onClick={openCreateParticipantModal}
-                        className="inline-flex items-center rounded-full bg-[#1F4D3A] px-3 py-1.5 text-[11px] font-medium text-white shadow-sm transition hover:bg-[#163528]"
-                      >
-                        Add participant
-                      </button>
+                <div className="space-y-6">
+                  {/* Filter & Search Section */}
+                  <div className="rounded-[32px] border border-white/40 bg-white/80 p-6 shadow-[0_8px_30px_rgb(0,0,0,0.04)] backdrop-blur-xl">
+                    <div className="flex flex-col gap-6 lg:flex-row lg:items-end">
+                      <div className="flex-1">
+                        <label className="mb-2 block text-[13px] font-bold text-slate-700">Filter by Event</label>
+                        <div className="relative">
+                          <select
+                            value={participantsTabEventFilterId ?? ""}
+                            onChange={(e) => setParticipantsTabEventFilterId(e.target.value ? Number(e.target.value) : null)}
+                            className="w-full appearance-none rounded-2xl border border-slate-200 bg-slate-50/50 px-4 py-3 text-[13px] font-medium text-slate-700 outline-none transition-all focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/10"
+                          >
+                            <option value="">All Events</option>
+                            {events.filter(e => e.is_active).map((event) => (
+                              <option key={event.id} value={event.id}>
+                                {event.name} ({event.year})
+                              </option>
+                            ))}
+                          </select>
+                          <div className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-slate-400">
+                            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="flex-1">
+                        <label className="mb-2 block text-[13px] font-bold text-slate-700">Search Participant</label>
+                        <div className="relative">
+                          <input
+                            type="text"
+                            placeholder="Search by name or number..."
+                            value={participantSearch}
+                            onChange={(e) => setParticipantSearch(e.target.value)}
+                            className="w-full rounded-2xl border border-slate-200 bg-slate-50/50 px-11 py-3 text-[13px] font-medium text-slate-700 outline-none transition-all focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/10"
+                          />
+                          <div className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400">
+                            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+                          </div>
+                        </div>
+                      </div>
                     </div>
                   </div>
 
-                  <div className="rounded-2xl border border-[#1F4D3A1F] bg-white p-4">
-                    <div className="mb-2 flex items-center justify-between">
-                      <div className="text-[11px] font-medium text-slate-600">
-                        Participant list
-                      </div>
-                      <div className="flex items-center gap-3">
-                        <input
-                          placeholder="Search participants"
-                          value={participantSearch}
-                          onChange={(e) => setParticipantSearch(e.target.value)}
-                          className="rounded-xl border border-[#D0D7E2] bg-white px-3 py-1 text-xs outline-none"
-                        />
-                        <span className="text-[10px] text-slate-400">
-                          {filteredParticipants.length === 0
-                            ? "No participants"
-                            : `${filteredParticipants.length} participant${filteredParticipants.length > 1 ? "s" : ""}`}
+                  {/* Table Section */}
+                  <div className="overflow-hidden rounded-[32px] border border-white/40 bg-white/80 shadow-[0_8px_30px_rgb(0,0,0,0.04)] backdrop-blur-xl">
+                    <div className="border-b border-slate-100 bg-slate-50/30 px-8 py-5">
+                      <div className="flex items-center justify-between">
+                        <h3 className="text-[15px] font-bold text-slate-800">Participant List</h3>
+                        <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
+                          {filteredParticipants.length} Total
                         </span>
                       </div>
                     </div>
-                    {(participantError || participantSuccess) && (
-                      <div
-                        className={`mb-2 text-[10px] ${
-                          participantError ? "text-red-500" : "text-emerald-600"
-                        }`}
-                      >
-                        {participantError ?? participantSuccess}
-                      </div>
-                    )}
+                    
                     <div className="overflow-x-auto">
-                      <table className="min-w-full border-collapse text-left text-[11px]">
+                      <table className="w-full text-left">
                         <thead>
-                          <tr className="border-b border-[#E2E8F0] bg-[#F5F7FF] text-[10px] uppercase tracking-wide text-slate-500">
-                            <th className="px-3 py-2 font-medium">Contest</th>
-                            <th className="px-3 py-2 font-medium">Category</th>
-                            <th className="px-3 py-2 font-medium">Full name</th>
-                            <th className="px-3 py-2 font-medium">
-                              Contestant #
-                            </th>
-                            <th className="px-3 py-2 font-medium">Actions</th>
+                          <tr className="bg-slate-50/50 text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                            <th className="px-8 py-4">Participant</th>
+                            <th className="px-8 py-4">Contest</th>
+                            <th className="px-8 py-4">Team</th>
+                            <th className="px-8 py-4">Number</th>
+                            <th className="px-8 py-4 text-right">Actions</th>
                           </tr>
                         </thead>
-                        <tbody>
+                        <tbody className="divide-y divide-slate-100">
                           {filteredParticipants.length === 0 ? (
-                            <tr className="border-b border-[#F1F5F9]">
-                              <td
-                                className="px-3 py-2 text-slate-400"
-                                colSpan={5}
-                              >
-                                Once you add participants, you can edit or
-                                delete them here.
+                            <tr>
+                              <td colSpan={5} className="px-8 py-12 text-center">
+                                <div className="flex flex-col items-center justify-center text-slate-400">
+                                  <svg className="mb-2 h-10 w-10 opacity-20" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" /></svg>
+                                  <span className="text-sm">No participants found.</span>
+                                </div>
                               </td>
                             </tr>
                           ) : (
                             filteredParticipants.map((participant) => (
-                              <tr
-                                key={participant.id}
-                                className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC]"
-                              >
-                                <td className="px-3 py-2 text-slate-600">
-                                  {contests.find(
-                                    (contest) =>
-                                      contest.id === participant.contest_id,
-                                  )?.name ?? "Unknown contest"}
+                              <tr key={participant.id} className="group transition-colors hover:bg-slate-50/50">
+                                <td className="px-8 py-5">
+                                  <div className="flex items-center gap-3">
+                                    <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-50 text-[13px] font-bold text-emerald-700 ring-1 ring-emerald-600/10">
+                                      {participant.full_name.charAt(0)}
+                                    </div>
+                                    <div className="text-[13px] font-bold text-slate-800">{participant.full_name}</div>
+                                  </div>
                                 </td>
-                                <td className="px-3 py-2 text-slate-600">
-                                  {categories.find(
-                                    (category) =>
-                                      category.id === participant.division_id,
-                                  )?.name ?? "Unknown category"}
+                                <td className="px-8 py-5 text-[13px] text-slate-600">
+                                  {contests.find(c => c.id === participant.contest_id)?.name ?? "Unknown"}
                                 </td>
-                                <td className="px-3 py-2 font-medium text-slate-700">
-                                  {participant.full_name}
+                                <td className="px-8 py-5">
+                                  <span className="text-[13px] font-medium text-slate-600">
+                                    {categories.find(c => c.id === participant.division_id)?.name ?? "Unknown"}
+                                  </span>
                                 </td>
-                                <td className="px-3 py-2 text-slate-600">
-                                  {participant.contestant_number}
+                                <td className="px-8 py-5">
+                                  <span className="inline-flex items-center rounded-lg bg-slate-100 px-2 py-1 text-[11px] font-bold text-slate-600">
+                                    #{participant.contestant_number}
+                                  </span>
                                 </td>
-                                <td className="px-3 py-2">
-                                  <div className="flex gap-1.5 text-[10px] text-slate-500">
+                                <td className="px-8 py-5 text-right">
+                                  <div className="flex justify-end gap-2">
                                     <button
-                                      type="button"
-                                      onClick={() =>
-                                        openEditParticipantModal(participant)
-                                      }
-                                      className="rounded-full border border-[#E2E8F0] px-2 py-0.5 hover:bg-[#F8FAFC]"
+                                      onClick={() => openEditParticipantModal(participant)}
+                                      className="flex h-9 w-9 items-center justify-center rounded-xl bg-white text-slate-600 shadow-sm ring-1 ring-slate-200 transition-all hover:bg-slate-50 hover:text-emerald-600"
                                     >
-                                      Edit
+                                      <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
                                     </button>
                                     <button
-                                      type="button"
-                                      onClick={() =>
-                                        handleDeleteParticipant(participant.id)
-                                      }
-                                      disabled={
-                                        isDeletingParticipantId ===
-                                        participant.id
-                                      }
-                                      className="rounded-full border border-[#FEE2E2] px-2 py-0.5 text-red-500 hover:bg-[#FEF2F2] disabled:opacity-60"
+                                      onClick={() => handleDeleteParticipant(participant.id)}
+                                      disabled={isDeletingParticipantId === participant.id}
+                                      className="flex h-9 w-9 items-center justify-center rounded-xl bg-white text-slate-600 shadow-sm ring-1 ring-slate-200 transition-all hover:bg-red-50 hover:text-red-600 disabled:opacity-50"
                                     >
-                                      {isDeletingParticipantId ===
-                                      participant.id
-                                        ? "Deleting..."
-                                        : "Delete"}
+                                      {isDeletingParticipantId === participant.id ? (
+                                        <div className="h-4 w-4 animate-spin rounded-full border-2 border-red-600 border-t-transparent" />
+                                      ) : (
+                                        <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                                      )}
                                     </button>
                                   </div>
                                 </td>
@@ -11025,1026 +10359,1011 @@ export default function AdminDashboard() {
                   </div>
                 </div>
               )}
+            </div>
+          </div>
+        )}
 
-              {participantTab === "judge" && (
-                <div className="space-y-4">
-                  <div className="flex items-start gap-3">
+        {activeTab === "monitor" && (
+          <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-700">
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div className="flex items-center gap-1 rounded-2xl bg-slate-100/50 p-1.5 backdrop-blur-sm">
+                {[
+                  { id: "permissions", label: "Judge Permissions" },
+                  { id: "monitoring", label: "Live Monitoring" },
+                  { id: "message", label: "Message" },
+                ].map((tab) => (
+                  <button
+                    key={tab.id}
+                    onClick={() => setMonitorTab(tab.id as MonitorSubTab)}
+                    className={`flex items-center gap-2 rounded-xl px-4 py-2 text-[13px] font-semibold transition-all duration-300 ${
+                      monitorTab === tab.id
+                        ? "bg-white text-emerald-700 shadow-[0_4px_12px_rgba(0,0,0,0.05)] ring-1 ring-slate-200"
+                        : "text-slate-500 hover:bg-white/50 hover:text-slate-700"
+                    }`}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="grid gap-6">
+              {monitorTab === "permissions" && (
+                <div className="space-y-6">
+                  <div className="rounded-[32px] border border-white/40 bg-white/80 p-6 shadow-[0_8px_30px_rgb(0,0,0,0.04)] backdrop-blur-xl">
                     <div className="flex-1">
-                      <div className="mb-2 text-[11px] font-medium text-slate-600">Select Event</div>
-                      <select
-                        value={participantsTabEventFilterId ?? ""}
-                        onChange={(e) => setParticipantsTabEventFilterId(e.target.value ? Number(e.target.value) : null)}
-                        className="w-full max-w-[420px] rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
-                      >
-                        <option value="">-- Choose an event --</option>
-                        {events.map((event) => (
-                          <option key={event.id} value={event.id}>
-                            {event.name} ({event.year})
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  </div>
-
-                  <div className="grid gap-4 md:grid-cols-[minmax(0,1.2fr)_minmax(0,1.5fr)]">
-                    <div className="space-y-3 rounded-2xl border border-[#1F4D3A1F] bg-white p-4">
-                      <div className="space-y-2">
-                        <div className="text-[11px] font-medium text-slate-600">
-                          Select judge
-                        </div>
-                        <MultiSelectDropdown
-                          placeholder="Select judge(s)"
-                          disabled={judgesForActiveEvent.length === 0}
-                          options={judgesForActiveEvent.map((judge) => ({
-                            id: judge.id,
-                            label: judge.full_name,
-                          }))}
-                          selectedIds={selectedJudgeIdsForPermissions}
-                          onChange={(ids) => {
-                            setSelectedJudgeIdsForPermissions(ids);
-                            setJudgePermissionsError(null);
-                            setJudgePermissionsSuccess(null);
-                          }}
-                        />
-                        <div className="text-[10px] text-slate-500">
-                          Leave empty to select all judges.
-                        </div>
-                      </div>
-
-                      <div className="space-y-2">
-                        <div className="text-[11px] font-medium text-slate-600">
-                          Select contest
-                        </div>
+                      <label className="mb-2 block text-[13px] font-bold text-slate-700">Select Event</label>
+                      <div className="relative max-w-md">
                         <select
-                          value={selectedContestIdForPermissions ?? ""}
-                          onChange={(event) => {
-                            const value = event.target.value;
-                            const parsed = value ? Number(value) : null;
-                            setSelectedContestIdForPermissions(parsed);
-                            setJudgePermissionsError(null);
-                            setJudgePermissionsSuccess(null);
-                          }}
-                          className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                          value={participantsTabEventFilterId ?? ""}
+                          onChange={(e) =>
+                            setParticipantsTabEventFilterId(
+                              e.target.value ? Number(e.target.value) : null,
+                            )
+                          }
+                          className="w-full appearance-none rounded-2xl border border-slate-200 bg-slate-50/50 px-4 py-3 text-[13px] font-medium text-slate-700 outline-none transition-all focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/10"
                         >
-                          <option value="">Select contest</option>
-                          {contestsForParticipantsTab.map((contest) => (
-                            <option key={contest.id} value={contest.id}>
-                              {contest.name}
+                          <option value="">Choose an event</option>
+                          {events.filter((e) => e.is_active).map((event) => (
+                            <option key={event.id} value={event.id}>
+                              {event.name} ({event.year})
                             </option>
                           ))}
                         </select>
-                      </div>
-
-                      <div className="space-y-2">
-                        <div className="text-[11px] font-medium text-slate-600">
-                          Divisions that judge can edit
-                        </div>
-                        <MultiSelectDropdown
-                          placeholder="Select division(s)"
-                          disabled={selectedContestIdForPermissions === null}
-                          options={
-                            selectedContestIdForPermissions === null
-                              ? []
-                              : categories
-                                  .filter((category) =>
-                                    participants.some(
-                                      (participant) =>
-                                        participant.contest_id ===
-                                          selectedContestIdForPermissions &&
-                                        participant.division_id === category.id,
-                                    ),
-                                  )
-                                  .map((category) => ({
-                                    id: category.id,
-                                    label: category.name,
-                                  }))
-                          }
-                          selectedIds={judgeDivisionIds}
-                          onChange={(ids) => {
-                            setJudgeDivisionIds(ids);
-                            setJudgeDivisionMode(
-                              ids.length === 0 ? "all" : "custom",
-                            );
-                          }}
-                        />
-                        <div className="text-[10px] text-slate-500">
-                          Leave empty to allow judge to edit all divisions.
+                        <div className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-slate-400">
+                          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
                         </div>
                       </div>
+                    </div>
+                  </div>
 
-                      <div className="space-y-2">
-                        <div className="text-[11px] font-medium text-slate-600">
-                          Participants that judge can edit
+                  <div className="grid gap-6 lg:grid-cols-2">
+                    <div className="space-y-6 rounded-[32px] border border-white/40 bg-white/80 p-8 shadow-[0_8px_30px_rgb(0,0,0,0.04)] backdrop-blur-xl">
+                      <div className="space-y-4">
+                        <h4 className="flex items-center gap-2 text-[15px] font-bold text-slate-800">
+                          <svg className="h-5 w-5 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z" /></svg>
+                          Assignment Details
+                        </h4>
+
+                        <div className="space-y-2">
+                          <label className="text-[13px] font-bold text-slate-700">Select Judges</label>
+                          <MultiSelectDropdown
+                            placeholder="All Judges"
+                            disabled={judgesForActiveEvent.length === 0}
+                            options={judgesForActiveEvent.map((judge) => ({
+                              id: judge.id,
+                              label: judge.full_name,
+                            }))}
+                            selectedIds={selectedJudgeIdsForPermissions}
+                            onChange={(ids) => {
+                              setSelectedJudgeIdsForPermissions(ids);
+                              setJudgePermissionsError(null);
+                              setJudgePermissionsSuccess(null);
+                            }}
+                          />
                         </div>
-                        <MultiSelectDropdown
-                          placeholder="Select participant(s)"
-                          disabled={selectedContestIdForPermissions === null}
-                          options={
-                            selectedContestIdForPermissions === null
-                              ? []
-                              : participants
-                                  .filter(
-                                    (participant) =>
-                                      participant.contest_id ===
-                                      selectedContestIdForPermissions,
-                                  )
-                                  .map((participant) => ({
-                                    id: participant.id,
-                                    label: participant.full_name,
-                                  }))
-                          }
-                          selectedIds={judgeParticipantIds}
-                          onChange={(ids) => {
-                            setJudgeParticipantIds(ids);
-                            setJudgeParticipantMode(
-                              ids.length === 0 ? "all" : "custom",
-                            );
-                          }}
-                        />
-                        <div className="text-[10px] text-slate-500">
-                          Leave empty to allow judge to edit all participants.
+
+                        <div className="space-y-2">
+                          <label className="text-[13px] font-bold text-slate-700">Select Contest</label>
+                          <div className="relative">
+                            <select
+                              value={selectedContestIdForPermissions ?? ""}
+                              onChange={(e) => {
+                                setSelectedContestIdForPermissions(
+                                  e.target.value ? Number(e.target.value) : null,
+                                );
+                                setJudgePermissionsError(null);
+                                setJudgePermissionsSuccess(null);
+                              }}
+                              className="w-full appearance-none rounded-2xl border border-slate-200 bg-slate-50/50 px-4 py-3 text-[13px] font-medium text-slate-700 outline-none transition-all focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/10"
+                            >
+                              <option value="">Choose contest</option>
+                              {contestsForParticipantsTab.map((contest) => (
+                                <option key={contest.id} value={contest.id}>
+                                  {contest.name}
+                                </option>
+                              ))}
+                            </select>
+                            <div className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-slate-400">
+                              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="space-y-2">
+                          <label className="text-[13px] font-bold text-slate-700">Custom Division Access</label>
+                          <MultiSelectDropdown
+                            placeholder="All Divisions"
+                            disabled={selectedContestIdForPermissions === null}
+                            options={
+                              selectedContestIdForPermissions === null
+                                ? []
+                                : categories
+                                    .filter((c) =>
+                                      participants.some(
+                                        (p) =>
+                                          p.contest_id === selectedContestIdForPermissions &&
+                                          p.division_id === c.id,
+                                      ),
+                                    )
+                                    .map((c) => ({ id: c.id, label: c.name }))
+                            }
+                            selectedIds={judgeDivisionIds}
+                            onChange={(ids) => {
+                              setJudgeDivisionIds(ids);
+                              setJudgeDivisionMode(ids.length === 0 ? "all" : "custom");
+                            }}
+                          />
+                        </div>
+
+                        <div className="space-y-2">
+                          <label className="text-[13px] font-bold text-slate-700">Custom Participant Access</label>
+                          <MultiSelectDropdown
+                            placeholder="All Participants"
+                            disabled={selectedContestIdForPermissions === null}
+                            options={
+                              selectedContestIdForPermissions === null
+                                ? []
+                                : participants
+                                    .filter((p) => p.contest_id === selectedContestIdForPermissions)
+                                    .map((p) => ({ id: p.id, label: p.full_name }))
+                            }
+                            selectedIds={judgeParticipantIds}
+                            onChange={(ids) => {
+                              setJudgeParticipantIds(ids);
+                              setJudgeParticipantMode(ids.length === 0 ? "all" : "custom");
+                            }}
+                          />
                         </div>
                       </div>
-
-                      {(judgePermissionsError || judgePermissionsSuccess) && (
-                        <div
-                          className={`text-[10px] ${
-                            judgePermissionsError ? "text-red-500" : "text-emerald-600"
-                          }`}
-                        >
-                          {judgePermissionsError ?? judgePermissionsSuccess}
-                        </div>
-                      )}
                     </div>
 
-                    <div className="rounded-2xl border border-[#1F4D3A1F] bg-white p-4">
-                      <div className="mb-1 text-[11px] font-medium text-slate-600">
-                        Criteria permissions
-                      </div>
-                      <div className="mb-3 text-[10px] text-slate-500">
-                        {selectedContestIdForPermissions === null
-                          ? "Select a contest to manage criteria access."
-                          : "Toggle which criteria the judge is allowed to score."}
-                      </div>
-                      <div>
-                        {selectedContestIdForPermissions === null ? (
-                          <div className="flex h-24 items-center justify-center rounded-xl border border-dashed border-[#E2E8F0] text-[10px] text-slate-400">
-                            No contest selected
+                    <div className="flex flex-col rounded-[32px] border border-white/40 bg-white/80 p-8 shadow-[0_8px_30px_rgb(0,0,0,0.04)] backdrop-blur-xl">
+                      <div className="flex-1 space-y-4">
+                        <div className="flex items-center justify-between">
+                          <h4 className="flex items-center gap-2 text-[15px] font-bold text-slate-800">
+                            <svg className="h-5 w-5 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                            Criteria Access
+                          </h4>
+                          {selectedContestIdForPermissions && (
+                            <button
+                              onClick={() => {
+                                const allIds = criteriaList
+                                  .filter((c) => c.contest_id === selectedContestIdForPermissions)
+                                  .map((c) => c.id);
+                                if (judgePermissionsMode === "all") {
+                                  setJudgePermissionsCriteriaIds([]);
+                                  setJudgePermissionsMode("custom");
+                                } else {
+                                  setJudgePermissionsCriteriaIds(allIds);
+                                  setJudgePermissionsMode("all");
+                                }
+                              }}
+                              className="text-[11px] font-bold text-emerald-600 hover:text-emerald-700"
+                            >
+                              {judgePermissionsMode === "all" ? "Deselect All" : "Select All"}
+                            </button>
+                          )}
+                        </div>
+
+                        {!selectedContestIdForPermissions ? (
+                          <div className="flex flex-col items-center justify-center py-20 text-slate-400">
+                            <svg className="mb-3 h-12 w-12 opacity-10" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" /></svg>
+                            <p className="text-sm font-medium">Select a contest to manage criteria</p>
                           </div>
                         ) : (
-                          <div className="space-y-1.5">
+                          <div className="grid gap-2">
                             {criteriaList
-                              .filter(
-                                (criteria) =>
-                                  criteria.contest_id ===
-                                  selectedContestIdForPermissions,
-                              )
+                              .filter((c) => c.contest_id === selectedContestIdForPermissions)
                               .map((criteria) => {
                                 const isAllowed =
                                   judgePermissionsMode === "all"
                                     ? true
-                                    : judgePermissionsCriteriaIds.includes(
-                                        criteria.id,
-                                      );
-                                const isInteractive = true;
-
+                                    : judgePermissionsCriteriaIds.includes(criteria.id);
                                 return (
-                                  <div
+                                  <button
                                     key={criteria.id}
-                                    className={`flex items-center justify-between rounded-xl px-3 py-2.5 transition ${
+                                    onClick={() => {
+                                      const allIds = criteriaList
+                                        .filter((c) => c.contest_id === selectedContestIdForPermissions)
+                                        .map((c) => c.id);
+                                      let nextSelected;
+                                      if (judgePermissionsMode === "all") {
+                                        nextSelected = allIds.filter((id) => id !== criteria.id);
+                                      } else {
+                                        nextSelected = judgePermissionsCriteriaIds.includes(criteria.id)
+                                          ? judgePermissionsCriteriaIds.filter((id) => id !== criteria.id)
+                                          : [...judgePermissionsCriteriaIds, criteria.id];
+                                      }
+                                      const isAllNow = nextSelected.length === allIds.length;
+                                      setJudgePermissionsCriteriaIds(isAllNow ? allIds : nextSelected);
+                                      setJudgePermissionsMode(isAllNow ? "all" : "custom");
+                                    }}
+                                    className={`flex items-center justify-between rounded-2xl border p-4 transition-all duration-300 ${
                                       isAllowed
-                                        ? "border border-emerald-200 bg-emerald-50/60"
-                                        : "border border-slate-200 bg-slate-50/60"
+                                        ? "border-emerald-200 bg-emerald-50/50 ring-2 ring-emerald-500/20 shadow-sm"
+                                        : "border-slate-100 bg-white hover:border-slate-200"
                                     }`}
                                   >
-                                    <div className="flex items-center gap-2">
-                                      <div
-                                        className={`h-1.5 w-1.5 rounded-full ${
-                                          isAllowed ? "bg-emerald-500" : "bg-slate-300"
-                                        }`}
-                                      />
-                                      <span
-                                        className={`text-[11px] font-medium ${
-                                          isAllowed ? "text-slate-800" : "text-slate-400"
-                                        }`}
-                                      >
+                                    <div className="flex items-center gap-3">
+                                      <div className={`h-2 w-2 rounded-full ${isAllowed ? "bg-emerald-500" : "bg-slate-300"}`} />
+                                      <span className={`text-[13px] font-bold ${isAllowed ? "text-emerald-900" : "text-slate-600"}`}>
                                         {criteria.name}
                                       </span>
                                     </div>
-                                    <button
-                                      type="button"
-                                      onClick={async () => {
-                                        if (judgePermissionsMode === "all") {
-                                          const allCriteriaIds = criteriaList
-                                            .filter(
-                                              (c) =>
-                                                c.contest_id ===
-                                                selectedContestIdForPermissions,
-                                            )
-                                            .map((c) => c.id);
-                                          setJudgePermissionsMode("custom");
-                                          setJudgePermissionsCriteriaIds(
-                                            allCriteriaIds.filter(
-                                              (id) => id !== criteria.id,
-                                            ),
-                                          );
-                                        } else {
-                                          setJudgePermissionsCriteriaIds(
-                                            (previous) =>
-                                              previous.includes(criteria.id)
-                                                ? previous.filter(
-                                                    (id) => id !== criteria.id,
-                                                  )
-                                                : [...previous, criteria.id],
-                                          );
-                                        }
-                                        // Realtime persist of criteria permissions
-                                        if (selectedContestIdForPermissions !== null) {
-                                          try {
-                                            const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-                                            const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-                                            if (supabaseUrl && supabaseAnonKey) {
-                                              const supabase = createClient(supabaseUrl, supabaseAnonKey);
-                                              let judgeIds =
-                                                selectedJudgeIdsForPermissions.length === 0
-                                                  ? judgesForActiveEvent.map((j) => j.id)
-                                                  : [...selectedJudgeIdsForPermissions];
-                                              judgeIds = judgeIds.filter((id) =>
-                                                judgesForActiveEvent.some((j) => j.id === id),
-                                              );
-                                              if (judgeIds.length > 0) {
-                                                await supabase
-                                                  .from("judge_scoring_permission")
-                                                  .delete()
-                                                  .in("judge_id", judgeIds)
-                                                  .eq("contest_id", selectedContestIdForPermissions);
-                                                const allIdsForSave = criteriaList
-                                                  .filter((c) => c.contest_id === selectedContestIdForPermissions)
-                                                  .map((c) => c.id);
-                                                const nextSelected =
-                                                  judgePermissionsMode === "all"
-                                                    ? allIdsForSave.filter((id) => id !== criteria.id)
-                                                    : (prev => {
-                                                        const exists = (judgePermissionsCriteriaIds.includes(criteria.id));
-                                                        return exists
-                                                          ? judgePermissionsCriteriaIds.filter((id) => id !== criteria.id)
-                                                          : [...judgePermissionsCriteriaIds, criteria.id];
-                                                      })();
-                                                const isAll = nextSelected.length === allIdsForSave.length;
-                                                const inserts: {
-                                                  judge_id: number;
-                                                  contest_id: number;
-                                                  criteria_id: number | null;
-                                                  can_edit: boolean;
-                                                }[] = [];
-                                                judgeIds.forEach((jid) => {
-                                                  if (isAll) {
-                                                    inserts.push({
-                                                      judge_id: jid,
-                                                      contest_id: selectedContestIdForPermissions,
-                                                      criteria_id: null,
-                                                      can_edit: true,
-                                                    });
-                                                  } else {
-                                                    inserts.push({
-                                                      judge_id: jid,
-                                                      contest_id: selectedContestIdForPermissions,
-                                                      criteria_id: null,
-                                                      can_edit: false,
-                                                    });
-                                                    nextSelected.forEach((cid) =>
-                                                      inserts.push({
-                                                        judge_id: jid,
-                                                        contest_id: selectedContestIdForPermissions,
-                                                        criteria_id: cid,
-                                                        can_edit: true,
-                                                      }),
-                                                    );
-                                                  }
-                                                });
-                                                if (inserts.length > 0) {
-                                                  await supabase
-                                                    .from("judge_scoring_permission")
-                                                    .insert(inserts);
-                                                }
-                                                // Clear submission state so judges must resubmit
-                                                await supabase
-                                                  .from("judge_contest_submission")
-                                                  .delete()
-                                                  .in("judge_id", judgeIds)
-                                                  .eq("contest_id", selectedContestIdForPermissions);
-                                                // Broadcast to judges/tabulators to force refresh
-                                                const eventId =
-                                                  contests.find((c) => c.id === selectedContestIdForPermissions)?.event_id ?? null;
-                                                if (eventId) {
-                                                  let ch: ReturnType<typeof supabase.channel> | null = null;
-                                                  try {
-                                                    console.log('[ADMIN-BROADCAST] Sending permission update broadcast');
-                                                    ch = supabase.channel(`permissions-update-${eventId}`, { config: { broadcast: { ack: true } } });
-                                                    await ch.subscribe((status) => {
-                                                      console.log('[ADMIN-BROADCAST] Channel subscribed:', status);
-                                                    });
-                                                    // Small delay to ensure channel is ready
-                                                    await new Promise(resolve => setTimeout(resolve, 150));
-                                                    ch.send({
-                                                      type: 'broadcast',
-                                                      event: 'permissions-updated',
-                                                      payload: { 
-                                                        eventId,
-                                                        contestId: selectedContestIdForPermissions, 
-                                                        timestamp: Date.now(),
-                                                        judgeIds,
-                                                      },
-                                                    });
-                                                    console.log('[ADMIN-BROADCAST] Broadcast sent successfully');
-                                                    // Small delay before cleanup
-                                                    await new Promise(resolve => setTimeout(resolve, 150));
-                                                  } catch (error) {
-                                                    console.warn('[ADMIN-BROADCAST] Failed to broadcast permission update:', error);
-                                                  } finally {
-                                                    if (ch) {
-                                                      try {
-                                                        supabase.removeChannel(ch);
-                                                      } catch (e) {
-                                                        console.warn('[ADMIN-BROADCAST] Error removing channel:', e);
-                                                      }
-                                                    }
-                                                  }
-                                                }
-                                              }
-                                            }
-                                          } catch {
-                                            // silent fail for realtime persist to avoid blocking UI
-                                          }
-                                        }
-                                      }}
-                                      className={`relative inline-flex h-5 w-9 flex-shrink-0 items-center rounded-full transition-colors ${
-                                        !isInteractive
-                                          ? "cursor-not-allowed opacity-50"
-                                          : "cursor-pointer"
-                                      } ${
-                                        isAllowed ? "bg-emerald-500" : "bg-slate-300"
-                                      }`}
-                                    >
-                                      <span
-                                        className={`inline-block h-3.5 w-3.5 rounded-full bg-white shadow-sm transition-transform ${
-                                          isAllowed
-                                            ? "translate-x-[18px]"
-                                            : "translate-x-[2px]"
-                                        }`}
-                                      />
-                                    </button>
-                                  </div>
+                                    <div className={`h-5 w-9 rounded-full transition-colors relative ${isAllowed ? "bg-emerald-500" : "bg-slate-200"}`}>
+                                      <div className={`absolute top-1 h-3 w-3 rounded-full bg-white transition-all shadow-sm ${isAllowed ? "right-1" : "left-1"}`} />
+                                    </div>
+                                  </button>
                                 );
                               })}
                           </div>
                         )}
                       </div>
-                      {(judgePermissionsError || judgePermissionsSuccess) && (
-                        <div
-                          className={`mt-3 text-[10px] ${
-                            judgePermissionsError ? "text-red-500" : "text-emerald-600"
-                          }`}
-                        >
-                          {judgePermissionsError ?? judgePermissionsSuccess}
-                        </div>
-                      )}
-                      <button
-                        type="button"
-                        onClick={async () => {
-                          if (selectedContestIdForPermissions === null) {
-                            setJudgePermissionsError("Select a contest first.");
+
+                      <div className="mt-8 space-y-4 border-t border-slate-100 pt-6">
+                        {(judgePermissionsError || judgePermissionsSuccess) && (
+                          <div className={`rounded-2xl px-4 py-3 text-[13px] font-bold flex items-center gap-2 ${
+                            judgePermissionsError ? "bg-red-50 text-red-600 border border-red-100" : "bg-emerald-50 text-emerald-700 border border-emerald-100"
+                          }`}>
+                            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              {judgePermissionsError ? (
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                              ) : (
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                              )}
+                            </svg>
+                            {judgePermissionsError ?? judgePermissionsSuccess}
+                          </div>
+                        )}
+
+                        <button
+                          onClick={async () => {
+                            if (selectedContestIdForPermissions === null) {
+                              setJudgePermissionsError("Select a contest first.");
+                              setJudgePermissionsSuccess(null);
+                              return;
+                            }
+                            setIsSavingJudgePermissions(true);
+                            setJudgePermissionsError(null);
                             setJudgePermissionsSuccess(null);
-                            return;
-                          }
-                          setIsSavingJudgePermissions(true);
-                          setJudgePermissionsError(null);
-                          setJudgePermissionsSuccess(null);
-                          const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-                          const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-                          if (!supabaseUrl || !supabaseAnonKey) {
-                            setJudgePermissionsError("Supabase configuration is missing.");
-                            setIsSavingJudgePermissions(false);
-                            return;
-                          }
-                          const supabase = createClient(supabaseUrl, supabaseAnonKey);
-                          // gather judge IDs to modify; fall back to all judges for the event
-                          let judgeIds =
-                            selectedJudgeIdsForPermissions.length === 0
-                              ? judgesForActiveEvent.map((judge) => judge.id)
-                              : [...selectedJudgeIdsForPermissions];
+                            const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+                            const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+                            if (!supabaseUrl || !supabaseAnonKey) {
+                              setJudgePermissionsError("Supabase configuration is missing.");
+                              setIsSavingJudgePermissions(false);
+                              return;
+                            }
+                            const supabase = createClient(supabaseUrl, supabaseAnonKey);
+                            let judgeIds =
+                              selectedJudgeIdsForPermissions.length === 0
+                                ? judgesForActiveEvent.map((judge) => judge.id)
+                                : [...selectedJudgeIdsForPermissions];
 
-                          // drop any ids that no longer exist in the fetched judge list
-                          const initialLength = judgeIds.length;
-                          judgeIds = judgeIds.filter((id) =>
-                            judgesForActiveEvent.some((j) => j.id === id),
-                          );
+                            judgeIds = judgeIds.filter((id) =>
+                              judgesForActiveEvent.some((j) => j.id === id),
+                            );
 
-                          if (judgeIds.length === 0) {
-                            setJudgePermissionsError(
-                              "There are no valid judges for this event.",
-                            );
-                            setIsSavingJudgePermissions(false);
-                            return;
-                          }
-                          if (judgeIds.length < initialLength) {
-                            setJudgePermissionsError(
-                              "Some selected judges are no longer valid and were ignored.",
-                            );
-                          }
-                          const { error: deleteScoringError } = await supabase
-                            .from("judge_scoring_permission")
-                            .delete()
-                            .in("judge_id", judgeIds)
-                            .eq("contest_id", selectedContestIdForPermissions);
-                          if (deleteScoringError) {
-                            setJudgePermissionsError(
-                              deleteScoringError.message || "Unable to update judge permissions.",
-                            );
-                            setIsSavingJudgePermissions(false);
-                            return;
-                          }
-                          const allCriteriaIdsForSave = criteriaList
-                            .filter((c) => c.contest_id === selectedContestIdForPermissions)
-                            .map((c) => c.id);
-                          const isAllCriteriaSelected =
-                            judgePermissionsMode === "all" ||
-                            (allCriteriaIdsForSave.length > 0 &&
-                              allCriteriaIdsForSave.every((id) =>
-                                judgePermissionsCriteriaIds.includes(id),
-                              ));
-                          const scoringInserts: {
-                            judge_id: number;
-                            contest_id: number;
-                            criteria_id: number | null;
-                            can_edit: boolean;
-                          }[] = [];
-                          if (isAllCriteriaSelected) {
-                            judgeIds.forEach((judgeId) => {
-                              scoringInserts.push({
-                                judge_id: judgeId,
-                                contest_id: selectedContestIdForPermissions,
-                                criteria_id: null,
-                                can_edit: true,
-                              });
-                            });
-                          } else {
-                            judgeIds.forEach((judgeId) => {
-                              scoringInserts.push({
-                                judge_id: judgeId,
-                                contest_id: selectedContestIdForPermissions,
-                                criteria_id: null,
-                                can_edit: false,
-                              });
-                            });
-                            judgePermissionsCriteriaIds.forEach((criteriaId) => {
-                              judgeIds.forEach((judgeId) => {
-                                scoringInserts.push({
-                                  judge_id: judgeId,
-                                  contest_id: selectedContestIdForPermissions,
-                                  criteria_id: criteriaId,
-                                  can_edit: true,
-                                });
-                              });
-                            });
-                          }
-                          if (scoringInserts.length > 0) {
-                            const { error } = await supabase
+                            if (judgeIds.length === 0) {
+                              setJudgePermissionsError("No valid judges for this event.");
+                              setIsSavingJudgePermissions(false);
+                              return;
+                            }
+
+                            const { error: deleteScoringError } = await supabase
                               .from("judge_scoring_permission")
-                              .insert(scoringInserts);
-                            if (error) {
-                              setJudgePermissionsError(
-                                error.message || "Unable to update judge permissions.",
-                              );
-                              setIsSavingJudgePermissions(false);
-                              return;
-                            }
-                          }
-                          const { error: deleteDivisionError } = await supabase
-                            .from("judge_division_permission")
-                            .delete()
-                            .in("judge_id", judgeIds)
-                            .eq("contest_id", selectedContestIdForPermissions);
-                          if (deleteDivisionError) {
-                            setJudgePermissionsError(
-                              deleteDivisionError.message || "Unable to update judge division access.",
-                            );
-                            setIsSavingJudgePermissions(false);
-                            return;
-                          }
-                          if (judgeDivisionMode === "custom" && judgeDivisionIds.length > 0) {
-                            const { error: insertDivisionError } = await supabase
-                              .from("judge_division_permission")
-                              .insert(
-                                judgeDivisionIds.flatMap((divisionId) =>
-                                  judgeIds.map((judgeId) => ({
-                                    judge_id: judgeId,
-                                    contest_id: selectedContestIdForPermissions,
-                                    division_id: divisionId,
-                                  })),
-                                ),
-                              );
-                            if (insertDivisionError) {
-                              setJudgePermissionsError(
-                                insertDivisionError.message ||
-                                  "Unable to update judge division access.",
-                              );
-                              setIsSavingJudgePermissions(false);
-                              return;
-                            }
-                          }
-                          const { error: deleteParticipantError } = await supabase
-                            .from("judge_participant_permission")
-                            .delete()
-                            .in("judge_id", judgeIds)
-                            .eq("contest_id", selectedContestIdForPermissions);
-                          if (deleteParticipantError) {
-                            setJudgePermissionsError(
-                              deleteParticipantError.message ||
-                                "Unable to update judge participant access.",
-                            );
-                            setIsSavingJudgePermissions(false);
-                            return;
-                          }
-                          if (judgeParticipantMode === "custom" && judgeParticipantIds.length > 0) {
-                            const { error: insertParticipantError } = await supabase
-                              .from("judge_participant_permission")
-                              .insert(
-                                judgeParticipantIds.flatMap((participantId) =>
-                                  judgeIds.map((judgeId) => ({
-                                    judge_id: judgeId,
-                                    contest_id: selectedContestIdForPermissions,
-                                    participant_id: participantId,
-                                  })),
-                                ),
-                              );
-                            if (insertParticipantError) {
-                              setJudgePermissionsError(
-                                insertParticipantError.message ||
-                                  "Unable to update judge participant access.",
-                              );
-                              setIsSavingJudgePermissions(false);
-                              return;
-                            }
-                          }
-                          if (isAllCriteriaSelected || judgePermissionsCriteriaIds.length > 0) {
-                            const { error: resetSubmissionError } = await supabase
-                              .from("judge_contest_submission")
                               .delete()
                               .in("judge_id", judgeIds)
                               .eq("contest_id", selectedContestIdForPermissions);
-                            if (resetSubmissionError) {
-                              setJudgePermissionsError(
-                                resetSubmissionError.message ||
-                                  "Unable to reset judge submission status.",
-                              );
+
+                            if (deleteScoringError) {
+                              setJudgePermissionsError(deleteScoringError.message);
                               setIsSavingJudgePermissions(false);
                               return;
                             }
-                            setJudgeContestSubmissions((previous) =>
-                              previous.filter(
-                                (submission) =>
-                                  !(
-                                    judgeIds.includes(submission.judge_id) &&
-                                    submission.contest_id === selectedContestIdForPermissions
-                                  ),
-                              ),
-                            );
-                          }
-                          
-                          // Notify judges and tabulators listening on this event channel
-                          try {
-                            const eventId =
-                              contests.find((c) => c.id === selectedContestIdForPermissions)?.event_id ?? null;
-                            if (eventId) {
-                              let ch: ReturnType<typeof supabase.channel> | null = null;
-                              try {
-                                ch = supabase.channel(`event-${eventId}-permissions`, {
-                                  config: { broadcast: { ack: true } },
-                                });
-                                await ch.subscribe();
-                                // Add small delay to ensure channel is ready
-                                await new Promise(resolve => setTimeout(resolve, 100));
-                                await ch.send({
-                                  type: "broadcast",
-                                  event: "permissions-updated",
-                                  payload: { contestId: selectedContestIdForPermissions, timestamp: Date.now() },
-                                });
-                                // Small delay to ensure broadcast is delivered before channel cleanup
-                                await new Promise(resolve => setTimeout(resolve, 100));
-                              } finally {
-                                if (ch) try { supabase.removeChannel(ch); } catch {}
+
+                            const allCriteriaIdsForSave = criteriaList
+                              .filter((c) => c.contest_id === selectedContestIdForPermissions)
+                              .map((c) => c.id);
+                            const isAllCriteriaSelected =
+                              judgePermissionsMode === "all" ||
+                              (allCriteriaIdsForSave.length > 0 &&
+                                allCriteriaIdsForSave.every((id) =>
+                                  judgePermissionsCriteriaIds.includes(id),
+                                ));
+
+                            const scoringInserts: Omit<JudgeScoringPermissionRow, "created_at">[] = [];
+                            if (isAllCriteriaSelected) {
+                              judgeIds.forEach((jid) =>
+                                scoringInserts.push({
+                                  judge_id: jid,
+                                  contest_id: selectedContestIdForPermissions,
+                                  criteria_id: null,
+                                  can_edit: true,
+                                }),
+                              );
+                            } else {
+                              judgeIds.forEach((jid) =>
+                                scoringInserts.push({
+                                  judge_id: jid,
+                                  contest_id: selectedContestIdForPermissions,
+                                  criteria_id: null,
+                                  can_edit: false,
+                                }),
+                              );
+                              judgePermissionsCriteriaIds.forEach((cid) =>
+                                judgeIds.forEach((jid) =>
+                                  scoringInserts.push({
+                                    judge_id: jid,
+                                    contest_id: selectedContestIdForPermissions,
+                                    criteria_id: cid,
+                                    can_edit: true,
+                                  }),
+                                ),
+                              );
+                            }
+
+                            if (scoringInserts.length > 0) {
+                              const { error } = await supabase
+                                .from("judge_scoring_permission")
+                                .insert(scoringInserts);
+                              if (error) {
+                                setJudgePermissionsError(error.message);
+                                setIsSavingJudgePermissions(false);
+                                return;
                               }
                             }
-                          } catch (error) {
-                            console.warn('Failed to broadcast permission update:', error);
-                          }
-                          
-                          // clear earlier validation errors now that save succeeded
-                          setJudgePermissionsError(null);
-                          setJudgePermissionsSuccess("Judge scoring access has been updated.");
-                          setIsSavingJudgePermissions(false);
-                          
-                          // auto-clear success message after 3 seconds
-                          setTimeout(() => {
-                            setJudgePermissionsSuccess(null);
-                          }, 3000);
-                        }}
-                        disabled={isSavingJudgePermissions || selectedContestIdForPermissions === null}
-                        className="mt-3 inline-flex items-center rounded-full bg-[#1F4D3A] px-4 py-1.5 text-[11px] font-medium text-white shadow-sm transition hover:bg-[#163528] disabled:cursor-not-allowed disabled:opacity-60"
-                      >
-                        {isSavingJudgePermissions ? "Saving..." : "Save access"}
-                      </button>
-                    </div>
 
+                            await supabase
+                              .from("judge_division_permission")
+                              .delete()
+                              .in("judge_id", judgeIds)
+                              .eq("contest_id", selectedContestIdForPermissions);
+                            if (judgeDivisionMode === "custom" && judgeDivisionIds.length > 0) {
+                              await supabase
+                                .from("judge_division_permission")
+                                .insert(
+                                  judgeDivisionIds.flatMap((did) =>
+                                    judgeIds.map((jid) => ({
+                                      judge_id: jid,
+                                      contest_id: selectedContestIdForPermissions,
+                                      division_id: did,
+                                    })),
+                                  ),
+                                );
+                            }
+
+                            await supabase
+                              .from("judge_participant_permission")
+                              .delete()
+                              .in("judge_id", judgeIds)
+                              .eq("contest_id", selectedContestIdForPermissions);
+                            if (
+                              judgeParticipantMode === "custom" &&
+                              judgeParticipantIds.length > 0
+                            ) {
+                              await supabase
+                                .from("judge_participant_permission")
+                                .insert(
+                                  judgeParticipantIds.flatMap((pid) =>
+                                    judgeIds.map((jid) => ({
+                                      judge_id: jid,
+                                      contest_id: selectedContestIdForPermissions,
+                                      participant_id: pid,
+                                    })),
+                                  ),
+                                );
+                            }
+
+                            if (isAllCriteriaSelected || judgePermissionsCriteriaIds.length > 0) {
+                              await supabase
+                                .from("judge_contest_submission")
+                                .delete()
+                                .in("judge_id", judgeIds)
+                                .eq("contest_id", selectedContestIdForPermissions);
+                              setJudgeContestSubmissions((prev) =>
+                                prev.filter(
+                                  (s) =>
+                                    !(
+                                      judgeIds.includes(s.judge_id) &&
+                                      s.contest_id === selectedContestIdForPermissions
+                                    ),
+                                ),
+                              );
+                            }
+
+                            setJudgePermissionsSuccess("Permissions updated successfully.");
+                            setIsSavingJudgePermissions(false);
+                            setTimeout(() => setJudgePermissionsSuccess(null), 3000);
+                          }}
+                          disabled={isSavingJudgePermissions || selectedContestIdForPermissions === null}
+                          className="flex w-full items-center justify-center gap-2 rounded-2xl bg-slate-900 px-6 py-4 text-[13px] font-bold text-white shadow-xl transition-all hover:bg-black active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {isSavingJudgePermissions ? (
+                            <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                          ) : (
+                            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
+                          )}
+                          Save Permissions
+                        </button>
+                      </div>
+                    </div>
                   </div>
                 </div>
               )}
 
-              {participantTab === "monitoring" && (
-                <div className="space-y-4">
-                  <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
-                    <div className="flex-1">
-                      <div className="mb-2 text-[11px] font-medium text-slate-600">
-                        Select Event
+              {monitorTab === "monitoring" && (
+                <div className="space-y-6">
+                  <div className="rounded-[32px] border border-white/40 bg-white/80 p-6 shadow-[0_8px_30px_rgb(0,0,0,0.04)] backdrop-blur-xl">
+                    <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
+                      <div className="flex-1">
+                        <label className="mb-2 block text-[13px] font-bold text-slate-700">Filter by Event</label>
+                        <div className="relative max-w-md">
+                          <select
+                            value={participantsTabEventFilterId ?? ""}
+                            onChange={(e) =>
+                              setParticipantsTabEventFilterId(
+                                e.target.value ? Number(e.target.value) : null,
+                              )
+                            }
+                            className="w-full appearance-none rounded-2xl border border-slate-200 bg-slate-50/50 px-4 py-3 text-[13px] font-medium text-slate-700 outline-none transition-all focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/10"
+                          >
+                            <option value="">All Events</option>
+                            {events.filter((e) => e.is_active).map((event) => (
+                              <option key={event.id} value={event.id}>
+                                {event.name} ({event.year})
+                              </option>
+                            ))}
+                          </select>
+                          <div className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-slate-400">
+                            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+                          </div>
+                        </div>
                       </div>
-                      <select
-                        value={participantsTabEventFilterId ?? ""}
-                        onChange={(e) =>
-                          setParticipantsTabEventFilterId(
-                            e.target.value ? Number(e.target.value) : null,
-                          )
-                        }
-                        className="w-full max-w-[420px] rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
-                      >
-                        <option value="">-- Choose an event --</option>
-                        {events.map((event) => (
-                          <option key={event.id} value={event.id}>
-                            {event.name} ({event.year})
-                          </option>
-                        ))}
-                      </select>
                     </div>
                   </div>
 
-                  <div className="rounded-2xl border border-[#1F4D3A1F] bg-white p-4">
-                    <div className="mb-3 flex items-center justify-between">
-                      <div className="space-y-0.5">
-                        <div className="text-[11px] font-medium text-slate-600">
-                          Judge score completion
-                        </div>
-                        <div className="text-[10px] text-slate-400">
-                          Tracks if judges filled all criteria per contest.
-                        </div>
+                  <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                    {(() => {
+                      const effectiveEventId = participantsTabEventFilterId ?? activeEventId;
+                      const rows: Array<{
+                        contestName: string;
+                        judgeName: string;
+                        filled: number;
+                        expected: number;
+                      }> = [];
+                      for (const contest of contestsForParticipantsTab) {
+                        if (effectiveEventId !== null && contest.event_id !== effectiveEventId) continue;
+                        const pIds = new Set(participants.filter(p => p.contest_id === contest.id).map(p => p.id));
+                        const cIds = new Set(criteriaList.filter(c => c.contest_id === contest.id).map(c => c.id));
+                        const expected = pIds.size * cIds.size;
+                        if (expected === 0) continue;
+                        const assignedJudgeIds = new Set(judgeAssignments.filter(ja => ja.contest_id === contest.id).map(ja => ja.judge_id));
+                        for (const judge of judgesForActiveEvent) {
+                          if (!assignedJudgeIds.has(judge.id)) continue;
+                          const filled = scores.filter(s => s.judge_id === judge.id && pIds.has(s.participant_id) && cIds.has(s.criteria_id)).length;
+                          rows.push({ contestName: contest.name, judgeName: judge.full_name, filled, expected });
+                        }
+                      }
+
+                      if (rows.length === 0) {
+                        return (
+                          <div className="col-span-full rounded-[32px] border border-white/40 bg-white/80 p-12 text-center backdrop-blur-xl">
+                            <div className="flex flex-col items-center justify-center text-slate-400">
+                              <svg className="mb-2 h-10 w-10 opacity-20 animate-pulse" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" /></svg>
+                              <span className="text-sm font-medium">No live monitoring data available.</span>
+                            </div>
+                          </div>
+                        );
+                      }
+
+                      return rows.map((row, idx) => {
+                        const complete = row.filled >= row.expected;
+                        const percent = Math.round((row.filled / row.expected) * 100);
+                        return (
+                          <div key={idx} className="group relative overflow-hidden rounded-[32px] border border-white/40 bg-white/80 p-6 shadow-[0_8px_30px_rgb(0,0,0,0.04)] backdrop-blur-xl transition-all hover:shadow-[0_20px_40px_rgba(0,0,0,0.08)]">
+                            <div className="mb-4 flex items-start justify-between">
+                              <div className="space-y-1">
+                                <div className="text-[11px] font-bold uppercase tracking-wider text-emerald-600">{row.contestName}</div>
+                                <div className="text-[15px] font-bold text-slate-800">{row.judgeName}</div>
+                              </div>
+                              <div className={`flex h-8 w-8 items-center justify-center rounded-full ${complete ? "bg-emerald-100 text-emerald-600" : "bg-amber-100 text-amber-600 animate-pulse"}`}>
+                                {complete ? (
+                                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" /></svg>
+                                ) : (
+                                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 8v4l3 3" /></svg>
+                                )}
+                              </div>
+                            </div>
+                            <div className="space-y-3">
+                              <div className="flex items-center justify-between text-[11px] font-bold">
+                                <span className="text-slate-400">PROGRESS</span>
+                                <span className={complete ? "text-emerald-600" : "text-slate-700"}>{percent}%</span>
+                              </div>
+                              <div className="h-2 w-full overflow-hidden rounded-full bg-slate-100">
+                                <div
+                                  className={`h-full transition-all duration-1000 ease-out ${complete ? "bg-emerald-500" : "bg-emerald-500"}`}
+                                  style={{ width: `${percent}%` }}
+                                />
+                              </div>
+                              <div className="flex items-center justify-between text-[11px] font-medium text-slate-400">
+                                <span>{row.filled} Filled</span>
+                                <span>{row.expected} Expected</span>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      });
+                    })()}
+                  </div>
+                </div>
+              )}
+
+              {monitorTab === "message" && (
+                <div className="space-y-6">
+                  <div className="rounded-[32px] border border-white/40 bg-white/80 p-6 shadow-[0_8px_30px_rgb(0,0,0,0.04)] backdrop-blur-xl">
+                    <div className="space-y-2">
+                      <div className="text-[15px] font-bold text-slate-800">
+                        Send message to judges
+                      </div>
+                      <div className="text-[12px] font-medium text-slate-500">
+                        Sends a realtime message that appears as a modal in the judge
+                        dashboard.
                       </div>
                     </div>
-                    <div className="overflow-x-auto">
-                      <table className="min-w-full border-collapse text-left text-[11px]">
-                        <thead>
-                          <tr className="border-b border-[#E2E8F0] bg-[#F5F7FF] text-[10px] uppercase tracking-wide text-slate-500">
-                            <th className="px-3 py-2 font-medium">Contest</th>
-                            <th className="px-3 py-2 font-medium">Judge</th>
-                            <th className="px-3 py-2 font-medium text-right">Participants</th>
-                            <th className="px-3 py-2 font-medium text-right">Criteria</th>
-                            <th className="px-3 py-2 font-medium text-right">Filled entries</th>
-                            <th className="px-3 py-2 font-medium text-right">Expected entries</th>
-                            <th className="px-3 py-2 font-medium text-right">Status</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {(() => {
-                            const effectiveEventId = participantsTabEventFilterId ?? activeEventId;
-                            const contestRows = contestsForParticipantsTab;
-                            const rows: Array<{
-                              contestId: number;
-                              contestName: string;
-                              judgeId: number;
-                              judgeName: string;
-                              participantCount: number;
-                              criteriaCount: number;
-                              filled: number;
-                              expected: number;
-                            }> = [];
+                  </div>
 
-                            for (const contest of contestRows) {
-                              if (effectiveEventId !== null && contest.event_id !== effectiveEventId) {
-                                continue;
-                              }
-                              const criteriaIds = new Set(
-                                criteriaList.filter((c) => c.contest_id === contest.id).map((c) => c.id),
-                              );
-                              const participantIds = new Set(
-                                participants
-                                  .filter((p) => p.contest_id === contest.id)
-                                  .map((p) => p.id),
-                              );
-                              const participantCount = participantIds.size;
-                              const criteriaCount = criteriaIds.size;
-                              const expected = participantCount * criteriaCount;
-                              if (expected === 0) {
-                                continue;
-                              }
-                              const assignedJudgeIds = new Set(
-                                judgeAssignments
-                                  .filter((ja) => ja.contest_id === contest.id)
-                                  .map((ja) => ja.judge_id),
-                              );
-                              for (const judge of judgesForActiveEvent) {
-                                if (!assignedJudgeIds.has(judge.id)) continue;
-                                const filled = scores.filter(
-                                  (s) =>
-                                    s.judge_id === judge.id &&
-                                    participantIds.has(s.participant_id) &&
-                                    criteriaIds.has(s.criteria_id),
-                                ).length;
-                                rows.push({
-                                  contestId: contest.id,
-                                  contestName: contest.name,
-                                  judgeId: judge.id,
-                                  judgeName: judge.full_name,
-                                  participantCount,
-                                  criteriaCount,
-                                  filled,
-                                  expected,
-                                });
-                              }
+                  <div className="grid gap-6 lg:grid-cols-2">
+                    <div className="space-y-6 rounded-[32px] border border-white/40 bg-white/80 p-8 shadow-[0_8px_30px_rgb(0,0,0,0.04)] backdrop-blur-xl">
+                      <div className="space-y-2">
+                        <label className="text-[13px] font-bold text-slate-700">
+                          Event
+                        </label>
+                        <div className="relative">
+                          <select
+                            value={participantsTabEventFilterId ?? ""}
+                            onChange={(e) =>
+                              setParticipantsTabEventFilterId(
+                                e.target.value ? Number(e.target.value) : null,
+                              )
                             }
+                            className="w-full appearance-none rounded-2xl border border-slate-200 bg-slate-50/50 px-4 py-3 text-[13px] font-medium text-slate-700 outline-none transition-all focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/10"
+                          >
+                            <option value="">Choose an event</option>
+                            {events.filter((e) => e.is_active).map((event) => (
+                              <option key={event.id} value={event.id}>
+                                {event.name} ({event.year})
+                              </option>
+                            ))}
+                          </select>
+                          <div className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-slate-400">
+                            <svg
+                              className="h-4 w-4"
+                              fill="none"
+                              viewBox="0 0 24 24"
+                              stroke="currentColor"
+                            >
+                              <path
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                strokeWidth={2}
+                                d="M19 9l-7 7-7-7"
+                              />
+                            </svg>
+                          </div>
+                        </div>
+                      </div>
 
-                            if (rows.length === 0) {
-                              return (
-                                <tr className="border-b border-[#F1F5F9]">
-                                  <td className="px-3 py-2 text-slate-400" colSpan={7}>
-                                    No monitoring data yet.
-                                  </td>
-                                </tr>
-                              );
+                      <div className="space-y-2">
+                        <label className="text-[13px] font-bold text-slate-700">
+                          Recipient
+                        </label>
+                        <div className="relative">
+                          <select
+                            value={monitorMessageRecipientJudgeId ?? ""}
+                            onChange={(e) =>
+                              setMonitorMessageRecipientJudgeId(
+                                e.target.value ? Number(e.target.value) : null,
+                              )
                             }
+                            className="w-full appearance-none rounded-2xl border border-slate-200 bg-slate-50/50 px-4 py-3 text-[13px] font-medium text-slate-700 outline-none transition-all focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/10"
+                          >
+                            <option value="">All judges</option>
+                            {judgesForActiveEvent.map((judge) => (
+                              <option key={judge.id} value={judge.id}>
+                                {judge.full_name}
+                              </option>
+                            ))}
+                          </select>
+                          <div className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-slate-400">
+                            <svg
+                              className="h-4 w-4"
+                              fill="none"
+                              viewBox="0 0 24 24"
+                              stroke="currentColor"
+                            >
+                              <path
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                strokeWidth={2}
+                                d="M19 9l-7 7-7-7"
+                              />
+                            </svg>
+                          </div>
+                        </div>
+                      </div>
 
-                            return rows.map((row, idx) => {
-                              const complete = row.filled >= row.expected && row.expected > 0;
-                              const percent =
-                                row.expected === 0 ? 0 : Math.min(100, Math.round((row.filled / row.expected) * 100));
-                              return (
-                                <tr key={`${row.contestId}-${row.judgeId}-${idx}`} className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC]">
-                                  <td className="px-3 py-2 text-slate-700">{row.contestName}</td>
-                                  <td className="px-3 py-2 text-slate-700">{row.judgeName}</td>
-                                  <td className="px-3 py-2 text-right text-slate-700">{row.participantCount.toLocaleString()}</td>
-                                  <td className="px-3 py-2 text-right text-slate-700">{row.criteriaCount.toLocaleString()}</td>
-                                  <td className="px-3 py-2 text-right text-slate-700">{row.filled.toLocaleString()}</td>
-                                  <td className="px-3 py-2 text-right text-slate-700">{row.expected.toLocaleString()}</td>
-                                  <td className="px-3 py-2 text-right">
-                                    <span
-                                      className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] ${
-                                        complete
-                                          ? "bg-[#ECFDF5] text-[#065F46] border border-[#A7F3D0]"
-                                          : "bg-[#FEF2F2] text-[#991B1B] border border-[#FECACA]"
-                                      }`}
-                                      title={`${percent}% complete`}
-                                    >
-                                      {complete ? "Complete" : `${percent}%`}
-                                    </span>
-                                  </td>
-                                </tr>
-                              );
+                      <div className="space-y-2">
+                        <label className="text-[13px] font-bold text-slate-700">
+                          Title
+                        </label>
+                        <input
+                          value={monitorMessageTitle}
+                          onChange={(e) => setMonitorMessageTitle(e.target.value)}
+                          className="w-full rounded-2xl border border-slate-200 bg-slate-50/50 px-4 py-3 text-[14px] font-medium text-slate-900 outline-none transition-all focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/10"
+                          placeholder="e.g. Announcement"
+                          autoComplete="off"
+                        />
+                      </div>
+
+                      <div className="space-y-2">
+                        <label className="text-[13px] font-bold text-slate-700">
+                          Message
+                        </label>
+                        <textarea
+                          value={monitorMessageBody}
+                          onChange={(e) => setMonitorMessageBody(e.target.value)}
+                          rows={6}
+                          className="w-full resize-none rounded-2xl border border-slate-200 bg-slate-50/50 px-4 py-3 text-[14px] font-medium text-slate-900 outline-none transition-all focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/10"
+                          placeholder="Type your message for judges…"
+                        />
+                      </div>
+
+                      {(monitorMessageError || monitorMessageSuccess) && (
+                        <div
+                          className={`rounded-2xl px-4 py-3 text-[13px] font-bold flex items-center gap-2 ${
+                            monitorMessageError
+                              ? "bg-red-50 text-red-600 border border-red-100"
+                              : "bg-emerald-50 text-emerald-700 border border-emerald-100"
+                          }`}
+                        >
+                          <svg
+                            className="h-4 w-4"
+                            fill="none"
+                            viewBox="0 0 24 24"
+                            stroke="currentColor"
+                          >
+                            {monitorMessageError ? (
+                              <path
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                strokeWidth={2}
+                                d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                              />
+                            ) : (
+                              <path
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                strokeWidth={2}
+                                d="M5 13l4 4L19 7"
+                              />
+                            )}
+                          </svg>
+                          {monitorMessageError ?? monitorMessageSuccess}
+                        </div>
+                      )}
+
+                      <button
+                        onClick={async () => {
+                          setMonitorMessageError(null);
+                          setMonitorMessageSuccess(null);
+
+                          const eventId =
+                            participantsTabEventFilterId ?? activeEventId;
+                          if (eventId === null) {
+                            setMonitorMessageError("Please select an event.");
+                            return;
+                          }
+                          if (!monitorMessageBody.trim()) {
+                            setMonitorMessageError("Please type a message.");
+                            return;
+                          }
+
+                          const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+                          const supabaseAnonKey =
+                            process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+                          if (!supabaseUrl || !supabaseAnonKey) {
+                            setMonitorMessageError("Supabase is not configured.");
+                            return;
+                          }
+
+                          setIsSendingMonitorMessage(true);
+
+                          const supabase = createClient(
+                            supabaseUrl,
+                            supabaseAnonKey,
+                          );
+
+                          const { error } = await supabase
+                            .from("judge_message")
+                            .insert({
+                              event_id: eventId,
+                              judge_id: monitorMessageRecipientJudgeId,
+                              title: monitorMessageTitle.trim() || null,
+                              body: monitorMessageBody.trim(),
                             });
-                          })()}
-                        </tbody>
-                      </table>
-                      <div className="mt-2 text-[10px] text-slate-400">
-                        Expected entries = participants × criteria for each contest.
+
+                          setIsSendingMonitorMessage(false);
+
+                          if (error) {
+                            setMonitorMessageError(
+                              error.message || "Unable to send message.",
+                            );
+                            return;
+                          }
+
+                          setMonitorMessageSuccess("Message sent.");
+                          setMonitorMessageTitle("");
+                          setMonitorMessageBody("");
+                        }}
+                        disabled={isSendingMonitorMessage}
+                        className="flex w-full items-center justify-center gap-2 rounded-2xl bg-slate-900 px-6 py-4 text-[13px] font-bold text-white shadow-xl transition-all hover:bg-black active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {isSendingMonitorMessage ? (
+                          <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                        ) : (
+                          <svg
+                            className="h-4 w-4"
+                            fill="none"
+                            viewBox="0 0 24 24"
+                            stroke="currentColor"
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              strokeWidth={2}
+                              d="M3 10l9-6 9 6-9 6-9-6zm0 0v10l9 6 9-6V10"
+                            />
+                          </svg>
+                        )}
+                        {isSendingMonitorMessage ? "Sending…" : "Send message"}
+                      </button>
+                    </div>
+                    <div className="rounded-[32px] border border-white/40 bg-white/80 p-8 shadow-[0_8px_30px_rgb(0,0,0,0.04)] backdrop-blur-xl">
+                      <div className="text-[13px] font-bold text-slate-800">
+                        Realtime behavior
+                      </div>
+                      <div className="mt-2 space-y-2 text-[12px] font-medium text-slate-500">
+                        <div>
+                          - Judges connected to the dashboard will immediately
+                          receive the message.
+                        </div>
+                        <div>
+                          - If you select a recipient, only that judge sees it.
+                        </div>
+                        <div>
+                          - If you choose All judges, everyone in the event sees it.
+                        </div>
                       </div>
                     </div>
                   </div>
                 </div>
               )}
             </div>
-          </section>
+          </div>
         )}
 
         {isCategoryModalOpen && (
-          <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 px-4">
-            <div className="w-full max-w-md rounded-2xl border border-[#1F4D3A1F] bg-white shadow-xl">
-              <div className="flex items-center justify-between border-b border-[#E2E8F0] px-5 py-3">
+          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-md animate-in fade-in duration-300">
+            <div className="w-full max-w-md scale-100 rounded-[40px] border border-white/40 bg-white/90 p-8 shadow-[0_32px_64px_-12px_rgba(0,0,0,0.14)] backdrop-blur-2xl animate-in zoom-in-95 duration-300">
+              <div className="mb-8 flex items-center justify-between">
                 <div>
-                  <div className="text-sm font-semibold text-[#1F4D3A]">
-                    Add team
-                  </div>
-                  <div className="text-[11px] text-slate-500">
-                    Create a team for an event.
-                  </div>
+                  <h3 className="text-xl font-black tracking-tight text-slate-900">Add Team</h3>
+                  <p className="text-[13px] font-medium text-slate-500">Create a team for an event.</p>
                 </div>
-                <button
-                  type="button"
+                <button 
                   onClick={() => setIsCategoryModalOpen(false)}
-                  className="rounded-full bg-[#F1F5F9] px-2 py-1 text-[11px] text-slate-500 hover:bg-[#E2E8F0]"
+                  className="flex h-10 w-10 items-center justify-center rounded-2xl bg-slate-100 text-slate-500 transition-all hover:bg-slate-200 hover:text-slate-900 active:scale-90"
                 >
-                  Close
+                  <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" /></svg>
                 </button>
               </div>
-              <div className="space-y-3 px-5 py-4 text-[11px]">
-                <div className="space-y-1">
-                  <div className="text-[10px] text-slate-500">
-                    Select Event *
+
+              <div className="space-y-6">
+                <div className="space-y-2">
+                  <label className="text-[13px] font-bold text-slate-700">Select Event *</label>
+                  <div className="relative">
+                    <select
+                      value={selectedEventIdForTeam ?? ""}
+                      onChange={(e) => setSelectedEventIdForTeam(e.target.value ? Number(e.target.value) : null)}
+                      className="w-full appearance-none rounded-2xl border border-slate-200 bg-slate-50/50 px-4 py-3 text-[14px] font-medium text-slate-900 outline-none transition-all focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/10"
+                    >
+                      <option value="">Choose an event</option>
+                      {events.filter(e => e.is_active).map((event) => (
+                        <option key={event.id} value={event.id}>{event.name} ({event.year})</option>
+                      ))}
+                    </select>
+                    <div className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-slate-400">
+                      <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+                    </div>
                   </div>
-                  <select
-                    value={selectedEventIdForTeam ?? ""}
-                    onChange={(e) =>
-                      setSelectedEventIdForTeam(
-                        e.target.value ? Number(e.target.value) : null,
-                      )
-                    }
-                    className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
-                  >
-                    <option value="">-- Choose an event --</option>
-                    {events.filter((event) => event.is_active).map((event) => (
-                      <option key={event.id} value={event.id}>
-                        {event.name} ({event.year})
-                      </option>
-                    ))}
-                  </select>
                 </div>
-                  <div className="space-y-1">
-                  <div className="text-[10px] text-slate-500">
-                    Team name
-                  </div>
+
+                <div className="space-y-2">
+                  <label className="text-[13px] font-bold text-slate-700">Team Name *</label>
                   <input
+                    placeholder="e.g. Team Emerald"
                     value={categoryName}
-                    onChange={(event) => setCategoryName(event.target.value)}
-                    className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
-                    placeholder="Team name"
+                    onChange={(e) => setCategoryName(e.target.value)}
+                    className="w-full rounded-2xl border border-slate-200 bg-slate-50/50 px-5 py-3.5 text-[14px] font-medium text-slate-900 outline-none transition-all focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/10"
                   />
                 </div>
+
                 {(categoryError || categorySuccess) && (
-                  <div
-                    className={`text-[10px] ${
-                      categoryError ? "text-red-500" : "text-emerald-600"
-                    }`}
-                  >
+                  <div className={`rounded-2xl px-4 py-3 text-[13px] font-bold flex items-center gap-2 ${
+                    categoryError ? "bg-red-50 text-red-600 border border-red-100" : "bg-emerald-50 text-emerald-700 border border-emerald-100"
+                  }`}>
+                    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      {categoryError ? (
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      ) : (
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                      )}
+                    </svg>
                     {categoryError ?? categorySuccess}
                   </div>
                 )}
-              </div>
-              <div className="flex items-center justify-end gap-2 border-t border-[#E2E8F0] px-5 py-3">
-                <button
-                  type="button"
-                  onClick={() => setIsCategoryModalOpen(false)}
-                  className="rounded-full border border-[#E2E8F0] px-3 py-1.5 text-[11px] text-slate-600 hover:bg-[#F8FAFC]"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={handleSaveCategory}
-                  disabled={isSavingCategory || activeEventId === null}
-                  className={`rounded-full bg-[#1F4D3A] px-4 py-1.5 text-[11px] font-medium text-white shadow-sm hover:bg-[#163528] ${
-                    isSavingCategory ? "cursor-not-allowed opacity-70" : ""
-                  }`}
-                >
-                  {isSavingCategory ? "Saving..." : "Save team"}
-                </button>
+
+                <div className="flex gap-3 pt-4">
+                  <button
+                    onClick={() => setIsCategoryModalOpen(false)}
+                    className="flex-1 rounded-2xl border border-slate-200 py-4 text-[14px] font-bold text-slate-600 transition-all hover:bg-slate-50 active:scale-95"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleSaveCategory}
+                    disabled={isSavingCategory}
+                    className="flex-[1.5] rounded-2xl bg-slate-900 py-4 text-[14px] font-bold text-white shadow-xl transition-all hover:bg-black active:scale-95 disabled:opacity-50"
+                  >
+                    {isSavingCategory ? (
+                      <div className="flex items-center justify-center gap-2">
+                        <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                        <span>Saving...</span>
+                      </div>
+                    ) : (
+                      "Save Team"
+                    )}
+                  </button>
+                </div>
               </div>
             </div>
           </div>
         )}
 
+
         {isParticipantModalOpen && (
-          <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 px-4">
-            <div className="w-full max-w-3xl rounded-2xl border border-[#1F4D3A1F] bg-white shadow-xl">
-              <div className="flex items-center justify-between border-b border-[#E2E8F0] px-6 py-4">
+          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-md animate-in fade-in duration-300">
+            <div className="w-full max-w-4xl scale-100 rounded-[40px] border border-white/40 bg-white/90 p-8 shadow-[0_32px_64px_-12px_rgba(0,0,0,0.14)] backdrop-blur-2xl animate-in zoom-in-95 duration-300">
+              <div className="mb-8 flex items-center justify-between">
                 <div>
-                  <div className="text-sm font-semibold text-[#1F4D3A]">
-                    Add participant
-                  </div>
-                  <div className="text-[11px] text-slate-500">
-                    Register a contestant for a contest.
-                  </div>
+                  <h3 className="text-xl font-black tracking-tight text-slate-900">Add Participant</h3>
+                  <p className="text-[13px] font-medium text-slate-500">Register a contestant for a contest.</p>
                 </div>
-                <button
-                  type="button"
+                <button 
                   onClick={() => setIsParticipantModalOpen(false)}
-                  className="rounded-full bg-[#F1F5F9] px-2 py-1 text-[11px] text-slate-500 hover:bg-[#E2E8F0]"
+                  className="flex h-10 w-10 items-center justify-center rounded-2xl bg-slate-100 text-slate-500 transition-all hover:bg-slate-200 hover:text-slate-900 active:scale-90"
                 >
-                  Close
+                  <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" /></svg>
                 </button>
               </div>
+
               <div className="px-6 py-4 text-[11px]">
-                <div className="grid items-start gap-6 md:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
-                  <div className="space-y-3">
-                    <div className="space-y-1">
-                      <div className="text-[10px] text-slate-500">
-                        Select Event
+                <div className="grid items-start gap-8 lg:grid-cols-[1.5fr_1fr]">
+                  <div className="space-y-6">
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <label className="text-[13px] font-bold text-slate-700">Select Event *</label>
+                        <div className="relative">
+                          <select
+                            value={selectedEventIdForParticipant ?? ""}
+                            onChange={(event) => {
+                              const value = event.target.value;
+                              setSelectedEventIdForParticipant(value ? Number(value) : null);
+                              setSelectedContestIdForParticipant(null);
+                            }}
+                            className="w-full appearance-none rounded-2xl border border-slate-200 bg-slate-50/50 px-4 py-3 text-[13px] font-medium text-slate-900 outline-none transition-all focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/10"
+                          >
+                            <option value="">Choose event</option>
+                            {events.filter((e) => e.is_active).map((event) => (
+                              <option key={event.id} value={event.id}>{event.name} ({event.year})</option>
+                            ))}
+                          </select>
+                          <div className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-slate-400">
+                            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+                          </div>
+                        </div>
                       </div>
-                      <select
-                        value={selectedEventIdForParticipant ?? ""}
-                        onChange={(event) => {
-                          const value = event.target.value;
-                          setSelectedEventIdForParticipant(value ? Number(value) : null);
-                          setSelectedContestIdForParticipant(null);
-                        }}
-                        className="w-full max-w-[420px] rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
-                      >
-                        <option value="">-- Choose an event --</option>
-                        {events.filter((e) => e.is_active).map((event) => (
-                          <option key={event.id} value={event.id}>
-                            {event.name} ({event.year})
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                    <div className="space-y-1">
-                      <div className="text-[10px] text-slate-500">Select contest</div>
-                      <select
-                        value={selectedContestIdForParticipant ?? ""}
-                        onChange={(event) => {
-                          const value = event.target.value;
-                          setSelectedContestIdForParticipant(
-                            value ? Number(value) : null,
-                          );
-                        }}
-                        className="w-full max-w-[420px] rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
-                      >
-                        <option value="">Select contest</option>
-                        {contests
-                          .filter((contest) =>
-                            (selectedEventIdForParticipant ?? activeEventId) === null
-                              ? true
-                              : contest.event_id === (selectedEventIdForParticipant ?? activeEventId),
-                          )
-                          .map((contest) => (
-                            <option key={contest.id} value={contest.id}>
-                              {contest.name}
-                            </option>
-                          ))}
-                      </select>
-                    </div>
-                    <div className="space-y-1">
-                      <div className="text-[10px] text-slate-500">
-                        Select division
+                      <div className="space-y-2">
+                        <label className="text-[13px] font-bold text-slate-700">Select Contest *</label>
+                        <div className="relative">
+                          <select
+                            value={selectedContestIdForParticipant ?? ""}
+                            onChange={(event) => setSelectedContestIdForParticipant(event.target.value ? Number(event.target.value) : null)}
+                            className="w-full appearance-none rounded-2xl border border-slate-200 bg-slate-50/50 px-4 py-3 text-[13px] font-medium text-slate-900 outline-none transition-all focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/10"
+                          >
+                            <option value="">Choose contest</option>
+                            {contests.filter((contest) => (selectedEventIdForParticipant ?? activeEventId) === null ? true : contest.event_id === (selectedEventIdForParticipant ?? activeEventId)).map((contest) => (
+                              <option key={contest.id} value={contest.id}>{contest.name}</option>
+                            ))}
+                          </select>
+                          <div className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-slate-400">
+                            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+                          </div>
+                        </div>
                       </div>
-                      <select
-                        value={selectedCategoryIdForParticipant ?? ""}
-                        onChange={(event) => {
-                          const value = event.target.value;
-                          const parsed = value ? Number(value) : null;
-                          setSelectedCategoryIdForParticipant(parsed);
-                          setSelectedTeamIdForParticipant(null);
-                        }}
-                        className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
-                      >
-                        <option value="">Select division</option>
-                        {categoriesForActiveEvent.map((division) => (
-                          <option key={division.id} value={division.id}>
-                            {division.name}
-                          </option>
-                        ))}
-                      </select>
                     </div>
-                    <div className="space-y-1">
-                      <div className="text-[10px] text-slate-500">
-                        Select team
+
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <label className="text-[13px] font-bold text-slate-700">Select Division</label>
+                        <div className="relative">
+                          <select
+                            value={selectedCategoryIdForParticipant ?? ""}
+                            onChange={(event) => {
+                              const value = event.target.value;
+                              setSelectedCategoryIdForParticipant(value ? Number(value) : null);
+                              setSelectedTeamIdForParticipant(null);
+                            }}
+                            className="w-full appearance-none rounded-2xl border border-slate-200 bg-slate-50/50 px-4 py-3 text-[13px] font-medium text-slate-900 outline-none transition-all focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/10"
+                          >
+                            <option value="">Choose division</option>
+                            {categoriesForActiveEvent.map((division) => (
+                              <option key={division.id} value={division.id}>{division.name}</option>
+                            ))}
+                          </select>
+                          <div className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-slate-400">
+                            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+                          </div>
+                        </div>
                       </div>
-                      <select
-                        value={selectedTeamIdForParticipant ?? ""}
-                        onChange={(event) => {
-                          const value = event.target.value;
-                          setSelectedTeamIdForParticipant(
-                            value ? Number(value) : null,
-                          );
-                        }}
-                        className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
-                      >
-                        <option value="">Select team</option>
-                        {teamsForActiveEvent.map((team) => (
-                          <option key={team.id} value={team.id}>
-                            {team.name}
-                          </option>
-                        ))}
-                      </select>
+                      <div className="space-y-2">
+                        <label className="text-[13px] font-bold text-slate-700">Select Team</label>
+                        <div className="relative">
+                          <select
+                            value={selectedTeamIdForParticipant ?? ""}
+                            onChange={(event) => setSelectedTeamIdForParticipant(event.target.value ? Number(event.target.value) : null)}
+                            className="w-full appearance-none rounded-2xl border border-slate-200 bg-slate-50/50 px-4 py-3 text-[13px] font-medium text-slate-900 outline-none transition-all focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/10"
+                          >
+                            <option value="">Choose team</option>
+                            {teamsForActiveEvent.map((team) => (
+                              <option key={team.id} value={team.id}>{team.name}</option>
+                            ))}
+                          </select>
+                          <div className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-slate-400">
+                            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+                          </div>
+                        </div>
+                      </div>
                     </div>
-                    <div className="space-y-1">
-                      <div className="text-[10px] text-slate-500">
-                        Full name
-                      </div>
+
+                    <div className="space-y-2">
+                      <label className="text-[13px] font-bold text-slate-700">Full Name *</label>
                       <input
+                        placeholder="e.g. John Doe"
                         value={participantFullName}
-                        onChange={(event) =>
-                          setParticipantFullName(event.target.value)
-                        }
-                        className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
-                        placeholder="Full name"
+                        onChange={(event) => setParticipantFullName(event.target.value)}
+                        className="w-full rounded-2xl border border-slate-200 bg-slate-50/50 px-5 py-3.5 text-[14px] font-medium text-slate-900 outline-none transition-all focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/10"
                       />
                     </div>
-                    <div className="space-y-1">
-                      <div className="text-[10px] text-slate-500">
-                        Contestant number
-                      </div>
+
+                    <div className="space-y-2">
+                      <label className="text-[13px] font-bold text-slate-700">Contestant Number *</label>
                       <input
+                        placeholder="e.g. 01"
                         value={participantNumber}
-                        onChange={(event) =>
-                          setParticipantNumber(event.target.value)
-                        }
-                        className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
-                        placeholder="Contestant number"
+                        onChange={(event) => setParticipantNumber(event.target.value)}
+                        className="w-full rounded-2xl border border-slate-200 bg-slate-50/50 px-5 py-3.5 text-[14px] font-medium text-slate-900 outline-none transition-all focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/10"
                       />
                     </div>
                   </div>
@@ -12488,6 +11807,7 @@ export default function AdminDashboard() {
                   <input
                     value={adminUsername}
                     onChange={(event) => setAdminUsername(event.target.value)}
+                    autoComplete="off"
                     className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
                     placeholder="New admin username"
                   />
@@ -12500,6 +11820,7 @@ export default function AdminDashboard() {
                     type="password"
                     value={adminPassword}
                     onChange={(event) => setAdminPassword(event.target.value)}
+                    autoComplete="new-password"
                     className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
                     placeholder="New admin password"
                   />
@@ -12559,6 +11880,7 @@ export default function AdminDashboard() {
                     onChange={(event) =>
                       setAdminGuardPassword(event.target.value)
                     }
+                    autoComplete="off"
                     className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
                     placeholder="Enter admin password"
                   />
@@ -12599,7 +11921,7 @@ export default function AdminDashboard() {
 
         {isJudgeModalOpen && (
           <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 px-4">
-            <div className="w-full max-w-md rounded-2xl border border-[#1F4D3A1F] bg-white shadow-xl">
+            <div className="flex w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-[#1F4D3A1F] bg-white shadow-xl max-h-[calc(100vh-2rem)]">
               <div className="flex items-center justify-between border-b border-[#E2E8F0] px-5 py-3">
                 <div>
                   <div className="text-sm font-semibold text-[#1F4D3A]">
@@ -12617,98 +11939,329 @@ export default function AdminDashboard() {
                   Close
                 </button>
               </div>
-              <div className="space-y-3 px-5 py-4 text-[11px]">
-                <div className="space-y-1">
-                  <div className="text-[10px] text-slate-500">
-                    Select Event *
-                  </div>
-                  <select
-                    value={selectedEventIdForJudge ?? ""}
-                    onChange={(e) =>
-                      setSelectedEventIdForJudge(
-                        e.target.value ? Number(e.target.value) : null,
-                      )
-                    }
-                    className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
-                  >
-                    <option value="">-- Choose an event --</option>
-                    {events.filter((event) => event.is_active).map((event) => (
-                      <option key={event.id} value={event.id}>
-                        {event.name} ({event.year})
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div className="space-y-1">
-                  <div className="text-[10px] text-slate-500">Full name</div>
-                  <input
-                    className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
-                    placeholder="Full name"
-                    value={judgeFullName}
-                    onChange={(event) => setJudgeFullName(event.target.value)}
-                  />
-                </div>
-                <div className="space-y-1">
-                  <div className="text-[10px] text-slate-500">Username</div>
-                  <input
-                    className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
-                    placeholder="Username"
-                    value={judgeUsername}
-                    onChange={(event) => setJudgeUsername(event.target.value)}
-                  />
-                </div>
-                <div className="space-y-1">
-                  <div className="text-[10px] text-slate-500">Password</div>
-                  <input
-                    type="password"
-                    className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
-                    placeholder="Password"
-                    value={judgePassword}
-                    onChange={(event) => setJudgePassword(event.target.value)}
-                  />
-                </div>
-                <div className="space-y-1">
-                  <div className="text-[10px] text-slate-500">Role</div>
-                  <select
-                    className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
-                    value={judgeRole}
-                    onChange={(event) =>
-                      setJudgeRole(event.target.value as "chairman" | "judge")
-                    }
-                  >
-                    <option value="judge">Judge</option>
-                    <option value="chairman">Chairman</option>
-                  </select>
-                </div>
-                <div className="space-y-1">
-                  <div className="flex items-center justify-between text-[10px] text-slate-500">
-                    <span>Assigned contests</span>
-                    <button
-                      type="button"
-                      onClick={() => setIsJudgeContestModalOpen(true)}
-                      className="rounded-full border border-[#D0D7E2] px-2 py-0.5 text-[10px] text-[#1F4D3A] hover:bg-[#F1F5F9]"
+              <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 overflow-y-auto px-5 py-4 text-[11px] md:grid-cols-2">
+                <div className="space-y-3">
+                  <div className="space-y-1">
+                    <div className="text-[10px] text-slate-500">
+                      Select Event *
+                    </div>
+                    <select
+                      value={selectedEventIdForJudge ?? ""}
+                      onChange={(e) =>
+                        setSelectedEventIdForJudge(
+                          e.target.value ? Number(e.target.value) : null,
+                        )
+                      }
+                      className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
                     >
-                      Manage
-                    </button>
+                      <option value="">-- Choose an event --</option>
+                      {events.filter((event) => event.is_active).map((event) => (
+                        <option key={event.id} value={event.id}>
+                          {event.name} ({event.year})
+                        </option>
+                      ))}
+                    </select>
                   </div>
-                  <div className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs text-slate-600">
-                    {contests
-                      .filter((contest) =>
-                        selectedContestIdsForJudge.includes(contest.id),
-                      )
-                      .map((contest) => contest.name).length === 0
-                      ? "No contests selected"
-                      : contests
-                          .filter((contest) =>
-                            selectedContestIdsForJudge.includes(contest.id),
-                          )
-                          .map((contest) => contest.name)
-                          .join(", ")}
+                  <div className="space-y-1">
+                    <div className="text-[10px] text-slate-500">Full name</div>
+                    <input
+                      className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                      placeholder="Full name"
+                      value={judgeFullName}
+                      onChange={(event) => setJudgeFullName(event.target.value)}
+                      autoComplete="off"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <div className="text-[10px] text-slate-500">Username</div>
+                    <input
+                      className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                      placeholder="Username"
+                      value={judgeUsername}
+                      onChange={(event) => setJudgeUsername(event.target.value)}
+                      autoComplete="off"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <div className="text-[10px] text-slate-500">Password</div>
+                    <input
+                      type="password"
+                      className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                      placeholder="Password"
+                      value={judgePassword}
+                      onChange={(event) => setJudgePassword(event.target.value)}
+                      autoComplete="new-password"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <div className="text-[10px] text-slate-500">Role</div>
+                    <select
+                      className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                      value={judgeRole}
+                      onChange={(event) =>
+                        setJudgeRole(event.target.value as "chairman" | "judge")
+                      }
+                    >
+                      <option value="judge">Judge</option>
+                      <option value="chairman">Chairman</option>
+                    </select>
+                  </div>
+                  <div className="rounded-2xl border border-[#E2E8F0] bg-white p-4">
+                    <div className="mb-2 flex items-center justify-between">
+                      <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+                        Assigned contests
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setIsJudgeContestModalOpen(true)}
+                        className="rounded-full border border-[#D0D7E2] bg-white px-2 py-0.5 text-[10px] font-medium text-[#1F4D3A] hover:bg-[#F1F5F9]"
+                      >
+                        Manage
+                      </button>
+                    </div>
+                    <div className="w-full rounded-xl border border-[#D0D7E2] bg-white px-3 py-2 text-xs text-slate-600">
+                      {contests
+                        .filter((contest) =>
+                          selectedContestIdsForJudge.includes(contest.id),
+                        )
+                        .map((contest) => contest.name).length === 0
+                        ? "No contests selected"
+                        : contests
+                            .filter((contest) =>
+                              selectedContestIdsForJudge.includes(contest.id),
+                            )
+                            .map((contest) => contest.name)
+                            .join(", ")}
+                    </div>
+                  </div>
+                </div>
+                <div className="space-y-4">
+                  <div className="rounded-2xl border border-[#E2E8F0] bg-[#F8FAFC] p-4">
+                    <div className="mb-3 flex items-center justify-between">
+                      <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+                        Avatar
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setJudgeAvatarUrl("");
+                          setJudgeAvatarZoom(1);
+                          setJudgeAvatarOffset({ x: 0, y: 0 });
+                          setJudgeAvatarImageDims(null);
+                        }}
+                        className="rounded-full border border-[#D0D7E2] bg-white px-2 py-0.5 text-[10px] text-slate-600 hover:bg-[#F1F5F9]"
+                      >
+                        Reset
+                      </button>
+                    </div>
+
+                    <div className="flex flex-col items-center gap-4">
+                      <div
+                        ref={judgeAvatarFrameRef}
+                        className="h-44 w-44 overflow-hidden rounded-full border border-[#E2E8F0] bg-white shadow-sm select-none touch-none"
+                        onMouseDown={(event) => {
+                          if (!judgeAvatarUrl) return;
+                          setIsDraggingJudgeAvatar(true);
+                          setLastJudgeAvatarPointer({ x: event.clientX, y: event.clientY });
+                        }}
+                        onMouseMove={(event) => {
+                          if (!isDraggingJudgeAvatar || !lastJudgeAvatarPointer) return;
+                          const dx = event.clientX - lastJudgeAvatarPointer.x;
+                          const dy = event.clientY - lastJudgeAvatarPointer.y;
+                          setJudgeAvatarOffset((prev) => ({ x: prev.x + dx, y: prev.y + dy }));
+                          setLastJudgeAvatarPointer({ x: event.clientX, y: event.clientY });
+                        }}
+                        onMouseUp={() => {
+                          setIsDraggingJudgeAvatar(false);
+                          setLastJudgeAvatarPointer(null);
+                        }}
+                        onMouseLeave={() => {
+                          setIsDraggingJudgeAvatar(false);
+                          setLastJudgeAvatarPointer(null);
+                        }}
+                        onTouchStart={(event) => {
+                          if (!judgeAvatarUrl) return;
+                          const t = event.touches[0];
+                          setIsDraggingJudgeAvatar(true);
+                          setLastJudgeAvatarPointer({ x: t.clientX, y: t.clientY });
+                        }}
+                        onTouchMove={(event) => {
+                          if (!isDraggingJudgeAvatar || !lastJudgeAvatarPointer) return;
+                          const t = event.touches[0];
+                          const dx = t.clientX - lastJudgeAvatarPointer.x;
+                          const dy = t.clientY - lastJudgeAvatarPointer.y;
+                          setJudgeAvatarOffset((prev) => ({ x: prev.x + dx, y: prev.y + dy }));
+                          setLastJudgeAvatarPointer({ x: t.clientX, y: t.clientY });
+                        }}
+                        onTouchEnd={() => {
+                          setIsDraggingJudgeAvatar(false);
+                          setLastJudgeAvatarPointer(null);
+                        }}
+                      >
+                        {judgeAvatarUrl ? (
+                          <img
+                            src={judgeAvatarUrl}
+                            alt={judgeFullName || "Judge avatar preview"}
+                            className="h-full w-full object-contain select-none"
+                            style={{
+                              transform: `translate(${judgeAvatarOffset.x}px, ${judgeAvatarOffset.y}px) scale(${judgeAvatarZoom})`,
+                            }}
+                            onLoad={(event) => {
+                              const img = event.target as HTMLImageElement;
+                              setJudgeAvatarImageDims({ w: img.naturalWidth, h: img.naturalHeight });
+                              const t = parseTransform(judgeAvatarUrl);
+                              if (t.tz !== null) setJudgeAvatarZoom(t.tz);
+                              const frameW = judgeAvatarFrameRef.current?.offsetWidth ?? 0;
+                              const frameH = judgeAvatarFrameRef.current?.offsetHeight ?? 0;
+                              if (frameW && frameH) {
+                                if (t.txp !== null && t.typ !== null) {
+                                  setJudgeAvatarOffset({ x: t.txp * frameW, y: t.typ * frameH });
+                                } else if (t.tx !== null && t.ty !== null) {
+                                  setJudgeAvatarOffset({ x: t.tx, y: t.ty });
+                                }
+                              }
+                            }}
+                          />
+                        ) : (
+                          <div className="flex h-full w-full items-center justify-center text-[11px] font-medium text-slate-400">
+                            No avatar
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="w-full max-w-sm space-y-3">
+                        <div className="flex items-center justify-between text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+                          <span>Zoom</span>
+                          <span className="normal-case font-medium text-slate-600">
+                            {Math.round(judgeAvatarZoom * 100)}%
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between gap-4">
+                          <button
+                            type="button"
+                            onClick={() => setJudgeAvatarZoom((p) => Math.min(3, Number((p + 0.1).toFixed(2))))}
+                            disabled={!judgeAvatarImageDims}
+                            className={"flex h-10 w-10 items-center justify-center rounded-full border border-[#CBD5E1] bg-white text-[14px] font-semibold text-slate-700 shadow-sm hover:bg-[#F8FAFC] " + (!judgeAvatarImageDims ? "opacity-50 cursor-not-allowed" : "")}
+                          >
+                            +
+                          </button>
+                          <div className="flex h-10 flex-1 items-center justify-center rounded-full border border-[#E2E8F0] bg-white text-[11px] font-semibold text-slate-600">
+                            {Math.round(judgeAvatarZoom * 100)}%
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setJudgeAvatarZoom((p) => Math.max(1, Number((p - 0.1).toFixed(2))))}
+                            disabled={!judgeAvatarImageDims}
+                            className={"flex h-10 w-10 items-center justify-center rounded-full border border-[#CBD5E1] bg-white text-[14px] font-semibold text-slate-700 shadow-sm hover:bg-[#F8FAFC] " + (!judgeAvatarImageDims ? "opacity-50 cursor-not-allowed" : "")}
+                          >
+                            −
+                          </button>
+                        </div>
+
+                        <label className={"mx-auto block w-full max-w-[220px] cursor-pointer rounded-full border border-[#E2E8F0] bg-white px-3 py-2 text-center text-[11px] font-medium text-slate-700 shadow-sm hover:bg-[#F8FAFC] " + (isUploadingJudgeAvatar ? "opacity-70 cursor-not-allowed" : "")}>
+                          <input
+                            type="file"
+                            accept="image/*"
+                            className="hidden"
+                            disabled={isUploadingJudgeAvatar}
+                            onChange={async (event) => {
+                                const file = event.target.files?.[0];
+                                if (!file) return;
+                                setJudgeError(null);
+
+                                const cloudName = process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME;
+                                const uploadPreset = process.env.NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET;
+                                if (!cloudName || !uploadPreset) {
+                                  setJudgeError("Cloudinary is not configured.");
+                                  return;
+                                }
+
+                                setIsUploadingJudgeAvatar(true);
+
+                                const processImage = async (imageFile: File, maxDim: number) => {
+                                  const objectUrl = URL.createObjectURL(imageFile);
+                                  const img = new Image();
+                                  img.src = objectUrl;
+                                  await new Promise((resolve, reject) => {
+                                    img.onload = resolve;
+                                    img.onerror = reject;
+                                  });
+
+                                  const srcW = img.width;
+                                  const srcH = img.height;
+                                  const minSide = Math.min(srcW, srcH);
+                                  const cropX = (srcW - minSide) / 2;
+                                  const cropY = (srcH - minSide) / 2;
+                                  const targetDim = Math.min(maxDim, minSide);
+
+                                  const canvas = document.createElement("canvas");
+                                  canvas.width = targetDim;
+                                  canvas.height = targetDim;
+                                  const ctx = canvas.getContext("2d");
+                                  if (!ctx) {
+                                    URL.revokeObjectURL(objectUrl);
+                                    throw new Error("Unable to process image");
+                                  }
+
+                                  ctx.drawImage(img, cropX, cropY, minSide, minSide, 0, 0, targetDim, targetDim);
+
+                                  const blob: Blob = await new Promise((resolve) =>
+                                    canvas.toBlob((b) => resolve(b as Blob), "image/jpeg", 0.9),
+                                  );
+
+                                  URL.revokeObjectURL(objectUrl);
+
+                                  return new File([blob], imageFile.name.replace(/\.\w+$/, ".jpg"), {
+                                    type: "image/jpeg",
+                                  });
+                                };
+
+                                try {
+                                  const processed = await processImage(file, 1200);
+
+                                  const formData = new FormData();
+                                  formData.append("file", processed);
+                                  formData.append("upload_preset", uploadPreset);
+
+                                  const response = await fetch(
+                                    `https://api.cloudinary.com/v1_1/${cloudName}/image/upload`,
+                                    {
+                                      method: "POST",
+                                      body: formData,
+                                    },
+                                  );
+
+                                  const data = await response.json();
+                                  if (!response.ok) {
+                                    throw new Error(data?.error?.message || "Upload failed");
+                                  }
+
+                                  setJudgeAvatarUrl(data.secure_url);
+                                  setJudgeAvatarZoom(1);
+                                  setJudgeAvatarOffset({ x: 0, y: 0 });
+                                } catch (err) {
+                                  setJudgeError(
+                                    err instanceof Error ? err.message : "Unable to upload avatar.",
+                                  );
+                                } finally {
+                                  setIsUploadingJudgeAvatar(false);
+                                  event.target.value = "";
+                                }
+                              }}
+                          />
+                          {isUploadingJudgeAvatar ? "Uploading..." : "Upload avatar"}
+                        </label>
+
+                        <div className="text-[10px] text-center text-slate-400">
+                          Drag photo to position.
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 </div>
                 {(judgeError || judgeSuccess) && (
                   <div
-                    className={`text-[10px] ${
+                    className={`md:col-span-2 text-[10px] ${
                       judgeError ? "text-red-500" : "text-emerald-600"
                     }`}
                   >
@@ -12730,9 +12283,9 @@ export default function AdminDashboard() {
                 <button
                   type="button"
                   onClick={handleSaveJudge}
-                  disabled={isSavingJudge || activeEventId === null}
+                  disabled={isSavingJudge || selectedEventIdForJudge === null}
                   className={`rounded-full bg-[#1F4D3A] px-4 py-1.5 text-[11px] font-medium text-white shadow-sm hover:bg-[#163528] ${
-                    isSavingJudge || activeEventId === null
+                    isSavingJudge || selectedEventIdForJudge === null
                       ? "cursor-not-allowed opacity-70"
                       : ""
                   }`}
@@ -12907,6 +12460,7 @@ export default function AdminDashboard() {
                     onChange={(event) =>
                       setTabulatorFullName(event.target.value)
                     }
+                    autoComplete="off"
                   />
                 </div>
                 <div className="space-y-1">
@@ -12918,6 +12472,7 @@ export default function AdminDashboard() {
                     onChange={(event) =>
                       setTabulatorUsername(event.target.value)
                     }
+                    autoComplete="off"
                   />
                 </div>
                 <div className="space-y-1">
@@ -12930,6 +12485,7 @@ export default function AdminDashboard() {
                     onChange={(event) =>
                       setTabulatorPassword(event.target.value)
                     }
+                    autoComplete="new-password"
                   />
                 </div>
                 {(tabulatorError || tabulatorSuccess) && (
@@ -12975,429 +12531,208 @@ export default function AdminDashboard() {
         )}
 
         {activeTab === "users" && (
-          <section className="relative rounded-3xl border border-[#1F4D3A1F] bg-white/95 p-6 shadow-[0_18px_45px_rgba(0,0,0,0.05)]">
-            <div className="mb-3 flex items-center justify-between">
-              <div>
-                <h2 className="text-sm font-semibold tracking-tight text-[#1F4D3A]">
-                  Add user
-                </h2>
-                <p className="text-[11px] text-slate-500">
-                  Create admin, judge, and tabulator accounts for this system.
-                </p>
-              </div>
-            </div>
-
-            <div className="mb-4 flex items-center justify-between">
-              <div className="flex gap-2 text-[11px]">
-                <button
-                  type="button"
-                  onClick={() => setUserTab("admin")}
-                  className={`rounded-full border px-3 py-1.5 transition ${
-                    userTab === "admin"
-                      ? "border-[#1F4D3A] bg-[#1F4D3A] text-white shadow-sm"
-                      : "border-transparent bg-[#F5F7FF] text-[#1F4D3A] hover:bg-[#E3F2EA]"
-                  }`}
-                >
-                  Admin
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setUserTab("judge")}
-                  className={`rounded-full border px-3 py-1.5 transition ${
-                    userTab === "judge"
-                      ? "border-[#1F4D3A] bg-[#1F4D3A] text-white shadow-sm"
-                      : "border-transparent bg-[#F5F7FF] text-[#1F4D3A] hover:bg-[#E3F2EA]"
-                  }`}
-                >
-                  Judge
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setUserTab("tabulator")}
-                  className={`rounded-full border px-3 py-1.5 transition ${
-                    userTab === "tabulator"
-                      ? "border-[#1F4D3A] bg-[#1F4D3A] text-white shadow-sm"
-                      : "border-transparent bg-[#F5F7FF] text-[#1F4D3A] hover:bg-[#E3F2EA]"
-                  }`}
-                >
-                  Tabulator
-                </button>
-              </div>
-              {(userTab === "judge" || userTab === "tabulator") && (
-                <div className="flex items-center gap-2">
-                  <span className="text-[10px] text-slate-500">Event</span>
-                  <select
-                    value={userTabEventFilterId ?? ""}
-                    onChange={(e) =>
-                      setUserTabEventFilterId(
-                        e.target.value ? Number(e.target.value) : null,
-                      )
-                    }
-                    className="rounded-full border border-[#E2E8F0] bg-white px-3 py-1.5 text-xs outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+          <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-700">
+            {/* Sub-tab Navigation & Global Filter */}
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div className="flex items-center gap-1 rounded-2xl bg-slate-100/50 p-1.5 backdrop-blur-sm">
+                {[
+                  { id: "admin", label: "Administrators", icon: "ShieldCheck" },
+                  { id: "judge", label: "Judges", icon: "Gavel" },
+                  { id: "tabulator", label: "Tabulators", icon: "Calculator" },
+                ].map((tab) => (
+                  <button
+                    key={tab.id}
+                    onClick={() => setUserTab(tab.id as UserSubTab)}
+                    className={`flex items-center gap-2 rounded-xl px-4 py-2 text-[13px] font-semibold transition-all duration-300 ${
+                      userTab === tab.id
+                        ? "bg-white text-emerald-700 shadow-[0_4px_12px_rgba(0,0,0,0.05)] ring-1 ring-slate-200"
+                        : "text-slate-500 hover:bg-white/50 hover:text-slate-700"
+                    }`}
                   >
-                    <option value="">All events</option>
-                    {events.map((event) => (
-                      <option key={event.id} value={event.id}>
-                        {event.name} ({event.year})
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              )}
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+
+              <div className="flex items-center gap-3">
+                {(userTab === "judge" || userTab === "tabulator") && (
+                  <div className="relative">
+                    <select
+                      value={userTabEventFilterId ?? ""}
+                      onChange={(e) => setUserTabEventFilterId(e.target.value ? Number(e.target.value) : null)}
+                      className="appearance-none rounded-2xl border border-slate-200 bg-white px-10 py-2.5 text-[13px] font-bold text-slate-700 outline-none transition-all focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10 shadow-sm"
+                    >
+                      <option value="">All Events</option>
+                      {events.filter(e => e.is_active).map((event) => (
+                        <option key={event.id} value={event.id}>{event.name} ({event.year})</option>
+                      ))}
+                    </select>
+                    <div className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-emerald-600">
+                      <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
+                    </div>
+                  </div>
+                )}
+                
+                <button
+                  onClick={() => {
+                    if (userTab === "admin") requireAdminGuard({ type: "create" });
+                    else if (userTab === "judge") openCreateJudgeModal();
+                    else openCreateTabulatorModal();
+                  }}
+                  className="group flex items-center gap-2 rounded-2xl bg-emerald-600 px-5 py-2.5 text-[13px] font-bold text-white shadow-[0_8px_20px_-4px_rgba(16,185,129,0.3)] transition-all hover:bg-emerald-700 hover:shadow-[0_12px_25px_-4px_rgba(16,185,129,0.4)] active:scale-95"
+                >
+                  <svg className="h-4 w-4 transition-transform group-hover:rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 4v16m8-8H4" />
+                  </svg>
+                  Add {userTab.charAt(0).toUpperCase() + userTab.slice(1)}
+                </button>
+              </div>
             </div>
 
-            <div>
-              {userTab === "admin" && (
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between">
-                    <div className="text-[11px] font-medium text-slate-600">
-                      Admins
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => requireAdminGuard({ type: "create" })}
-                      className="inline-flex items-center rounded-full bg-[#1F4D3A] px-3 py-1.5 text-[11px] font-medium text-white shadow-sm transition hover:bg-[#163528]"
-                    >
-                      Add admin
-                    </button>
+            {/* Main Content Area */}
+            <div className="grid gap-6">
+              {/* Search Header */}
+              <div className="rounded-[32px] border border-white/40 bg-white/80 p-6 shadow-[0_8px_30px_rgb(0,0,0,0.04)] backdrop-blur-xl">
+                <div className="relative max-w-md">
+                  <input
+                    type="text"
+                    placeholder={`Search ${userTab}s by name or username...`}
+                    value={userTab === "admin" ? adminSearch : userTab === "judge" ? judgeSearch : tabulatorSearch}
+                    onChange={(e) => {
+                      if (userTab === "admin") setAdminSearch(e.target.value);
+                      else if (userTab === "judge") setJudgeSearch(e.target.value);
+                      else setTabulatorSearch(e.target.value);
+                    }}
+                    className="w-full rounded-2xl border border-slate-200 bg-slate-50/50 px-11 py-3 text-[13px] font-medium text-slate-700 outline-none transition-all focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/10"
+                  />
+                  <div className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400">
+                    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
                   </div>
+                </div>
+              </div>
 
-                  <div className="rounded-2xl border border-[#1F4D3A1F] bg-white p-4">
-                    <div className="mb-2 flex items-center justify-between">
-                      <div className="text-[11px] font-medium text-slate-600">
-                        Admin list
-                      </div>
-                      <div className="flex items-center gap-3">
-                        <input
-                          placeholder="Search admins"
-                          value={adminSearch}
-                          onChange={(e) => setAdminSearch(e.target.value)}
-                          className="rounded-xl border border-[#D0D7E2] bg-white px-3 py-1 text-xs outline-none"
-                        />
-                        <span className="text-[10px] text-slate-400">
-                          {filteredAdmins.length === 0
-                            ? "No admins"
-                            : `${filteredAdmins.length} admin${filteredAdmins.length > 1 ? "s" : ""}`}
-                        </span>
-                      </div>
-                    </div>
-                    <div className="overflow-x-auto">
-                      <table className="min-w-full border-collapse text-left text-[11px]">
-                        <thead>
-                          <tr className="border-b border-[#E2E8F0] bg-[#F5F7FF] text-[10px] uppercase tracking-wide text-slate-500">
-                            <th className="px-3 py-2 font-medium">Username</th>
-                            <th className="px-3 py-2 font-medium">Role</th>
-                            <th className="px-3 py-2 font-medium">Actions</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {filteredAdmins.length === 0 ? (
-                            <tr className="border-b border-[#F1F5F9]">
-                              <td
-                                className="px-3 py-2 text-slate-400"
-                                colSpan={3}
-                              >
-                                Once you add admins, you can edit or delete them
-                                here.
+              {/* Data Table */}
+              <div className="overflow-hidden rounded-[32px] border border-white/40 bg-white/80 shadow-[0_8px_30px_rgb(0,0,0,0.04)] backdrop-blur-xl">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left">
+                    <thead>
+                      <tr className="bg-slate-50/50 text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                        <th className="px-8 py-4">User Details</th>
+                        <th className="px-8 py-4">{userTab === "admin" ? "Role" : "Event Assignment"}</th>
+                        {userTab === "judge" && <th className="px-8 py-4">Assigned Contests</th>}
+                        <th className="px-8 py-4 text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {userTab === "admin" && (
+                        filteredAdmins.length === 0 ? (
+                          <tr><td colSpan={3} className="px-8 py-12 text-center text-slate-400">No administrators found.</td></tr>
+                        ) : (
+                          filteredAdmins.map((admin) => (
+                            <tr key={admin.id} className="group transition-colors hover:bg-slate-50/50">
+                              <td className="px-8 py-5">
+                                <div className="flex items-center gap-3">
+                                  <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-100 text-[13px] font-bold text-slate-700">{admin.username.charAt(0).toUpperCase()}</div>
+                                  <div className="text-[13px] font-bold text-slate-800">{admin.username}</div>
+                                </div>
+                              </td>
+                              <td className="px-8 py-5">
+                                <span className="inline-flex items-center rounded-lg bg-blue-50 px-2.5 py-1 text-[11px] font-bold text-blue-700 ring-1 ring-inset ring-blue-600/10">Administrator</span>
+                              </td>
+                              <td className="px-8 py-5 text-right">
+                                <div className="flex justify-end gap-2">
+                                  <button onClick={() => requireAdminGuard({ type: "edit", adminId: admin.id })} className="flex h-9 w-9 items-center justify-center rounded-xl bg-white text-slate-600 shadow-sm ring-1 ring-slate-200 transition-all hover:bg-slate-50 hover:text-emerald-600"><svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg></button>
+                                  <button onClick={() => requireAdminGuard({ type: "delete", adminId: admin.id })} disabled={isDeletingAdminId === admin.id} className="flex h-9 w-9 items-center justify-center rounded-xl bg-white text-slate-600 shadow-sm ring-1 ring-slate-200 transition-all hover:bg-red-50 hover:text-red-600 disabled:opacity-50">
+                                    {isDeletingAdminId === admin.id ? <div className="h-4 w-4 animate-spin rounded-full border-2 border-red-600 border-t-transparent" /> : <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>}
+                                  </button>
+                                </div>
                               </td>
                             </tr>
-                          ) : (
-                            filteredAdmins.map((admin) => (
-                              <tr
-                                key={admin.id}
-                                className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC]"
-                              >
-                                <td className="px-3 py-2 font-medium text-slate-700">
-                                  {admin.username}
+                          ))
+                        )
+                      )}
+
+                      {userTab === "judge" && (
+                        filteredJudges.length === 0 ? (
+                          <tr><td colSpan={5} className="px-8 py-12 text-center text-slate-400">No judges found.</td></tr>
+                        ) : (
+                          filteredJudges.map((judge) => {
+                            const event = events.find(e => e.id === judge.event_id);
+                            const contestsAssigned = judgeAssignments.filter(ja => ja.judge_id === judge.id).map(ja => contests.find(c => c.id === ja.contest_id)?.name).filter(Boolean);
+                            return (
+                              <tr key={judge.id} className="group transition-colors hover:bg-slate-50/50">
+                                <td className="px-8 py-5">
+                                  <div className="flex items-center gap-3">
+                                    <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-50 text-[13px] font-bold text-emerald-700 ring-1 ring-emerald-600/10">{judge.full_name.charAt(0)}</div>
+                                    <div>
+                                      <div className="text-[13px] font-bold text-slate-800">{judge.full_name}</div>
+                                      <div className="text-[11px] font-medium text-slate-400">@{judge.username}</div>
+                                    </div>
+                                  </div>
                                 </td>
-                                <td className="px-3 py-2 text-slate-600">
-                                  Admin
+                                <td className="px-8 py-5">
+                                  <span className="inline-flex items-center rounded-lg bg-slate-100 px-2.5 py-1 text-[11px] font-bold text-slate-700 ring-1 ring-inset ring-slate-200">{event?.name ?? "No Event"}</span>
                                 </td>
-                                <td className="px-3 py-2">
-                                  <div className="flex gap-1.5 text-[10px] text-slate-500">
-                                    <button
-                                      type="button"
-                                      onClick={() =>
-                                        requireAdminGuard({
-                                          type: "edit",
-                                          adminId: admin.id,
-                                        })
-                                      }
-                                      className="rounded-full border border-[#E2E8F0] px-2 py-0.5 hover:bg-[#F8FAFC]"
-                                    >
-                                      Edit
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() =>
-                                        requireAdminGuard({
-                                          type: "delete",
-                                          adminId: admin.id,
-                                        })
-                                      }
-                                      disabled={isDeletingAdminId === admin.id}
-                                      className="rounded-full border border-[#FEE2E2] px-2 py-0.5 text-red-500 hover:bg-[#FEF2F2] disabled:opacity-60"
-                                    >
-                                      {isDeletingAdminId === admin.id
-                                        ? "Deleting..."
-                                        : "Delete"}
+                                <td className="px-8 py-5">
+                                  <div className="flex flex-wrap gap-1 max-w-xs">
+                                    {contestsAssigned.length > 0 ? contestsAssigned.map((c, i) => (
+                                      <span key={i} className="text-[10px] font-bold bg-white border border-slate-100 px-1.5 py-0.5 rounded-md text-slate-500 shadow-sm">{c}</span>
+                                    )) : <span className="text-[11px] italic text-slate-400">No assignments</span>}
+                                  </div>
+                                </td>
+                                <td className="px-8 py-5 text-right">
+                                  <div className="flex justify-end gap-2">
+                                    <button onClick={() => openEditJudgeModal(judge)} className="flex h-9 w-9 items-center justify-center rounded-xl bg-white text-slate-600 shadow-sm ring-1 ring-slate-200 transition-all hover:bg-slate-50 hover:text-emerald-600"><svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg></button>
+                                    <button onClick={() => handleDeleteJudge(judge.id)} disabled={isDeletingJudgeId === judge.id} className="flex h-9 w-9 items-center justify-center rounded-xl bg-white text-slate-600 shadow-sm ring-1 ring-slate-200 transition-all hover:bg-red-50 hover:text-red-600 disabled:opacity-50">
+                                      {isDeletingJudgeId === judge.id ? <div className="h-4 w-4 animate-spin rounded-full border-2 border-red-600 border-t-transparent" /> : <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>}
                                     </button>
                                   </div>
                                 </td>
                               </tr>
-                            ))
-                          )}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                </div>
-              )}
+                            );
+                          })
+                        )
+                      )}
 
-              {userTab === "judge" && (
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between">
-                    <div className="text-[11px] font-medium text-slate-600">
-                      Judges
-                    </div>
-                    <button
-                      type="button"
-                      onClick={openCreateJudgeModal}
-                      className="inline-flex items-center rounded-full bg-[#1F4D3A] px-3 py-1.5 text-[11px] font-medium text-white shadow-sm transition hover:bg-[#163528]"
-                    >
-                      Add judge
-                    </button>
-                  </div>
-
-                  <div className="rounded-2xl border border-[#1F4D3A1F] bg-white p-4">
-                    <div className="mb-2 flex items-center justify-between">
-                      <div className="text-[11px] font-medium text-slate-600">
-                        Judge list
-                      </div>
-                      <div className="flex items-center gap-3">
-                        <input
-                          placeholder="Search judges"
-                          value={judgeSearch}
-                          onChange={(e) => setJudgeSearch(e.target.value)}
-                          className="rounded-xl border border-[#D0D7E2] bg-white px-3 py-1 text-xs outline-none"
-                        />
-                        <span className="text-[10px] text-slate-400">
-                          {filteredJudges.length === 0
-                            ? "No judges"
-                            : `${filteredJudges.length} judge${filteredJudges.length > 1 ? "s" : ""}`}
-                        </span>
-                      </div>
-                    </div>
-                    <div className="overflow-x-auto">
-                      <table className="min-w-full border-collapse text-left text-[11px]">
-                        <thead>
-                          <tr className="border-b border-[#E2E8F0] bg-[#F5F7FF] text-[10px] uppercase tracking-wide text-slate-500">
-                            <th className="px-3 py-2 font-medium">Full name</th>
-                            <th className="px-3 py-2 font-medium">Username</th>
-                            <th className="px-3 py-2 font-medium">Contests</th>
-                            <th className="px-3 py-2 font-medium">Event</th>
-                            <th className="px-3 py-2 font-medium">Actions</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {filteredJudges.length === 0 ? (
-                            <tr className="border-b border-[#F1F5F9]">
-                              <td
-                                className="px-3 py-2 text-slate-400"
-                                colSpan={4}
-                              >
-                                Once you add judges, you can edit or delete them
-                                here.
-                              </td>
-                            </tr>
-                          ) : (
-                            filteredJudges.map((judge) => {
-                              const event = events.find(
-                                (e) => e.id === judge.event_id,
-                              );
-                              const assignedContestNames = judgeAssignments
-                                .filter(
-                                  (assignment) =>
-                                    assignment.judge_id === judge.id,
-                                )
-                                .map((assignment) => {
-                                  const contest = contests.find(
-                                    (contest) =>
-                                      contest.id === assignment.contest_id,
-                                  );
-                                  return contest ? contest.name : null;
-                                })
-                                .filter(
-                                  (name): name is string => name !== null,
-                                );
-
-                              return (
-                                <tr
-                                  key={judge.id}
-                                  className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC]"
-                                >
-                                  <td className="px-3 py-2 font-medium text-slate-700">
-                                    {judge.full_name}
-                                  </td>
-                                  <td className="px-3 py-2 text-slate-600">
-                                    {judge.username}
-                                  </td>
-                                  <td className="px-3 py-2 text-slate-600">
-                                    {assignedContestNames.length === 0
-                                      ? "No contests"
-                                      : assignedContestNames.join(", ")}
-                                  </td>
-                                  <td className="px-3 py-2 text-slate-600">
-                                    {event ? event.name : "Unknown event"}
-                                  </td>
-                                  <td className="px-3 py-2">
-                                    <div className="flex gap-1.5 text-[10px] text-slate-500">
-                                      <button
-                                        type="button"
-                                        onClick={() => openEditJudgeModal(judge)}
-                                        className="rounded-full border border-[#E2E8F0] px-2 py-0.5 hover:bg-[#F8FAFC]"
-                                      >
-                                        Edit
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() => handleDeleteJudge(judge.id)}
-                                        disabled={isDeletingJudgeId === judge.id}
-                                        className="rounded-full border border-[#FEE2E2] px-2 py-0.5 text-red-500 hover:bg-[#FEF2F2] disabled:opacity-60"
-                                      >
-                                        {isDeletingJudgeId === judge.id
-                                          ? "Deleting..."
-                                          : "Delete"}
-                                      </button>
+                      {userTab === "tabulator" && (
+                        filteredTabulators.length === 0 ? (
+                          <tr><td colSpan={4} className="px-8 py-12 text-center text-slate-400">No tabulators found.</td></tr>
+                        ) : (
+                          filteredTabulators.map((tabulator) => {
+                            const event = events.find(e => e.id === tabulator.event_id);
+                            return (
+                              <tr key={tabulator.id} className="group transition-colors hover:bg-slate-50/50">
+                                <td className="px-8 py-5">
+                                  <div className="flex items-center gap-3">
+                                    <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-blue-50 text-[13px] font-bold text-blue-700 ring-1 ring-blue-600/10">{tabulator.full_name.charAt(0)}</div>
+                                    <div>
+                                      <div className="text-[13px] font-bold text-slate-800">{tabulator.full_name}</div>
+                                      <div className="text-[11px] font-medium text-slate-400">@{tabulator.username}</div>
                                     </div>
-                                  </td>
-                                </tr>
-                              );
-                            })
-                          )}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
+                                  </div>
+                                </td>
+                                <td className="px-8 py-5">
+                                  <span className="inline-flex items-center rounded-lg bg-slate-100 px-2.5 py-1 text-[11px] font-bold text-slate-700 ring-1 ring-inset ring-slate-200">{event?.name ?? "No Event"}</span>
+                                </td>
+                                <td className="px-8 py-5 text-right">
+                                  <div className="flex justify-end gap-2">
+                                    <button onClick={() => openEditTabulatorModal(tabulator)} className="flex h-9 w-9 items-center justify-center rounded-xl bg-white text-slate-600 shadow-sm ring-1 ring-slate-200 transition-all hover:bg-slate-50 hover:text-emerald-600"><svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg></button>
+                                    <button onClick={() => handleDeleteTabulator(tabulator.id)} disabled={isDeletingTabulatorId === tabulator.id} className="flex h-9 w-9 items-center justify-center rounded-xl bg-white text-slate-600 shadow-sm ring-1 ring-slate-200 transition-all hover:bg-red-50 hover:text-red-600 disabled:opacity-50">
+                                      {isDeletingTabulatorId === tabulator.id ? <div className="h-4 w-4 animate-spin rounded-full border-2 border-red-600 border-t-transparent" /> : <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>}
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })
+                        )
+                      )}
+                    </tbody>
+                  </table>
                 </div>
-              )}
-
-              {userTab === "tabulator" && (
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between">
-                    <div className="text-[11px] font-medium text-slate-600">
-                      Tabulators
-                    </div>
-                    <button
-                      type="button"
-                      onClick={openCreateTabulatorModal}
-                      className="inline-flex items-center rounded-full bg-[#1F4D3A] px-3 py-1.5 text-[11px] font-medium text-white shadow-sm transition hover:bg-[#163528]"
-                    >
-                      Add tabulator
-                    </button>
-                  </div>
-
-                  <div className="rounded-2xl border border-[#1F4D3A1F] bg-white p-4">
-                    <div className="mb-2 flex items-center justify-between">
-                      <div className="text-[11px] font-medium text-slate-600">
-                        Tabulator list
-                      </div>
-                      <div className="flex items-center gap-3">
-                        <input
-                          placeholder="Search tabulators"
-                          value={tabulatorSearch}
-                          onChange={(e) => setTabulatorSearch(e.target.value)}
-                          className="rounded-xl border border-[#D0D7E2] bg-white px-3 py-1 text-xs outline-none"
-                        />
-                        <span className="text-[10px] text-slate-400">
-                          {filteredTabulators.length === 0
-                            ? "No tabulators"
-                            : `${filteredTabulators.length} tabulator${filteredTabulators.length > 1 ? "s" : ""}`}
-                        </span>
-                      </div>
-                    </div>
-                    {(tabulatorError || tabulatorSuccess) && (
-                      <div
-                        className={`mb-2 text-[10px] ${
-                          tabulatorError ? "text-red-500" : "text-emerald-600"
-                        }`}
-                      >
-                        {tabulatorError ?? tabulatorSuccess}
-                      </div>
-                    )}
-                    <div className="overflow-x-auto">
-                      <table className="min-w-full border-collapse text-left text-[11px]">
-                        <thead>
-                          <tr className="border-b border-[#E2E8F0] bg-[#F5F7FF] text-[10px] uppercase tracking-wide text-slate-500">
-                            <th className="px-3 py-2 font-medium">Full name</th>
-                            <th className="px-3 py-2 font-medium">Username</th>
-                            <th className="px-3 py-2 font-medium">Event</th>
-                            <th className="px-3 py-2 font-medium">Actions</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {filteredTabulators.length === 0 ? (
-                            <tr className="border-b border-[#F1F5F9]">
-                              <td
-                                className="px-3 py-2 text-slate-400"
-                                colSpan={4}
-                              >
-                                Once you add tabulators, they will appear here.
-                              </td>
-                            </tr>
-                          ) : (
-                            filteredTabulators.map((tabulator) => {
-                              const event = events.find(
-                                (e) => e.id === tabulator.event_id,
-                              );
-
-                              return (
-                                <tr
-                                  key={tabulator.id}
-                                  className="border-b border-[#F1F5F9] hover:bg-[#F8FAFC]"
-                                >
-                                  <td className="px-3 py-2 font-medium text-slate-700">
-                                    {tabulator.full_name}
-                                  </td>
-                                  <td className="px-3 py-2 text-slate-600">
-                                    {tabulator.username}
-                                  </td>
-                                  <td className="px-3 py-2 text-slate-600">
-                                    {event ? event.name : "Unknown event"}
-                                  </td>
-                                  <td className="px-3 py-2">
-                                    <div className="flex gap-1.5 text-[10px] text-slate-500">
-                                      <button
-                                        type="button"
-                                        onClick={() => openEditTabulatorModal(tabulator)}
-                                        className="rounded-full border border-[#E2E8F0] px-2 py-0.5 hover:bg-[#F8FAFC]"
-                                      >
-                                        Edit
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() => handleDeleteTabulator(tabulator.id)}
-                                        disabled={isDeletingTabulatorId === tabulator.id}
-                                        className="rounded-full border border-[#FEE2E2] px-2 py-0.5 text-red-500 hover:bg-[#FEF2F2] disabled:opacity-60"
-                                      >
-                                        {isDeletingTabulatorId === tabulator.id
-                                          ? "Deleting..."
-                                          : "Delete"}
-                                      </button>
-                                    </div>
-                                  </td>
-                                </tr>
-                              );
-                            })
-                          )}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                </div>
-              )}
+              </div>
             </div>
-          </section>
+          </div>
         )}
       </main>
     </div>

@@ -2,7 +2,7 @@
 
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { createClient } from "@supabase/supabase-js";
+import { getSupabaseClient } from "@/lib/supabase";
 
 type EventRow = {
   id: number;
@@ -117,19 +117,43 @@ type ContestLayoutTheme = {
   modalSecondaryButtonTextColorOpacity?: number;
 };
 
+function clampNumber(value: number, min: number, max: number) {
+  if (Number.isNaN(value)) return min;
+  return Math.min(max, Math.max(min, value));
+}
+
+function parseNumber(value: string | number | null | undefined) {
+  if (typeof value === "number") return value;
+  const raw = String(value ?? "").trim();
+  if (!raw) return Number.POSITIVE_INFINITY;
+  const n = Number.parseFloat(raw.replace(/[^0-9.\-]/g, ""));
+  return Number.isFinite(n) ? n : Number.POSITIVE_INFINITY;
+}
+
 function hexWithOpacity(hex: string, opacity?: number) {
-  const value = hex.replace("#", "");
-  if (value.length !== 6) {
+  const sanitized = hex.replace("#", "").trim();
+  const alpha = opacity !== undefined ? clampNumber(opacity, 0, 1) : 1;
+  if (sanitized.length !== 6) {
     return hex;
   }
-  const r = Number.parseInt(value.slice(0, 2), 16);
-  const g = Number.parseInt(value.slice(2, 4), 16);
-  const b = Number.parseInt(value.slice(4, 6), 16);
-  const alpha =
-    typeof opacity === "number"
-      ? Math.min(1, Math.max(0, opacity))
-      : 1;
+  const r = Number.parseInt(sanitized.slice(0, 2), 16);
+  const g = Number.parseInt(sanitized.slice(2, 4), 16);
+  const b = Number.parseInt(sanitized.slice(4, 6), 16);
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+function resolveThemeFontFamily(value?: string) {
+  if (!value || value === "system") return undefined;
+  if (value === "sans") {
+    return "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+  }
+  if (value === "serif") {
+    return "Georgia, 'Times New Roman', serif";
+  }
+  if (value === "mono") {
+    return "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace";
+  }
+  return undefined;
 }
 
 type ContestLayout = {
@@ -242,6 +266,15 @@ type ContestLayoutRow = {
   layout_json: ContestLayout;
 };
 
+type JudgeMessageRow = {
+  id: number;
+  event_id: number;
+  judge_id: number | null;
+  title: string | null;
+  body: string;
+  created_at: string;
+};
+
 export default function JudgeDashboardPage() {
   const router = useRouter();
   const [judge, setJudge] = useState<JudgeRow | null>(null);
@@ -258,7 +291,10 @@ export default function JudgeDashboardPage() {
   const [activeAwardFilterId, setActiveAwardFilterId] = useState<number | "all">("all");
   const [assignedContestIds, setAssignedContestIds] = useState<number[]>([]);
   const [activeContestId, setActiveContestId] = useState<number | null>(null);
-  const [activeDivisionFilterId, setActiveDivisionFilterId] = useState<
+  const [scoringDivisionFilterId, setScoringDivisionFilterId] = useState<
+    number | "all"
+  >("all");
+  const [rankingDivisionFilterId, setRankingDivisionFilterId] = useState<
     number | "all"
   >("all");
   const [scoreInputs, setScoreInputs] = useState<Record<string, string>>({});
@@ -281,6 +317,8 @@ export default function JudgeDashboardPage() {
   const [isScoringModalOpen, setIsScoringModalOpen] = useState(false);
   const [isGalleryModalOpen, setIsGalleryModalOpen] = useState(false);
   const [gallerySlideIndex, setGallerySlideIndex] = useState(0);
+  const [messageQueue, setMessageQueue] = useState<JudgeMessageRow[]>([]);
+  const [activeMessage, setActiveMessage] = useState<JudgeMessageRow | null>(null);
   const [selectedJudgeForBreakdown, setSelectedJudgeForBreakdown] = useState<number | null>(null);
   const [activeTab, setActiveTab] = useState<"score" | "tabulation" | "monitoring">("score");
   const [activeTabulationView, setActiveTabulationView] = useState<
@@ -300,19 +338,29 @@ export default function JudgeDashboardPage() {
     },
     [scores, judge],
   );
-  const scoresBroadcastRef = useRef<any>(null);
+  type SupabaseClient = ReturnType<typeof getSupabaseClient>;
+  type RealtimeChannel = ReturnType<SupabaseClient["channel"]>;
+  const scoresBroadcastRef = useRef<RealtimeChannel | null>(null);
 
   useEffect(() => {
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
     const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
     if (!supabaseUrl || !supabaseAnonKey) return;
     if (!event) return;
-    const supabase = createClient(supabaseUrl, supabaseAnonKey);
+    const supabase = getSupabaseClient();
     const ch = supabase
       .channel(`event-${event.id}-scores`, {
         config: { broadcast: { ack: true } },
       })
-      .subscribe();
+      .subscribe((status, err) => {
+        if (status === 'SUBSCRIBED') {
+          console.log('[JUDGE-SCORES] Connected to scores channel');
+        } else if (status === 'CHANNEL_ERROR' || err) {
+          console.warn('[JUDGE-SCORES] Channel error:', err?.message || status);
+        } else if (status === 'CLOSED') {
+          console.log('[JUDGE-SCORES] Channel closed');
+        }
+      });
     scoresBroadcastRef.current = ch;
     return () => {
       try {
@@ -338,10 +386,11 @@ export default function JudgeDashboardPage() {
       return;
     }
 
-    const supabase = createClient(supabaseUrl, supabaseAnonKey);
+    const supabase = getSupabaseClient();
     let channel: ReturnType<typeof supabase.channel> | null = null;
     let scoringPermChannel: ReturnType<typeof supabase.channel> | null = null;
     let broadcastChannel: ReturnType<typeof supabase.channel> | null = null;
+    let messageChannel: ReturnType<typeof supabase.channel> | null = null;
 
     const loadJudgeData = async () => {
       setIsLoading(true);
@@ -365,7 +414,7 @@ export default function JudgeDashboardPage() {
 
       const { data: judgeRows, error: judgeError } = await supabase
         .from("user_judge")
-        .select("id, event_id, full_name, username, role, created_at")
+        .select("id, event_id, full_name, username, role, avatar_url, created_at")
         .eq("username", storedUsername)
         .limit(1);
 
@@ -383,6 +432,31 @@ export default function JudgeDashboardPage() {
 
       const judgeRow = judgeRows[0] as JudgeRow;
       setJudge(judgeRow);
+
+      try {
+        const lastSeenRaw =
+          typeof window !== "undefined"
+            ? window.localStorage.getItem(`judge_last_seen_message_${judgeRow.id}`)
+            : null;
+        const lastSeenId = lastSeenRaw ? Number.parseInt(lastSeenRaw, 10) : null;
+        const { data: messageRows } = await supabase
+          .from("judge_message")
+          .select("id, event_id, judge_id, title, body, created_at")
+          .eq("event_id", judgeRow.event_id)
+          .or(`judge_id.is.null,judge_id.eq.${judgeRow.id}`)
+          .order("created_at", { ascending: false })
+          .limit(5);
+        if (messageRows && Array.isArray(messageRows) && messageRows.length > 0) {
+          const unseen = (messageRows as JudgeMessageRow[]).filter((m) =>
+            lastSeenId ? m.id > lastSeenId : true,
+          );
+          if (unseen.length > 0) {
+            const ordered = [...unseen].sort((a, b) => a.id - b.id);
+            setMessageQueue(ordered);
+            setActiveMessage(ordered[0]);
+          }
+        }
+      } catch {}
 
       const totalQuery =
         supabase
@@ -432,7 +506,7 @@ export default function JudgeDashboardPage() {
           .eq("event_id", judgeRow.event_id),
         supabase
           .from("user_judge")
-          .select("id, event_id, full_name, username, role, created_at")
+          .select("id, event_id, full_name, username, role, avatar_url, created_at")
           .eq("event_id", judgeRow.event_id),
       ]);
 
@@ -466,7 +540,57 @@ export default function JudgeDashboardPage() {
       const event = eventRows[0] as EventRow;
       setEvent(event);
 
+      // Set up event status listener BEFORE checking if event is active
+      // This allows judges to see real-time updates when event is activated
+      channel = supabase
+        .channel("judge-changes", {
+          config: {
+            broadcast: { self: true },
+            presence: { key: `judge-${judgeRow.id}` },
+          },
+        })
+        .on(
+          "postgres_changes",
+          {
+            event: "UPDATE",
+            schema: "public",
+            table: "event",
+            filter: `id=eq.${judgeRow.event_id}`,
+          },
+          (payload) => {
+            console.log("[REALTIME] Event UPDATE received:", payload);
+            const newRow = payload.new as EventRow;
+            console.log("[REALTIME] Event is_active changed to:", newRow.is_active);
+            setEvent(newRow);
+          },
+        )
+        .on(
+          "broadcast",
+          { event: "deactivate-event" },
+          (payload) => {
+            console.log("[REALTIME] Event deactivation broadcast received:", payload);
+            if (payload.payload?.event_id === judgeRow.event_id) {
+              alert("The event has been deactivated and is no longer available.");
+              router.push("/judge");
+            }
+          },
+        )
+        .on(
+          "broadcast",
+          { event: "activate-event" },
+          (payload) => {
+            console.log("[REALTIME] Event activation broadcast received:", payload);
+            if (payload.payload?.event_id === judgeRow.event_id) {
+              console.log("[REALTIME] Event has been activated, UI will refresh automatically");
+            }
+          },
+        );
+
       if (!event.is_active) {
+        // Subscribe to event status listener even if event is inactive
+        channel.subscribe((status, err) => {
+          console.log('Event status channel subscription status:', status, err);
+        });
         setIsLoading(false);
         // We will handle the inactive event UI in the render method
         return;
@@ -584,21 +708,8 @@ export default function JudgeDashboardPage() {
         }
       }
 
-      channel = supabase
-        .channel("judge-changes")
-        .on(
-          "postgres_changes",
-          {
-            event: "UPDATE",
-            schema: "public",
-            table: "event",
-            filter: `id=eq.${judgeRow.event_id}`,
-          },
-          (payload) => {
-            const newRow = payload.new as EventRow;
-            setEvent(newRow);
-          },
-        )
+      // Add remaining listeners to the existing judge-changes channel  
+      channel
         .on(
           "postgres_changes",
           {
@@ -947,20 +1058,47 @@ export default function JudgeDashboardPage() {
             console.warn('[BROADCAST-LISTENER] Failed to refresh permissions after broadcast:', error);
           }
         })
-        .subscribe((status) => {
-          console.log('[BROADCAST-LISTENER] Broadcast channel status:', status);
+        .subscribe((status, err) => {
+          if (status === 'SUBSCRIBED') {
+            console.log('[BROADCAST-LISTENER] Broadcast channel connected');
+          } else if (status === 'CHANNEL_ERROR' || err) {
+            console.warn('[BROADCAST-LISTENER] Broadcast channel error:', err?.message || status);
+          } else if (status === 'CLOSED') {
+            console.log('[BROADCAST-LISTENER] Broadcast channel closed');
+          }
+        });
+
+      messageChannel = supabase
+        .channel(`judge-messages-${judgeRow.event_id}`)
+        .on(
+          "postgres_changes",
+          { event: "INSERT", schema: "public", table: "judge_message" },
+          (payload) => {
+            const newRow = payload.new as JudgeMessageRow;
+            if (newRow.event_id !== judgeRow.event_id) return;
+            if (newRow.judge_id !== null && newRow.judge_id !== judgeRow.id) return;
+            setMessageQueue((prev) => {
+              if (prev.some((m) => m.id === newRow.id)) return prev;
+              const next = [...prev, newRow].sort((a, b) => a.id - b.id);
+              return next;
+            });
+            setActiveMessage((prev) => prev ?? newRow);
+          },
+        )
+        .subscribe((status, err) => {
+          if (status === "SUBSCRIBED") {
+            console.log("[REALTIME] Judge messages channel connected");
+          } else if (status === "CHANNEL_ERROR" || err) {
+            console.warn("[REALTIME] Judge messages channel error:", err?.message || status);
+          }
         });
 
       setIsLoading(false);
     };
 
     loadJudgeData();
-    let permissionPollInterval: NodeJS.Timeout | null = null;
 
     return () => {
-      if (permissionPollInterval) {
-        clearInterval(permissionPollInterval);
-      }
       if (channel) {
         supabase.removeChannel(channel);
       }
@@ -969,6 +1107,9 @@ export default function JudgeDashboardPage() {
       }
       if (broadcastChannel) {
         supabase.removeChannel(broadcastChannel);
+      }
+      if (messageChannel) {
+        supabase.removeChannel(messageChannel);
       }
     };
   }, [router]);
@@ -989,7 +1130,7 @@ export default function JudgeDashboardPage() {
       return;
     }
 
-    const supabase = createClient(supabaseUrl, supabaseAnonKey);
+    const supabase = getSupabaseClient();
     let cancelled = false;
 
     const fetchLayout = () => {
@@ -1043,7 +1184,7 @@ export default function JudgeDashboardPage() {
       return;
     }
 
-    const supabase = createClient(supabaseUrl, supabaseAnonKey);
+    const supabase = getSupabaseClient();
     let cancelled = false;
 
     // Manual refresh function
@@ -1113,22 +1254,19 @@ export default function JudgeDashboardPage() {
       (participant) => participant.contest_id === activeContestId,
     );
 
-    if (activeDivisionFilterId !== "all") {
-      forContest = forContest.filter(
-        (participant) => participant.division_id === activeDivisionFilterId,
-      );
-    }
-
-    const parseNumber = (value: string) => {
-      const trimmed = value.trim();
-      const parsed = Number.parseInt(trimmed, 10);
-
-      if (Number.isNaN(parsed)) {
-        return Number.MAX_SAFE_INTEGER;
+    if (activeTab === "score") {
+      if (scoringDivisionFilterId !== "all") {
+        forContest = forContest.filter(
+          (participant) => participant.division_id === scoringDivisionFilterId,
+        );
       }
-
-      return parsed;
-    };
+    } else if (activeTab === "tabulation") {
+      if (rankingDivisionFilterId !== "all") {
+        forContest = forContest.filter(
+          (participant) => participant.division_id === rankingDivisionFilterId,
+        );
+      }
+    }
 
     return [...forContest].sort((a, b) => {
       const aNumber = parseNumber(a.contestant_number);
@@ -1140,7 +1278,7 @@ export default function JudgeDashboardPage() {
 
       return a.contestant_number.localeCompare(b.contestant_number);
     });
-  }, [participants, activeContestId, activeDivisionFilterId]);
+  }, [participants, activeContestId, scoringDivisionFilterId, rankingDivisionFilterId, activeTab]);
 
   const judgeTabulationRows = useMemo<JudgeTabulationRow[]>(() => {
     if (!activeContest || !judge) {
@@ -1730,7 +1868,7 @@ export default function JudgeDashboardPage() {
         return;
       }
 
-      const supabase = createClient(supabaseUrl, supabaseAnonKey);
+      const supabase = getSupabaseClient();
 
       // Delete existing total for this participant
       const { error: deleteError } = await supabase
@@ -1911,7 +2049,7 @@ export default function JudgeDashboardPage() {
     setModalError(null);
     setSuccess(null);
 
-    const supabase = createClient(supabaseUrl, supabaseAnonKey);
+    const supabase = getSupabaseClient();
 
     const existing = scores.find(
       (score) =>
@@ -1975,6 +2113,24 @@ export default function JudgeDashboardPage() {
       document.cookie = "judge_username=; path=/; max-age=0";
     }
     router.push("/");
+  };
+
+  const dismissActiveMessage = () => {
+    const current = activeMessage;
+    if (!current) return;
+    try {
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(
+          `judge_last_seen_message_${judge?.id ?? 0}`,
+          String(current.id),
+        );
+      }
+    } catch {}
+    setMessageQueue((prev) => {
+      const next = prev.filter((m) => m.id !== current.id);
+      setActiveMessage(next.length > 0 ? next[0] : null);
+      return next;
+    });
   };
 
   const safeParticipantIndex =
@@ -2358,40 +2514,136 @@ export default function JudgeDashboardPage() {
       : "Judge scoring dashboard";
 
   return (
-    <div className="flex min-h-screen flex-col bg-gradient-to-br from-[#E3F2EA] via-white to-[#E3F2EA] px-4 py-6 text-slate-900">
-      <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-4">
-        <header className="flex items-center justify-between gap-3">
-          <div>
-            <h1 className="text-2xl font-semibold tracking-tight text-[#1F4D3A]">
-              {headerTitle}
-            </h1>
-            <p className="text-sm text-slate-600">
-              Modern scoring workspace for judges of the tabulating system.
-            </p>
+    <div className="flex min-h-screen flex-col overflow-x-hidden bg-[#F1F5F9] text-slate-900">
+      <div className="pointer-events-none fixed inset-0 overflow-hidden opacity-20">
+        <div className="absolute -left-[10%] -top-[10%] h-[40%] w-[40%] rounded-full bg-[#1F4D3A1F] blur-[120px]" />
+        <div className="absolute -bottom-[10%] -right-[10%] h-[40%] w-[40%] rounded-full bg-[#1F4D3A1A] blur-[120px]" />
+      </div>
+
+      <header className="sticky top-0 z-30 border-b border-white/40 bg-white/70 backdrop-blur-xl">
+        <div className="mx-auto flex max-w-6xl items-center gap-4 px-6 py-4">
+          <div className="flex items-center gap-3">
+            <img
+              src="/favicon.svg"
+              alt="Tabulora"
+              className="h-10 w-10 transition-transform duration-300 hover:scale-105"
+            />
+            <div>
+              <div className="text-sm font-bold tracking-tight text-[#1F4D3A]">
+                Tabulora
+              </div>
+              <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-slate-400">
+                Judge Console
+              </div>
+            </div>
           </div>
-          <div className="flex items-center gap-3 text-sm">
+
+          <div className="hidden flex-1 justify-center px-8 sm:flex">
+            <nav className="hidden items-center gap-1 rounded-2xl bg-slate-100/50 p-1 text-[11px] font-bold sm:flex">
+              <button
+                type="button"
+                onClick={() => setActiveTab("score")}
+                className={
+                  "rounded-xl px-5 py-2 transition-all duration-300 " +
+                  (activeTab === "score"
+                    ? "bg-[#1F4D3A] text-white shadow-lg shadow-[#1F4D3A30]"
+                    : "text-slate-500 hover:bg-white hover:text-[#1F4D3A]")
+                }
+              >
+                Scoring
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab("tabulation")}
+                className={
+                  "rounded-xl px-5 py-2 transition-all duration-300 " +
+                  (activeTab === "tabulation"
+                    ? "bg-[#1F4D3A] text-white shadow-lg shadow-[#1F4D3A30]"
+                    : "text-slate-500 hover:bg-white hover:text-[#1F4D3A]")
+                }
+              >
+                Ranking
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab("monitoring")}
+                className={
+                  "rounded-xl px-5 py-2 transition-all duration-300 " +
+                  (activeTab === "monitoring"
+                    ? "bg-[#1F4D3A] text-white shadow-lg shadow-[#1F4D3A30]"
+                    : "text-slate-500 hover:bg-white hover:text-[#1F4D3A]")
+                }
+              >
+                Monitoring
+              </button>
+            </nav>
+          </div>
+
+          <div className="ml-auto flex items-center justify-end gap-4">
             {judge && (
-              <div className="flex flex-col items-end">
-                <span className="font-semibold text-[#1F4D3A]">
-                  {judge.full_name}
-                </span>
-                <span className="text-[11px] text-slate-500">
-                  Judge • @{judge.username}
+              <div className="hidden items-center gap-2 sm:flex">
+                <div className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+                <span className="text-[11px] font-bold text-slate-500">
+                  {judge.role === "chairman" ? "Chairman" : "Judge"} • @{judge.username}
                 </span>
               </div>
             )}
             <button
               type="button"
               onClick={handleSignOut}
-              className="rounded-full border border-[#1F4D3A33] px-3 py-1.5 text-[11px] font-medium text-[#1F4D3A] hover:bg-[#1F4D3A0A]"
+              className="group flex items-center gap-2 rounded-xl border-2 border-slate-100 bg-white px-4 py-2 text-[11px] font-bold text-slate-600 transition-all duration-300 hover:border-red-100 hover:bg-red-50 hover:text-red-500"
             >
-              Sign out
+              <span>Sign out</span>
+              <svg className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+              </svg>
             </button>
           </div>
-        </header>
+        </div>
+      </header>
 
-        <main className="flex flex-1 flex-col gap-4">
-          <div className="relative rounded-3xl border border-[#1F4D3A1F] bg-white/95 p-5 shadow-[0_18px_45px_rgba(0,0,0,0.05)]">
+      <main className="relative mx-auto flex w-full max-w-6xl flex-1 flex-col gap-8 px-6 py-10">
+        <div className="sm:hidden space-y-3">
+          <div>
+            <div className="text-[11px] font-bold uppercase tracking-[0.2em] text-slate-400">
+              {judge?.role === "chairman" ? "Chairman" : "Judge"} Dashboard
+            </div>
+            <h1 className="text-xl font-bold tracking-tight text-slate-800">
+              {headerTitle}
+            </h1>
+          </div>
+          <nav className="flex items-center gap-1 rounded-2xl bg-slate-100/50 p-1 text-[11px] font-bold">
+            <button
+              type="button"
+              onClick={() => setActiveTab("score")}
+              className={"flex-1 rounded-xl px-4 py-2 transition-all duration-300 " + (activeTab === "score"
+                ? "bg-[#1F4D3A] text-white shadow-lg shadow-[#1F4D3A30]"
+                : "text-slate-500 hover:bg-white hover:text-[#1F4D3A]")}
+            >
+              Scoring
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab("tabulation")}
+              className={"flex-1 rounded-xl px-4 py-2 transition-all duration-300 " + (activeTab === "tabulation"
+                ? "bg-[#1F4D3A] text-white shadow-lg shadow-[#1F4D3A30]"
+                : "text-slate-500 hover:bg-white hover:text-[#1F4D3A]")}
+            >
+              Ranking
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab("monitoring")}
+              className={"flex-1 rounded-xl px-4 py-2 transition-all duration-300 " + (activeTab === "monitoring"
+                ? "bg-[#1F4D3A] text-white shadow-lg shadow-[#1F4D3A30]"
+                : "text-slate-500 hover:bg-white hover:text-[#1F4D3A]")}
+            >
+              Monitoring
+            </button>
+          </nav>
+        </div>
+
+        <div className="rounded-[32px] border border-white/40 bg-white/80 p-8 shadow-[0_20px_50px_-12px_rgba(0,0,0,0.08)] backdrop-blur-2xl">
             <div className="mb-4 flex flex-wrap items-center justify-between gap-4">
               <div className="flex flex-wrap items-center gap-3 text-sm">
                 <div className="rounded-full bg-[#E3F2EA] px-4 py-2 text-xs font-medium text-[#1F4D3A]">
@@ -2418,14 +2670,14 @@ export default function JudgeDashboardPage() {
 
             {/* success message removed from scoring page per requirement */}
 
-            <div className="flex flex-col gap-5">
-              <div className="grid gap-3 text-xs md:grid-cols-2">
-                <div className="flex flex-col gap-1">
+            <div className="flex flex-col gap-6">
+              <div className="grid gap-6 md:grid-cols-2">
+                <div className="flex flex-col gap-2 md:max-w-xl">
                   <span className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
                     Contest
                   </span>
                   <select
-                    className="w-full rounded-full border border-[#E2E8F0] bg-white px-4 py-2.5 text-xs font-medium text-slate-800 outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                    className="w-full appearance-none rounded-2xl border border-slate-200 bg-slate-50/50 px-4 py-3 text-[13px] font-medium text-slate-700 outline-none transition-all focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/10"
                     value={activeContestId ?? ""}
                     onChange={(event) => {
                       const value = event.target.value;
@@ -2442,63 +2694,11 @@ export default function JudgeDashboardPage() {
                     ))}
                   </select>
                 </div>
-
-                
               </div>
 
-              <div className="flex items-center justify-between">
-                <div className="flex gap-2 rounded-full bg-[#E3F2EA] p-1 text-[11px] font-medium text-[#1F4D3A]">
-                  <button
-                    type="button"
-                    onClick={() => setActiveTab("score")}
-                    className={`rounded-full px-4 py-2.5 transition ${
-                      activeTab === "score"
-                        ? "bg-[#1F4D3A] text-white shadow-sm"
-                        : "hover:bg-[#1F4D3A0D]"
-                    }`}
-                  >
-                    Scoring
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setActiveTab("tabulation")}
-                    className={`rounded-full px-4 py-2.5 transition ${
-                      activeTab === "tabulation"
-                        ? "bg-[#1F4D3A] text-white shadow-sm"
-                        : "hover:bg-[#1F4D3A0D]"
-                    }`}
-                  >
-                    Ranking
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setActiveTab("monitoring")}
-                    className={`rounded-full px-4 py-2.5 transition ${
-                      activeTab === "monitoring"
-                        ? "bg-[#1F4D3A] text-white shadow-sm"
-                        : "hover:bg-[#1F4D3A0D]"
-                    }`}
-                  >
-                    Monitoring
-                  </button>
-                </div>
-              </div>
-
-              <div
-                className="w-full rounded-2xl border border-[#E2E8F0] bg-[#F8FAFC] p-6"
-                style={
-                  contestLayoutTheme?.workspaceBg
-                    ? {
-                        backgroundColor: hexWithOpacity(
-                          contestLayoutTheme.workspaceBg,
-                          (contestLayoutTheme.workspaceBgOpacity ?? 100) / 100,
-                        ),
-                      }
-                    : undefined
-                }
-              >
+              <div className="w-full rounded-[28px] border border-white/40 bg-white/80 p-6 shadow-[0_12px_30px_-12px_rgba(0,0,0,0.10)] backdrop-blur-xl">
                 {activeTab === "score" ? (
-                  !activeContest || activeContestParticipants.length === 0 ? (
+                  !activeContest ? (
                     <div className="flex h-full flex-col items-center justify-center gap-2 text-center text-sm text-slate-500">
                       <div className="rounded-full bg-white px-4 py-2 text-xs font-medium text-[#1F4D3A] shadow-sm">
                         Scoring workspace
@@ -2506,240 +2706,423 @@ export default function JudgeDashboardPage() {
                       <p>Select a contest above to begin scoring participants.</p>
                     </div>
                   ) : (
-                    <div className="space-y-8">
-                      {pageantGroups.map((group) => {
-                        const labelLower = group.groupLabel.toLowerCase();
-                        const baseContainerVariant =
-                          labelLower === "female"
-                            ? "border-rose-100 bg-gradient-to-b from-rose-50 via-white to-white"
-                            : labelLower === "male"
-                              ? "border-sky-100 bg-gradient-to-b from-sky-50 via-white to-white"
-                              : "border-slate-100 bg-white/60";
-
-                        const baseBadgeVariant =
-                          labelLower === "female"
-                            ? "bg-gradient-to-r from-rose-500 to-pink-500 text-white shadow-sm"
-                            : labelLower === "male"
-                              ? "bg-gradient-to-r from-sky-500 to-teal-500 text-white shadow-sm"
-                              : "bg-slate-100 text-slate-700";
-
-                        const femaleBg = contestLayoutTheme?.femaleGroupBg;
-                        const femaleBadgeBg = contestLayoutTheme?.femaleBadgeBg;
-                        const maleBg = contestLayoutTheme?.maleGroupBg;
-                        const maleBadgeBg = contestLayoutTheme?.maleBadgeBg;
-                        const cardBg = contestLayoutTheme?.cardBg;
-                        const numberBadgeBg = contestLayoutTheme?.numberBadgeBg;
-                        const numberTextColor = contestLayoutTheme?.numberTextColor;
-                        const numberFontSize = contestLayoutTheme?.numberFontSize;
-                        const numberFontFamily =
-                          contestLayoutTheme?.numberFontFamily ?? "system";
-                        const nameTextColor = contestLayoutTheme?.nameTextColor;
-                        const nameFontSize = contestLayoutTheme?.nameFontSize;
-                        const nameFontFamily =
-                          contestLayoutTheme?.nameFontFamily ?? "system";
-
-                        const containerStyle =
-                          labelLower === "female" && femaleBg
-                            ? {
-                                backgroundColor: hexWithOpacity(
-                                  femaleBg,
-                                  (contestLayoutTheme?.femaleGroupBgOpacity ?? 100) /
-                                    100,
-                                ),
-                                backgroundImage: "none",
+                    <div className="space-y-4">
+                      <div className="rounded-3xl border border-slate-100 bg-slate-50/50 p-6">
+                        <div className="grid gap-6 md:grid-cols-2">
+                          <div className="flex flex-col gap-2 md:max-w-xl">
+                          <span className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
+                            Division filter
+                          </span>
+                          <select
+                            className="w-full appearance-none rounded-2xl border border-slate-200 bg-white px-4 py-3 text-[13px] font-medium text-slate-700 outline-none transition-all focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/10"
+                            value={
+                              scoringDivisionFilterId === "all"
+                                ? "all"
+                                : String(scoringDivisionFilterId)
+                            }
+                            onChange={(event) => {
+                              const value = event.target.value;
+                              if (value === "all") {
+                                setScoringDivisionFilterId("all");
+                              } else {
+                                setScoringDivisionFilterId(
+                                  Number.parseInt(value, 10),
+                                );
                               }
-                            : labelLower === "male" && maleBg
-                              ? {
-                                  backgroundColor: hexWithOpacity(
-                                    maleBg,
-                                    (contestLayoutTheme?.maleGroupBgOpacity ?? 100) /
-                                      100,
-                                  ),
-                                  backgroundImage: "none",
-                                }
-                              : undefined;
-
-                        const badgeStyle =
-                          labelLower === "female" && femaleBadgeBg
-                            ? {
-                                backgroundColor: hexWithOpacity(
-                                  femaleBadgeBg,
-                                  (contestLayoutTheme?.femaleBadgeBgOpacity ?? 100) /
-                                    100,
-                                ),
-                                backgroundImage: "none",
-                              }
-                            : labelLower === "male" && maleBadgeBg
-                              ? {
-                                  backgroundColor: hexWithOpacity(
-                                    maleBadgeBg,
-                                    (contestLayoutTheme?.maleBadgeBgOpacity ?? 100) /
-                                      100,
-                                  ),
-                                  backgroundImage: "none",
-                                }
-                              : undefined;
-
-                        return (
-                          <div
-                            key={group.groupLabel || "all"}
-                            className={`space-y-4 rounded-2xl border p-4 shadow-[0_10px_30px_rgba(15,23,42,0.04)] ${baseContainerVariant}`}
-                            style={containerStyle}
+                            }}
+                            disabled={!activeContest}
                           >
-                            {group.groupLabel && (
-                              <div className="flex items-center justify-center">
+                            <option value="all">All divisions</option>
+                            {categoriesForActiveEvent.map((category) => (
+                              <option key={category.id} value={category.id}>
+                                {category.name}
+                              </option>
+                            ))}
+                          </select>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div
+                        className="w-full rounded-2xl border border-[#E2E8F0] bg-[#F8FAFC] p-6"
+                        style={
+                          contestLayoutTheme?.workspaceBg
+                            ? {
+                                backgroundColor: hexWithOpacity(
+                                  contestLayoutTheme.workspaceBg,
+                                  (contestLayoutTheme.workspaceBgOpacity ?? 100) /
+                                    100,
+                                ),
+                              }
+                            : undefined
+                        }
+                      >
+                        {activeContestParticipants.length === 0 ? (
+                          <div className="text-sm text-slate-500">
+                            No participants found for this contest.
+                          </div>
+                        ) : (contestLayoutTemplateKey as ContestLayoutTemplateKey) === "pageant" ? (
+                          <div className="space-y-8">
+                            {pageantGroups.map((group) => {
+                              const labelLower = group.groupLabel.toLowerCase();
+
+                              const baseContainerVariant =
+                                labelLower === "female"
+                                  ? "border-rose-100 bg-rose-50/60"
+                                  : labelLower === "male"
+                                    ? "border-sky-100 bg-sky-50/60"
+                                    : "border-slate-100 bg-white/60";
+
+                              const baseBadgeVariant =
+                                labelLower === "female"
+                                  ? "bg-gradient-to-r from-rose-500 to-pink-500 text-white shadow-sm"
+                                  : labelLower === "male"
+                                    ? "bg-gradient-to-r from-sky-500 to-teal-500 text-white shadow-sm"
+                                    : "bg-slate-100 text-slate-700";
+
+                              const femaleBg = contestLayoutTheme?.femaleGroupBg;
+                              const femaleBadgeBg = contestLayoutTheme?.femaleBadgeBg;
+                              const maleBg = contestLayoutTheme?.maleGroupBg;
+                              const maleBadgeBg = contestLayoutTheme?.maleBadgeBg;
+
+                              const containerStyle =
+                                labelLower === "female" && femaleBg
+                                  ? {
+                                      backgroundColor: hexWithOpacity(
+                                        femaleBg,
+                                        (contestLayoutTheme?.femaleGroupBgOpacity ??
+                                          100) / 100,
+                                      ),
+                                    }
+                                  : labelLower === "male" && maleBg
+                                    ? {
+                                        backgroundColor: hexWithOpacity(
+                                          maleBg,
+                                          (contestLayoutTheme?.maleGroupBgOpacity ??
+                                            100) / 100,
+                                        ),
+                                      }
+                                    : undefined;
+
+                              const badgeStyle =
+                                labelLower === "female" && femaleBadgeBg
+                                  ? {
+                                      backgroundColor: hexWithOpacity(
+                                        femaleBadgeBg,
+                                        (contestLayoutTheme?.femaleBadgeBgOpacity ??
+                                          100) / 100,
+                                      ),
+                                      backgroundImage: "none",
+                                    }
+                                  : labelLower === "male" && maleBadgeBg
+                                    ? {
+                                        backgroundColor: hexWithOpacity(
+                                          maleBadgeBg,
+                                          (contestLayoutTheme?.maleBadgeBgOpacity ??
+                                            100) / 100,
+                                        ),
+                                        backgroundImage: "none",
+                                      }
+                                    : undefined;
+
+                              return (
                                 <div
-                                  className={`inline-flex items-center gap-2 rounded-full px-4 py-1 text-xs font-semibold tracking-tight ${baseBadgeVariant}`}
-                                  style={badgeStyle}
+                                  key={group.groupLabel || "all"}
+                                  className={`space-y-3 rounded-2xl border p-3 shadow-[0_10px_30px_rgba(15,23,42,0.04)] ${baseContainerVariant}`}
+                                  style={containerStyle}
                                 >
-                                  <span className="h-1.5 w-1.5 rounded-full bg-white/80" />
-                                  <span>{group.groupLabel}</span>
+                                  {group.groupLabel && (
+                                    <div className="flex items-center justify-center">
+                                      <div
+                                        className={`inline-flex items-center gap-2 rounded-full px-4 py-1 text-[10px] font-semibold ${baseBadgeVariant}`}
+                                        style={badgeStyle}
+                                      >
+                                        <span className="h-1.5 w-1.5 rounded-full bg-white/80" />
+                                        <span>{group.groupLabel}</span>
+                                      </div>
+                                    </div>
+                                  )}
+                                  <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
+                                    {group.items.map(({ participant, index }) => {
+                                      return (
+                                        <button
+                                          key={participant.id}
+                                          type="button"
+                                          onClick={() => {
+                                            setCurrentParticipantIndex(index);
+                                            setIsScoringModalOpen(true);
+                                          }}
+                                          className="group flex flex-col items-center gap-3 rounded-2xl border border-[#E2E8F0] bg-white/95 p-3 text-[11px] text-slate-700 shadow-[0_8px_22px_rgba(15,23,42,0.06)] transition hover:-translate-y-1 hover:border-[#1F4D3A] hover:shadow-[0_18px_45px_rgba(15,23,42,0.18)]"
+                                          style={
+                                            contestLayoutTheme?.cardBg
+                                              ? {
+                                                  backgroundColor: hexWithOpacity(
+                                                    contestLayoutTheme.cardBg,
+                                                    (contestLayoutTheme.cardBgOpacity ?? 100) /
+                                                      100,
+                                                  ),
+                                                }
+                                              : undefined
+                                          }
+                                        >
+                                          <div
+                                            className="relative flex aspect-square w-full items-center justify-center overflow-hidden rounded-xl bg-gradient-to-br from-[#E3F2EA] via-white to-[#FDE68A] text-lg font-semibold text-[#1F4D3A]"
+                                            style={
+                                              contestLayoutTheme?.cardBg
+                                                ? {
+                                                    backgroundColor: hexWithOpacity(
+                                                      contestLayoutTheme.cardBg,
+                                                      (contestLayoutTheme.cardBgOpacity ?? 100) /
+                                                        100,
+                                                    ),
+                                                    backgroundImage: "none",
+                                                  }
+                                                : undefined
+                                            }
+                                          >
+                                            {(participant.card_url || participant.avatar_url) ? (
+                                              <img
+                                                src={participant.card_url || participant.avatar_url || ""}
+                                                alt={participant.full_name}
+                                                className="h-full w-full object-cover transition duration-200 group-hover:scale-105"
+                                                style={imageTransformFromUrl(participant.card_url || participant.avatar_url || null)}
+                                              />
+                                            ) : (
+                                              participantInitials(participant.full_name)
+                                            )}
+                                            <div
+                                              className="pointer-events-none absolute left-2 top-2 inline-flex items-center rounded-full bg-black/40 px-2 py-0.5 text-[10px] font-medium text-white backdrop-blur"
+                                              style={{
+                                                ...(contestLayoutTheme?.numberBadgeBg
+                                                  ? {
+                                                      backgroundColor: hexWithOpacity(
+                                                        contestLayoutTheme.numberBadgeBg,
+                                                        (contestLayoutTheme.numberBadgeBgOpacity ??
+                                                          100) /
+                                                          100,
+                                                      ),
+                                                    }
+                                                  : {}),
+                                                ...(contestLayoutTheme?.numberTextColor
+                                                  ? {
+                                                      color: hexWithOpacity(
+                                                        contestLayoutTheme.numberTextColor,
+                                                        (contestLayoutTheme.numberTextColorOpacity ??
+                                                          100) /
+                                                          100,
+                                                      ),
+                                                    }
+                                                  : {}),
+                                                ...(contestLayoutTheme?.numberFontSize
+                                                  ? {
+                                                      fontSize: `${contestLayoutTheme.numberFontSize}px`,
+                                                    }
+                                                  : {}),
+                                                ...(contestLayoutTheme?.numberFontFamily
+                                                  ? {
+                                                      fontFamily: resolveThemeFontFamily(
+                                                        contestLayoutTheme.numberFontFamily,
+                                                      ),
+                                                    }
+                                                  : {}),
+                                              }}
+                                            >
+                                              #{participant.contestant_number}
+                                            </div>
+                                          </div>
+                                          <div className="w-full text-center">
+                                            <div
+                                              className="truncate text-[11px] font-semibold tracking-tight text-slate-800"
+                                              style={{
+                                                ...(contestLayoutTheme?.nameTextColor
+                                                  ? {
+                                                      color: hexWithOpacity(
+                                                        contestLayoutTheme.nameTextColor,
+                                                        (contestLayoutTheme.nameTextColorOpacity ??
+                                                          100) /
+                                                          100,
+                                                      ),
+                                                    }
+                                                  : {}),
+                                                ...(contestLayoutTheme?.nameFontSize
+                                                  ? {
+                                                      fontSize: `${contestLayoutTheme.nameFontSize}px`,
+                                                    }
+                                                  : {}),
+                                                ...(contestLayoutTheme?.nameFontFamily
+                                                  ? {
+                                                      fontFamily: resolveThemeFontFamily(
+                                                        contestLayoutTheme.nameFontFamily,
+                                                      ),
+                                                    }
+                                                  : {}),
+                                              }}
+                                            >
+                                              {participant.full_name}
+                                            </div>
+                                          </div>
+                                        </button>
+                                      );
+                                    })}
+                                  </div>
                                 </div>
-                              </div>
-                            )}
-                            <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
-                              {group.items.map(({ participant, index }) => (
-                                <button
-                                  key={participant.id}
-                                  type="button"
-                                  onClick={() => {
-                                    setCurrentParticipantIndex(index);
-                                    setIsScoringModalOpen(true);
-                                  }}
-                                  className="group flex flex-col items-center gap-3 rounded-2xl border border-[#E2E8F0] bg-white/95 p-3 text-[11px] text-slate-700 shadow-[0_8px_22px_rgba(15,23,42,0.06)] transition hover:-translate-y-1 hover:border-[#1F4D3A] hover:shadow-[0_18px_45px_rgba(15,23,42,0.18)]"
+                              );
+                            })}
+                          </div>
+                        ) : (
+                          <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
+                            {activeContestParticipants.map((participant, index) => (
+                              <button
+                                key={participant.id}
+                                type="button"
+                                onClick={() => {
+                                  setCurrentParticipantIndex(index);
+                                  setIsScoringModalOpen(true);
+                                }}
+                                className="group flex flex-col items-center gap-3 rounded-2xl border border-[#E2E8F0] bg-white/95 p-3 text-[11px] text-slate-700 shadow-[0_8px_22px_rgba(15,23,42,0.06)] transition hover:-translate-y-1 hover:border-[#1F4D3A] hover:shadow-[0_18px_45px_rgba(15,23,42,0.18)]"
+                                style={
+                                  contestLayoutTheme?.cardBg
+                                    ? {
+                                        backgroundColor: hexWithOpacity(
+                                          contestLayoutTheme.cardBg,
+                                          (contestLayoutTheme.cardBgOpacity ?? 100) /
+                                            100,
+                                        ),
+                                      }
+                                    : undefined
+                                }
+                              >
+                                <div
+                                  className="relative flex aspect-square w-full items-center justify-center overflow-hidden rounded-xl bg-gradient-to-br from-[#E3F2EA] via-white to-[#FDE68A] text-lg font-semibold text-[#1F4D3A]"
                                   style={
-                                    cardBg
+                                    contestLayoutTheme?.cardBg
                                       ? {
                                           backgroundColor: hexWithOpacity(
-                                            cardBg,
-                                            (contestLayoutTheme?.cardBgOpacity ??
-                                              100) / 100,
+                                            contestLayoutTheme.cardBg,
+                                            (contestLayoutTheme.cardBgOpacity ?? 100) /
+                                              100,
                                           ),
+                                          backgroundImage: "none",
                                         }
                                       : undefined
                                   }
                                 >
+                                  {(participant.card_url || participant.avatar_url) ? (
+                                    <img
+                                      src={participant.card_url || participant.avatar_url || ""}
+                                      alt={participant.full_name}
+                                      className="h-full w-full object-cover transition duration-200 group-hover:scale-105"
+                                      style={imageTransformFromUrl(participant.card_url || participant.avatar_url || null)}
+                                    />
+                                  ) : (
+                                    participantInitials(participant.full_name)
+                                  )}
                                   <div
-                                    className="relative flex aspect-square w-full items-center justify-center overflow-hidden rounded-xl bg-gradient-to-br from-[#E3F2EA] via-white to-[#FDE68A] text-lg font-semibold text-[#1F4D3A]"
-                                    style={
-                                      cardBg
+                                    className="pointer-events-none absolute left-2 top-2 inline-flex items-center rounded-full bg-black/40 px-2 py-0.5 text-[10px] font-medium text-white backdrop-blur"
+                                    style={{
+                                      ...(contestLayoutTheme?.numberBadgeBg
                                         ? {
                                             backgroundColor: hexWithOpacity(
-                                              cardBg,
-                                              (contestLayoutTheme?.cardBgOpacity ??
-                                                100) / 100,
+                                              contestLayoutTheme.numberBadgeBg,
+                                              (contestLayoutTheme.numberBadgeBgOpacity ??
+                                                100) /
+                                                100,
                                             ),
-                                            backgroundImage: "none",
                                           }
-                                        : undefined
-                                    }
+                                        : {}),
+                                      ...(contestLayoutTheme?.numberTextColor
+                                        ? {
+                                            color: hexWithOpacity(
+                                              contestLayoutTheme.numberTextColor,
+                                              (contestLayoutTheme.numberTextColorOpacity ??
+                                                100) /
+                                                100,
+                                            ),
+                                          }
+                                        : {}),
+                                      ...(contestLayoutTheme?.numberFontSize
+                                        ? {
+                                            fontSize: `${contestLayoutTheme.numberFontSize}px`,
+                                          }
+                                        : {}),
+                                      ...(contestLayoutTheme?.numberFontFamily
+                                        ? {
+                                            fontFamily: resolveThemeFontFamily(
+                                              contestLayoutTheme.numberFontFamily,
+                                            ),
+                                          }
+                                        : {}),
+                                    }}
                                   >
-                                    {(participant.card_url || participant.avatar_url) ? (
-                                      <img
-                                        src={participant.card_url || participant.avatar_url || ""}
-                                        alt={participant.full_name}
-                                        className="h-full w-full object-cover transition duration-200 group-hover:scale-105"
-                                        style={imageTransformFromUrl(participant.card_url || participant.avatar_url || null)}
-                                      />
-                                    ) : (
-                                      participantInitials(participant.full_name)
-                                    )}
-                                    <div
-                                      className="pointer-events-none absolute left-2 top-2 inline-flex items-center rounded-full bg-black/40 px-2 py-0.5 text-[10px] font-medium text-white backdrop-blur"
-                                      style={{
-                                        backgroundColor: numberBadgeBg
-                                          ? hexWithOpacity(
-                                              numberBadgeBg,
-                                              (contestLayoutTheme
-                                                ?.numberBadgeBgOpacity ?? 100) /
-                                                100,
-                                            )
-                                          : undefined,
-                                        color: numberTextColor
-                                          ? hexWithOpacity(
-                                              numberTextColor,
-                                              (contestLayoutTheme
-                                                ?.numberTextColorOpacity ?? 100) /
-                                                100,
-                                            )
-                                          : undefined,
-                                        fontSize: numberFontSize
-                                          ? `${numberFontSize}px`
-                                          : undefined,
-                                        fontFamily:
-                                          numberFontFamily === "sans"
-                                            ? "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
-                                            : numberFontFamily === "serif"
-                                              ? "Georgia, 'Times New Roman', serif"
-                                              : numberFontFamily === "mono"
-                                                ? "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace"
-                                                : undefined,
-                                      }}
-                                    >
-                                      #{participant.contestant_number}
-                                    </div>
+                                    #{participant.contestant_number}
                                   </div>
-                                  <div className="w-full text-center">
-                                    <div
-                                      className="truncate text-[11px] font-semibold tracking-tight text-slate-800"
-                                      style={{
-                                        color: nameTextColor
-                                          ? hexWithOpacity(
-                                              nameTextColor,
-                                              (contestLayoutTheme
-                                                ?.nameTextColorOpacity ?? 100) /
+                                </div>
+                                <div className="w-full text-center">
+                                  <div
+                                    className="truncate text-[11px] font-semibold tracking-tight text-slate-800"
+                                    style={{
+                                      ...(contestLayoutTheme?.nameTextColor
+                                        ? {
+                                            color: hexWithOpacity(
+                                              contestLayoutTheme.nameTextColor,
+                                              (contestLayoutTheme.nameTextColorOpacity ??
+                                                100) /
                                                 100,
-                                            )
-                                          : undefined,
-                                        fontSize: nameFontSize
-                                          ? `${nameFontSize}px`
-                                          : undefined,
-                                        fontFamily:
-                                          nameFontFamily === "sans"
-                                            ? "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
-                                            : nameFontFamily === "serif"
-                                              ? "Georgia, 'Times New Roman', serif"
-                                              : nameFontFamily === "mono"
-                                                ? "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace"
-                                                : undefined,
-                                      }}
-                                    >
-                                      {participant.full_name}
-                                    </div>
-                                    <div className="text-[10px] text-slate-500">
-                                      {participantTeamName(participant)}
-                                    </div>
+                                            ),
+                                          }
+                                        : {}),
+                                      ...(contestLayoutTheme?.nameFontSize
+                                        ? {
+                                            fontSize: `${contestLayoutTheme.nameFontSize}px`,
+                                          }
+                                        : {}),
+                                      ...(contestLayoutTheme?.nameFontFamily
+                                        ? {
+                                            fontFamily: resolveThemeFontFamily(
+                                              contestLayoutTheme.nameFontFamily,
+                                            ),
+                                          }
+                                        : {}),
+                                    }}
+                                  >
+                                    {participant.full_name}
                                   </div>
-                                </button>
-                              ))}
-                            </div>
+                                  <div className="truncate text-[10px] text-slate-500">
+                                    {(contestLayoutTemplateKey as ContestLayoutTemplateKey) === "pageant"
+                                      ? participant.gender ?? ""
+                                      : categories.find(
+                                          (c) => c.id === participant.division_id,
+                                        )?.name ?? ""}
+                                  </div>
+                                </div>
+                              </button>
+                            ))}
                           </div>
-                        );
-                      })}
+                        )}
+                      </div>
                     </div>
                   )
                 ) : activeTab === "tabulation" ? (
-                  <div className="space-y-3">
-                    <div className="grid gap-3 text-xs md:grid-cols-2">
-                      <div className="flex flex-col gap-1">
+                  <div className="space-y-4">
+                    <div className="rounded-3xl border border-slate-100 bg-slate-50/50 p-6">
+                      <div className="grid gap-6 md:grid-cols-2">
+                      <div className="flex flex-col gap-2 md:max-w-xl">
                         <span className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
                           Division filter
                         </span>
                         <select
-                          className="w-full rounded-full border border-[#E2E8F0] bg-white px-4 py-2.5 text-xs font-medium text-slate-800 outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                          className="w-full appearance-none rounded-2xl border border-slate-200 bg-white px-4 py-3 text-[13px] font-medium text-slate-700 outline-none transition-all focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/10"
                           value={
-                            activeDivisionFilterId === "all"
+                            rankingDivisionFilterId === "all"
                               ? "all"
-                              : String(activeDivisionFilterId)
+                              : String(rankingDivisionFilterId)
                           }
                           onChange={(event) => {
                             const value = event.target.value;
                             if (value === "all") {
-                              setActiveDivisionFilterId("all");
+                              setRankingDivisionFilterId("all");
                             } else {
-                              setActiveDivisionFilterId(
-                                Number.parseInt(value, 10),
-                              );
+                              setRankingDivisionFilterId(Number.parseInt(value, 10));
                             }
                           }}
                           disabled={!activeContest}
@@ -2752,36 +3135,49 @@ export default function JudgeDashboardPage() {
                           ))}
                         </select>
                       </div>
-                      <div className="flex flex-col gap-1">
+                      <div className="flex flex-col gap-2 md:max-w-xl">
                         <span className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
                           Award
                         </span>
                         <select
-                          className="w-full rounded-full border border-[#E2E8F0] bg-white px-4 py-2.5 text-xs font-medium text-slate-800 outline-none transition focus:border-[#1F4D3A] focus:ring-2 focus:ring-[#1F4D3A26]"
+                          className="w-full appearance-none rounded-2xl border border-slate-200 bg-white px-4 py-3 text-[13px] font-medium text-slate-700 outline-none transition-all focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/10"
                           value={String(activeAwardFilterId)}
                           onChange={(event) => {
                             const value = event.target.value;
-                            if (value) {
+                            if (value === "all") {
+                              setActiveAwardFilterId("all");
+                            } else {
                               setActiveAwardFilterId(Number.parseInt(value, 10));
                             }
                           }}
+                          disabled={!activeContest}
                         >
-                          {awards
-                            .filter(
-                              (award) =>
-                                event && award.event_id === event.id && award.is_active,
-                            )
-                            .map((award) => (
-                              <option key={award.id} value={award.id}>
-                                {award.name}
-                              </option>
-                            ))}
+                          <option value="all">Select an award</option>
+                          {awardsForActiveContest.map((award) => (
+                            <option key={award.id} value={award.id}>
+                              {award.name}
+                            </option>
+                          ))}
                         </select>
                       </div>
                     </div>
+                    </div>
+
                     {!activeContest ? (
                       <div className="text-sm text-slate-500">
                         Select a contest above to view ranking.
+                      </div>
+                    ) : judgeTabulationRows.length === 0 ? (
+                      <div className="text-sm text-slate-500">
+                        No totals available yet for this contest.
+                      </div>
+                    ) : activeAwardFilterId === "all" ? (
+                      <div className="text-sm text-slate-500">
+                        Select an award above to view winners.
+                      </div>
+                    ) : awardRankingRows.length === 0 ? (
+                      <div className="text-sm text-slate-500">
+                        No award results available yet.
                       </div>
                     ) : (
                       <div className="overflow-hidden rounded-2xl border border-[#E2E8F0] bg-white">
@@ -2790,63 +3186,39 @@ export default function JudgeDashboardPage() {
                             <tr>
                               <th className="px-4 py-3 font-medium">College/University</th>
                               <th className="px-4 py-3 font-medium">Contestant</th>
-                              <th className="px-4 py-3 text-center font-medium" colSpan={2}>
-                                Your scores
-                              </th>
-                              <th className="px-4 py-3 text-right font-medium">Rank total</th>
-                            </tr>
-                            <tr className="bg-[#F5F7FF] text-[10px] font-semibold uppercase tracking-wide text-[#1F4D3A]">
-                              <th className="px-4 py-2"></th>
-                              <th className="px-4 py-2"></th>
-                              <th className="px-4 py-2 text-center">Score</th>
-                              <th className="px-4 py-2 text-center">Rank</th>
-                              <th className="px-4 py-2"></th>
+                              <th className="px-4 py-3 text-right font-medium">Score</th>
+                              <th className="px-4 py-3 text-right font-medium">Rank</th>
                             </tr>
                           </thead>
                           <tbody>
-                            {(() => {
-                              const ordered = [...activeContestParticipants].sort((a, b) => {
-                                const ar = averageRankByParticipant.get(a.id);
-                                const br = averageRankByParticipant.get(b.id);
-                                if (ar != null && br != null && ar !== br) {
-                                  return ar - br; // lowest average first
-                                }
-                                const at = currentJudgeTotals.get(a.id);
-                                const bt = currentJudgeTotals.get(b.id);
-                                if (at !== undefined && bt !== undefined && at !== bt) {
-                                  return bt - at; // higher total first as tie-breaker
-                                }
-                                return a.contestant_number.localeCompare(b.contestant_number);
-                              });
-                              return ordered.map((p) => {
-                              const division = categories.find((c) => c.id === p.division_id);
-                              const college = division?.name ?? "";
-                              const total = currentJudgeTotals.get(p.id);
-                              const rank = currentJudgeRankByParticipant.get(p.id) ?? null;
-                              const avg = averageRankByParticipant.get(p.id);
-                              return (
-                                <tr key={p.id} className="border-t border-[#E2E8F0] hover:bg-[#F8FAFC]">
-                                  <td className="px-4 py-3 align-middle text-sm text-slate-700">{college}</td>
+                            {awardRankingRows
+                              .filter((r) => r.criteriaTotal !== null)
+                              .map((r) => (
+                                <tr
+                                  key={r.row.participant.id}
+                                  className="border-t border-[#E2E8F0] hover:bg-[#F8FAFC]"
+                                >
+                                  <td className="px-4 py-3 align-middle text-sm text-slate-700">
+                                    {r.row.teamName || "—"}
+                                  </td>
                                   <td className="px-4 py-3 align-middle">
                                     <div className="text-sm font-semibold text-slate-800">
-                                      {p.full_name}
+                                      {r.row.participant.full_name}
                                     </div>
                                     <div className="text-xs text-slate-500">
-                                      Contestant #{p.contestant_number}
+                                      Contestant #{r.row.participant.contestant_number}
                                     </div>
                                   </td>
-                                  <td className="px-4 py-3 align-middle text-center text-sm text-slate-700">
-                                    {total !== undefined ? total.toFixed(2) : "—"}
-                                  </td>
-                                  <td className="px-4 py-3 align-middle text-center text-sm font-semibold text-[#1F4D3A]">
-                                    {rank ?? "—"}
+                                  <td className="px-4 py-3 align-middle text-right text-sm text-slate-700">
+                                    {typeof r.criteriaTotal === "number"
+                                      ? r.criteriaTotal.toFixed(2)
+                                      : "—"}
                                   </td>
                                   <td className="px-4 py-3 align-middle text-right text-sm font-semibold text-[#1F4D3A]">
-                                    {typeof avg === "number" ? avg.toFixed(2) : "—"}
+                                    {r.rank ?? "—"}
                                   </td>
                                 </tr>
-                              );});
-                            })()}
+                              ))}
                           </tbody>
                         </table>
                       </div>
@@ -2859,13 +3231,13 @@ export default function JudgeDashboardPage() {
                         Select a contest above to view monitoring.
                       </div>
                     ) : (
-                      <div className="rounded-2xl border border-[#E2E8F0] bg-white p-4">
-                        <div className="mb-3 flex items-center justify-between">
+                      <div className="rounded-[28px] border border-slate-100 bg-white/70 p-6 shadow-[0_12px_30px_-12px_rgba(0,0,0,0.10)] backdrop-blur-xl">
+                        <div className="mb-5 flex items-start justify-between gap-4">
                           <div className="space-y-0.5">
-                            <div className="text-[11px] font-medium text-slate-600">
+                            <div className="text-[13px] font-bold text-slate-800">
                               Your score completion
                             </div>
-                            <div className="text-[10px] text-slate-400">
+                            <div className="text-[11px] font-medium text-slate-500">
                               Expected entries = participants × criteria for this contest.
                             </div>
                           </div>
@@ -2935,7 +3307,73 @@ export default function JudgeDashboardPage() {
                 </div>
             </div>
           </div>
-        </main>
+      </main>
+
+        {activeMessage && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 backdrop-blur-sm">
+            <div className="w-full max-w-2xl overflow-hidden rounded-[28px] border border-[#E2E8F0] bg-white shadow-[0_35px_90px_rgba(15,23,42,0.35)]">
+              <div className="bg-gradient-to-r from-[#1F4D3A] via-[#24624A] to-[#1F4D3A] px-7 py-5 text-white">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="flex items-start gap-3">
+                    <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-white/10 ring-1 ring-white/20">
+                      <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 8h10M7 12h6m-1 10l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v10a2 2 0 01-2 2h-3l-4 4z" />
+                      </svg>
+                    </div>
+                    <div className="space-y-1">
+                      <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-white/80">
+                        Message
+                      </div>
+                      <div className="text-lg font-semibold leading-tight">
+                        {activeMessage.title?.trim()
+                          ? activeMessage.title
+                          : "Announcement"}
+                      </div>
+                      <div className="text-[11px] text-white/75">
+                        {(() => {
+                          const d = new Date(activeMessage.created_at);
+                          return Number.isNaN(d.getTime())
+                            ? ""
+                            : `Sent ${d.toLocaleString()}`;
+                        })()}
+                      </div>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={dismissActiveMessage}
+                    className="rounded-full bg-white/10 px-3 py-1.5 text-[11px] font-semibold text-white ring-1 ring-white/20 hover:bg-white/15"
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
+
+              <div className="px-7 py-6">
+                <div className="rounded-2xl border border-[#E2E8F0] bg-[#F8FAFC] p-5">
+                  <div className="whitespace-pre-wrap text-[14px] leading-relaxed text-slate-700">
+                    {activeMessage.body}
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between gap-4 border-t border-[#E2E8F0] bg-white px-7 py-4">
+                <div className="text-[11px] font-medium text-slate-500">
+                  {messageQueue.length > 1
+                    ? `Message 1 of ${messageQueue.length}`
+                    : "Message 1 of 1"}
+                </div>
+                <button
+                  type="button"
+                  onClick={dismissActiveMessage}
+                  className="rounded-full bg-[#1F4D3A] px-5 py-2.5 text-[12px] font-semibold text-white shadow-sm hover:bg-[#163528]"
+                >
+                  {messageQueue.length > 1 ? "Next" : "OK"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Scoring Modal */}
         {isScoringModalOpen && activeContest && currentParticipant && (
@@ -3461,7 +3899,7 @@ export default function JudgeDashboardPage() {
               </div>
             </div>
           </div>
-          </div>
+        </div>
         )}
 
         {isGalleryModalOpen && currentParticipant && (() => {
@@ -3520,7 +3958,6 @@ export default function JudgeDashboardPage() {
             </div>
           );
         })()}
-      </div>
     </div>
   );
 }
