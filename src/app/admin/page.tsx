@@ -747,6 +747,22 @@ type JudgeAssignmentRow = {
   contest_id: number;
 };
 
+type JudgeMessageRow = {
+  id: number;
+  event_id: number;
+  judge_id: number | null;
+  title: string | null;
+  body: string;
+  is_visible?: boolean | null;
+  created_at: string;
+  updated_at?: string | null;
+};
+
+type PostgrestResult = {
+  data: unknown;
+  error: { message?: string } | null;
+};
+
 type TabulatorRow = {
   id: number;
   event_id: number;
@@ -767,6 +783,10 @@ export default function AdminDashboard() {
   const [participantTab, setParticipantTab] =
     useState<ParticipantSubTab>("category");
   const [monitorTab, setMonitorTab] = useState<MonitorSubTab>("permissions");
+  const [isJudgeMessageVisibilityAvailable, setIsJudgeMessageVisibilityAvailable] =
+    useState(true);
+  const [isJudgeMessageUpdatedAtAvailable, setIsJudgeMessageUpdatedAtAvailable] =
+    useState(true);
   const [monitorMessageRecipientJudgeId, setMonitorMessageRecipientJudgeId] =
     useState<number | null>(null);
   const [monitorMessageTitle, setMonitorMessageTitle] = useState("");
@@ -778,6 +798,12 @@ export default function AdminDashboard() {
     string | null
   >(null);
   const [isSendingMonitorMessage, setIsSendingMonitorMessage] = useState(false);
+  const [monitorMessages, setMonitorMessages] = useState<JudgeMessageRow[]>([]);
+  const [isLoadingMonitorMessages, setIsLoadingMonitorMessages] = useState(false);
+  const [editingMonitorMessageId, setEditingMonitorMessageId] = useState<number | null>(null);
+  const [isUpdatingMonitorMessage, setIsUpdatingMonitorMessage] = useState(false);
+  const [isDeletingMonitorMessageId, setIsDeletingMonitorMessageId] = useState<number | null>(null);
+  const [isTogglingMonitorMessageId, setIsTogglingMonitorMessageId] = useState<number | null>(null);
   const [userTab, setUserTab] = useState<UserSubTab>("admin");
   const [isEventModalOpen, setIsEventModalOpen] = useState(false);
   const [isContestModalOpen, setIsContestModalOpen] = useState(false);
@@ -3140,7 +3166,99 @@ export default function AdminDashboard() {
     [judges, activeEventId, participantsTabEventFilterId, events],
   );
 
+  useEffect(() => {
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+    if (!supabaseUrl || !supabaseAnonKey) return;
+    if (monitorTab !== "message") return;
 
+    const effectiveEventId = participantsTabEventFilterId ?? activeEventId;
+    if (effectiveEventId === null) return;
+
+    const supabase = createClient(supabaseUrl, supabaseAnonKey);
+    let cancelled = false;
+    const schemaMissingColumn = (message: string, column: string) => {
+      const msg = message.toLowerCase();
+      const col = column.toLowerCase();
+      return (
+        (msg.includes(`judge_message.${col}`) && msg.includes("does not exist")) ||
+        (msg.includes("judge_message") &&
+          msg.includes(col) &&
+          (msg.includes("schema cache") || msg.includes("could not find")))
+      );
+    };
+
+    const buildSelect = (opts: {
+      includeVisibility: boolean;
+      includeUpdatedAt: boolean;
+    }) => {
+      const cols = ["id", "event_id", "judge_id", "title", "body", "created_at"];
+      if (opts.includeUpdatedAt) cols.push("updated_at");
+      if (opts.includeVisibility) cols.push("is_visible");
+      return cols.join(", ");
+    };
+
+    const load = async () => {
+      setIsLoadingMonitorMessages(true);
+      setMonitorMessageError(null);
+
+      let includeVisibility = isJudgeMessageVisibilityAvailable;
+      let includeUpdatedAt = isJudgeMessageUpdatedAtAvailable;
+
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const result = (await supabase
+          .from("judge_message")
+          .select<string>(buildSelect({ includeVisibility, includeUpdatedAt }))
+          .eq("event_id", effectiveEventId)
+          .order("created_at", { ascending: false })
+          .limit(100)) as unknown as PostgrestResult;
+
+        if (cancelled) return;
+
+        if (result.error) {
+          const message =
+            typeof result.error.message === "string" ? result.error.message : "";
+          const missingVisibility = schemaMissingColumn(message, "is_visible");
+          const missingUpdatedAt = schemaMissingColumn(message, "updated_at");
+
+          if (missingVisibility && includeVisibility) {
+            includeVisibility = false;
+            setIsJudgeMessageVisibilityAvailable(false);
+            setMonitorMessageError(
+              "Database schema is missing judge_message.is_visible (or the API schema cache needs reload). Run: ALTER TABLE public.judge_message ADD COLUMN IF NOT EXISTS is_visible boolean NOT NULL DEFAULT true; then: NOTIFY pgrst, 'reload schema';",
+            );
+            continue;
+          }
+
+          if (missingUpdatedAt && includeUpdatedAt) {
+            includeUpdatedAt = false;
+            setIsJudgeMessageUpdatedAtAvailable(false);
+            setMonitorMessageError(
+              "Database schema is missing judge_message.updated_at (or the API schema cache needs reload). Run: ALTER TABLE public.judge_message ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now(); then: NOTIFY pgrst, 'reload schema';",
+            );
+            continue;
+          }
+
+          setMonitorMessageError(message || "Unable to load messages.");
+          break;
+        }
+
+        setIsJudgeMessageVisibilityAvailable(includeVisibility);
+        setIsJudgeMessageUpdatedAtAvailable(includeUpdatedAt);
+        if (result.data) setMonitorMessages(result.data as JudgeMessageRow[]);
+        break;
+      }
+
+      if (cancelled) return;
+      setIsLoadingMonitorMessages(false);
+    };
+
+    load();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [monitorTab, participantsTabEventFilterId, activeEventId]);
 
   const tabulatorsForActiveEvent = useMemo(
     () => {
@@ -11083,33 +11201,227 @@ export default function AdminDashboard() {
                             supabaseUrl,
                             supabaseAnonKey,
                           );
+                          const schemaMissingColumn = (
+                            message: string,
+                            column: string,
+                          ) => {
+                            const msg = message.toLowerCase();
+                            const col = column.toLowerCase();
+                            return (
+                              (msg.includes(`judge_message.${col}`) &&
+                                msg.includes("does not exist")) ||
+                              (msg.includes("judge_message") &&
+                                msg.includes(col) &&
+                                (msg.includes("schema cache") ||
+                                  msg.includes("could not find")))
+                            );
+                          };
 
-                          const { error } = await supabase
-                            .from("judge_message")
-                            .insert({
+                          const buildSelect = (opts: {
+                            includeVisibility: boolean;
+                            includeUpdatedAt: boolean;
+                          }) => {
+                            const cols = [
+                              "id",
+                              "event_id",
+                              "judge_id",
+                              "title",
+                              "body",
+                              "created_at",
+                            ];
+                            if (opts.includeUpdatedAt) cols.push("updated_at");
+                            if (opts.includeVisibility) cols.push("is_visible");
+                            return cols.join(", ");
+                          };
+
+                          if (editingMonitorMessageId !== null) {
+                            setIsSendingMonitorMessage(false);
+                            setIsUpdatingMonitorMessage(true);
+                            let includeVisibility =
+                              isJudgeMessageVisibilityAvailable;
+                            let includeUpdatedAt = isJudgeMessageUpdatedAtAvailable;
+                            let result: PostgrestResult | null = null;
+
+                            for (let attempt = 0; attempt < 3; attempt += 1) {
+                              const updatePayload: Record<string, unknown> = {
+                                event_id: eventId,
+                                judge_id: monitorMessageRecipientJudgeId,
+                                title: monitorMessageTitle.trim() || null,
+                                body: monitorMessageBody.trim(),
+                              };
+                              if (includeUpdatedAt) {
+                                updatePayload.updated_at =
+                                  new Date().toISOString();
+                              }
+
+                              result = (await supabase
+                                .from("judge_message")
+                                .update(updatePayload)
+                                .eq("id", editingMonitorMessageId)
+                                .select<string>(
+                                  buildSelect({
+                                    includeVisibility,
+                                    includeUpdatedAt,
+                                  }),
+                                )
+                                .limit(1)) as unknown as PostgrestResult;
+
+                              if (!result?.error) break;
+
+                              const message =
+                                typeof result.error.message === "string"
+                                  ? result.error.message
+                                  : "";
+                              const missingVisibility = schemaMissingColumn(
+                                message,
+                                "is_visible",
+                              );
+                              const missingUpdatedAt = schemaMissingColumn(
+                                message,
+                                "updated_at",
+                              );
+
+                              if (missingVisibility && includeVisibility) {
+                                includeVisibility = false;
+                                setIsJudgeMessageVisibilityAvailable(false);
+                                setMonitorMessageError(
+                                  "Database schema is missing judge_message.is_visible (or the API schema cache needs reload). Run: ALTER TABLE public.judge_message ADD COLUMN IF NOT EXISTS is_visible boolean NOT NULL DEFAULT true; then: NOTIFY pgrst, 'reload schema';",
+                                );
+                                continue;
+                              }
+
+                              if (missingUpdatedAt && includeUpdatedAt) {
+                                includeUpdatedAt = false;
+                                setIsJudgeMessageUpdatedAtAvailable(false);
+                                setMonitorMessageError(
+                                  "Database schema is missing judge_message.updated_at (or the API schema cache needs reload). Run: ALTER TABLE public.judge_message ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now(); then: NOTIFY pgrst, 'reload schema';",
+                                );
+                                continue;
+                              }
+
+                              break;
+                            }
+                            setIsUpdatingMonitorMessage(false);
+
+                            if (!result) {
+                              setMonitorMessageError("Unable to update message.");
+                              return;
+                            }
+                            if (result.error) {
+                              setMonitorMessageError(
+                                result.error.message || "Unable to update message.",
+                              );
+                              return;
+                            }
+                            setIsJudgeMessageVisibilityAvailable(includeVisibility);
+                            setIsJudgeMessageUpdatedAtAvailable(includeUpdatedAt);
+                            if (
+                              result.data &&
+                              Array.isArray(result.data) &&
+                              result.data.length > 0
+                            ) {
+                              const updated = result.data[0] as JudgeMessageRow;
+                              setMonitorMessages((prev) =>
+                                prev.map((m) => (m.id === updated.id ? updated : m)),
+                              );
+                            }
+                            setMonitorMessageSuccess("Message updated.");
+                            setEditingMonitorMessageId(null);
+                            return;
+                          }
+
+                          let includeVisibility = isJudgeMessageVisibilityAvailable;
+                          let includeUpdatedAt = isJudgeMessageUpdatedAtAvailable;
+                          let insertResult: PostgrestResult | null = null;
+
+                          for (let attempt = 0; attempt < 3; attempt += 1) {
+                            const insertPayload: Record<string, unknown> = {
                               event_id: eventId,
                               judge_id: monitorMessageRecipientJudgeId,
                               title: monitorMessageTitle.trim() || null,
                               body: monitorMessageBody.trim(),
-                            });
+                            };
+                            if (includeVisibility) insertPayload.is_visible = true;
+
+                            insertResult = (await supabase
+                              .from("judge_message")
+                              .insert(insertPayload)
+                              .select<string>(
+                                buildSelect({
+                                  includeVisibility,
+                                  includeUpdatedAt,
+                                }),
+                              )
+                              .limit(1)) as unknown as PostgrestResult;
+
+                            if (!insertResult?.error) break;
+
+                            const message =
+                              typeof insertResult.error.message === "string"
+                                ? insertResult.error.message
+                                : "";
+                            const missingVisibility = schemaMissingColumn(
+                              message,
+                              "is_visible",
+                            );
+                            const missingUpdatedAt = schemaMissingColumn(
+                              message,
+                              "updated_at",
+                            );
+
+                            if (missingVisibility && includeVisibility) {
+                              includeVisibility = false;
+                              setIsJudgeMessageVisibilityAvailable(false);
+                              setMonitorMessageError(
+                                "Database schema is missing judge_message.is_visible (or the API schema cache needs reload). Run: ALTER TABLE public.judge_message ADD COLUMN IF NOT EXISTS is_visible boolean NOT NULL DEFAULT true; then: NOTIFY pgrst, 'reload schema';",
+                              );
+                              continue;
+                            }
+
+                            if (missingUpdatedAt && includeUpdatedAt) {
+                              includeUpdatedAt = false;
+                              setIsJudgeMessageUpdatedAtAvailable(false);
+                              setMonitorMessageError(
+                                "Database schema is missing judge_message.updated_at (or the API schema cache needs reload). Run: ALTER TABLE public.judge_message ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now(); then: NOTIFY pgrst, 'reload schema';",
+                              );
+                              continue;
+                            }
+
+                            break;
+                          }
 
                           setIsSendingMonitorMessage(false);
 
-                          if (error) {
+                          if (!insertResult) {
+                            setMonitorMessageError("Unable to send message.");
+                            return;
+                          }
+                          if (insertResult.error) {
                             setMonitorMessageError(
-                              error.message || "Unable to send message.",
+                              insertResult.error.message || "Unable to send message.",
                             );
                             return;
+                          }
+                          setIsJudgeMessageVisibilityAvailable(includeVisibility);
+                          setIsJudgeMessageUpdatedAtAvailable(includeUpdatedAt);
+
+                          if (
+                            insertResult.data &&
+                            Array.isArray(insertResult.data) &&
+                            insertResult.data.length > 0
+                          ) {
+                            const created = insertResult.data[0] as JudgeMessageRow;
+                            setMonitorMessages((prev) => [created, ...prev]);
                           }
 
                           setMonitorMessageSuccess("Message sent.");
                           setMonitorMessageTitle("");
                           setMonitorMessageBody("");
                         }}
-                        disabled={isSendingMonitorMessage}
+                        disabled={isSendingMonitorMessage || isUpdatingMonitorMessage}
                         className="flex w-full items-center justify-center gap-2 rounded-2xl bg-slate-900 px-6 py-4 text-[13px] font-bold text-white shadow-xl transition-all hover:bg-black active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
                       >
-                        {isSendingMonitorMessage ? (
+                        {isSendingMonitorMessage || isUpdatingMonitorMessage ? (
                           <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
                         ) : (
                           <svg
@@ -11126,25 +11438,382 @@ export default function AdminDashboard() {
                             />
                           </svg>
                         )}
-                        {isSendingMonitorMessage ? "Sending…" : "Send message"}
+                        {isSendingMonitorMessage
+                          ? "Sending…"
+                          : isUpdatingMonitorMessage
+                            ? "Updating…"
+                            : editingMonitorMessageId !== null
+                              ? "Update message"
+                              : "Send message"}
                       </button>
+
+                      {editingMonitorMessageId !== null && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingMonitorMessageId(null);
+                            setMonitorMessageRecipientJudgeId(null);
+                            setMonitorMessageTitle("");
+                            setMonitorMessageBody("");
+                            setMonitorMessageError(null);
+                            setMonitorMessageSuccess(null);
+                          }}
+                          className="flex w-full items-center justify-center rounded-2xl border border-slate-200 bg-white px-6 py-4 text-[13px] font-bold text-slate-700 shadow-sm transition-all hover:bg-slate-50 active:scale-[0.98]"
+                        >
+                          Cancel edit
+                        </button>
+                      )}
                     </div>
-                    <div className="rounded-[32px] border border-white/40 bg-white/80 p-8 shadow-[0_8px_30px_rgb(0,0,0,0.04)] backdrop-blur-xl">
+                    <div className="space-y-6 rounded-[32px] border border-white/40 bg-white/80 p-8 shadow-[0_8px_30px_rgb(0,0,0,0.04)] backdrop-blur-xl">
+                      <div className="flex items-center justify-between gap-4">
+                        <div className="text-[13px] font-bold text-slate-800">
+                          Preview
+                        </div>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            setMonitorMessageError(null);
+                            setMonitorMessageSuccess(null);
+                            const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+                            const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+                            const effectiveEventId = participantsTabEventFilterId ?? activeEventId;
+                            if (!supabaseUrl || !supabaseAnonKey || effectiveEventId === null) {
+                              setMonitorMessageError("Please select an event first.");
+                              return;
+                            }
+                            const schemaMissingColumn = (message: string, column: string) => {
+                              const msg = message.toLowerCase();
+                              const col = column.toLowerCase();
+                              return (
+                                (msg.includes(`judge_message.${col}`) &&
+                                  msg.includes("does not exist")) ||
+                                (msg.includes("judge_message") &&
+                                  msg.includes(col) &&
+                                  (msg.includes("schema cache") ||
+                                    msg.includes("could not find")))
+                              );
+                            };
+
+                            const buildSelect = (opts: {
+                              includeVisibility: boolean;
+                              includeUpdatedAt: boolean;
+                            }) => {
+                              const cols = ["id", "event_id", "judge_id", "title", "body", "created_at"];
+                              if (opts.includeUpdatedAt) cols.push("updated_at");
+                              if (opts.includeVisibility) cols.push("is_visible");
+                              return cols.join(", ");
+                            };
+                            setIsLoadingMonitorMessages(true);
+                            const supabase = createClient(supabaseUrl, supabaseAnonKey);
+                            let includeVisibility = isJudgeMessageVisibilityAvailable;
+                            let includeUpdatedAt = isJudgeMessageUpdatedAtAvailable;
+
+                            for (let attempt = 0; attempt < 3; attempt += 1) {
+                              const result = (await supabase
+                                .from("judge_message")
+                                .select<string>(
+                                  buildSelect({ includeVisibility, includeUpdatedAt }),
+                                )
+                                .eq("event_id", effectiveEventId)
+                                .order("created_at", { ascending: false })
+                                .limit(100)) as unknown as PostgrestResult;
+
+                              if (result.error) {
+                                const message =
+                                  typeof result.error.message === "string"
+                                    ? result.error.message
+                                    : "";
+                                const missingVisibility = schemaMissingColumn(message, "is_visible");
+                                const missingUpdatedAt = schemaMissingColumn(message, "updated_at");
+
+                                if (missingVisibility && includeVisibility) {
+                                  includeVisibility = false;
+                                  setIsJudgeMessageVisibilityAvailable(false);
+                                  setMonitorMessageError(
+                                    "Database schema is missing judge_message.is_visible (or the API schema cache needs reload). Run: ALTER TABLE public.judge_message ADD COLUMN IF NOT EXISTS is_visible boolean NOT NULL DEFAULT true; then: NOTIFY pgrst, 'reload schema';",
+                                  );
+                                  continue;
+                                }
+
+                                if (missingUpdatedAt && includeUpdatedAt) {
+                                  includeUpdatedAt = false;
+                                  setIsJudgeMessageUpdatedAtAvailable(false);
+                                  setMonitorMessageError(
+                                    "Database schema is missing judge_message.updated_at (or the API schema cache needs reload). Run: ALTER TABLE public.judge_message ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now(); then: NOTIFY pgrst, 'reload schema';",
+                                  );
+                                  continue;
+                                }
+
+                                setMonitorMessageError(message || "Unable to load messages.");
+                                break;
+                              }
+
+                              setIsJudgeMessageVisibilityAvailable(includeVisibility);
+                              setIsJudgeMessageUpdatedAtAvailable(includeUpdatedAt);
+                              if (result.data) {
+                                setMonitorMessages(result.data as JudgeMessageRow[]);
+                              }
+                              break;
+                            }
+                            setIsLoadingMonitorMessages(false);
+                          }}
+                          className="rounded-full bg-slate-100 px-4 py-2 text-[12px] font-bold text-slate-700 transition hover:bg-slate-200"
+                        >
+                          Refresh
+                        </button>
+                      </div>
+
+                      <div className="overflow-hidden rounded-[24px] border border-slate-200 bg-white">
+                        <div className="bg-gradient-to-r from-[#1F4D3A] via-[#24624A] to-[#1F4D3A] px-6 py-4 text-white">
+                          <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-white/80">
+                            Message
+                          </div>
+                          <div className="mt-1 text-lg font-semibold leading-tight">
+                            {monitorMessageTitle.trim()
+                              ? monitorMessageTitle.trim()
+                              : "Announcement"}
+                          </div>
+                          <div className="mt-1 text-[11px] text-white/75">
+                            {monitorMessageRecipientJudgeId
+                              ? `Recipient: ${judgesForActiveEvent.find((j) => j.id === monitorMessageRecipientJudgeId)?.full_name ?? `Judge #${monitorMessageRecipientJudgeId}`}`
+                              : "Recipient: All judges"}
+                          </div>
+                        </div>
+                        <div className="p-6">
+                          <div className="whitespace-pre-wrap text-[14px] leading-relaxed text-slate-700">
+                            {monitorMessageBody.trim()
+                              ? monitorMessageBody
+                              : "Type a message to preview it here."}
+                          </div>
+                        </div>
+                      </div>
+
                       <div className="text-[13px] font-bold text-slate-800">
-                        Realtime behavior
+                        Sent messages
                       </div>
-                      <div className="mt-2 space-y-2 text-[12px] font-medium text-slate-500">
-                        <div>
-                          - Judges connected to the dashboard will immediately
-                          receive the message.
+
+                      {isLoadingMonitorMessages ? (
+                        <div className="text-[12px] font-medium text-slate-500">
+                          Loading messages…
                         </div>
-                        <div>
-                          - If you select a recipient, only that judge sees it.
+                      ) : monitorMessages.length === 0 ? (
+                        <div className="text-[12px] font-medium text-slate-500">
+                          No messages for this event yet.
                         </div>
-                        <div>
-                          - If you choose All judges, everyone in the event sees it.
+                      ) : (
+                        <div className="space-y-3">
+                          {monitorMessages.slice(0, 20).map((msg) => {
+                            const recipient =
+                              msg.judge_id === null
+                                ? "All judges"
+                                : judgesForActiveEvent.find((j) => j.id === msg.judge_id)
+                                    ?.full_name ?? `Judge #${msg.judge_id}`;
+                            const isVisible = msg.is_visible !== false;
+                            const visibilityLabel = isJudgeMessageVisibilityAvailable
+                              ? isVisible
+                                ? "Shown"
+                                : "Hidden"
+                              : "Shown";
+                            return (
+                              <div
+                                key={msg.id}
+                                className="rounded-2xl border border-slate-200 bg-white p-4"
+                              >
+                                <div className="flex items-start justify-between gap-4">
+                                  <div className="min-w-0">
+                                    <div className="truncate text-[13px] font-bold text-slate-900">
+                                      {(msg.title ?? "").trim() ? msg.title : "Announcement"}
+                                    </div>
+                                    <div className="mt-1 text-[11px] font-medium text-slate-500">
+                                      {recipient} • {visibilityLabel} •{" "}
+                                      {new Date(msg.created_at).toLocaleString()}
+                                    </div>
+                                  </div>
+                                  <div className="flex shrink-0 flex-wrap items-center gap-2">
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setEditingMonitorMessageId(msg.id);
+                                        setMonitorMessageRecipientJudgeId(msg.judge_id);
+                                        setMonitorMessageTitle(msg.title ?? "");
+                                        setMonitorMessageBody(msg.body ?? "");
+                                        setMonitorMessageError(null);
+                                        setMonitorMessageSuccess(null);
+                                      }}
+                                      className="rounded-full bg-slate-100 px-3 py-1.5 text-[11px] font-bold text-slate-700 transition hover:bg-slate-200"
+                                    >
+                                      Edit
+                                    </button>
+                                    {isJudgeMessageVisibilityAvailable && (
+                                      <button
+                                        type="button"
+                                        disabled={isTogglingMonitorMessageId === msg.id}
+                                        onClick={async () => {
+                                          const supabaseUrl =
+                                            process.env.NEXT_PUBLIC_SUPABASE_URL;
+                                          const supabaseAnonKey =
+                                            process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+                                          if (!supabaseUrl || !supabaseAnonKey) {
+                                            setMonitorMessageError(
+                                              "Supabase is not configured.",
+                                            );
+                                            return;
+                                          }
+                                          const schemaMissingColumn = (message: string, column: string) => {
+                                            const msg = message.toLowerCase();
+                                            const col = column.toLowerCase();
+                                            return (
+                                              (msg.includes(`judge_message.${col}`) &&
+                                                msg.includes("does not exist")) ||
+                                              (msg.includes("judge_message") &&
+                                                msg.includes(col) &&
+                                                (msg.includes("schema cache") ||
+                                                  msg.includes("could not find")))
+                                            );
+                                          };
+                                          const buildSelect = (opts: {
+                                            includeVisibility: boolean;
+                                            includeUpdatedAt: boolean;
+                                          }) => {
+                                            const cols = ["id", "event_id", "judge_id", "title", "body", "created_at"];
+                                            if (opts.includeUpdatedAt) cols.push("updated_at");
+                                            if (opts.includeVisibility) cols.push("is_visible");
+                                            return cols.join(", ");
+                                          };
+                                          setIsTogglingMonitorMessageId(msg.id);
+                                          const supabase = createClient(
+                                            supabaseUrl,
+                                            supabaseAnonKey,
+                                          );
+                                          const nextVisible = !isVisible;
+                                          const includeVisibility = true;
+                                          let includeUpdatedAt = isJudgeMessageUpdatedAtAvailable;
+                                          let result: PostgrestResult | null = null;
+
+                                          for (let attempt = 0; attempt < 2; attempt += 1) {
+                                            const updatePayload: Record<string, unknown> = {
+                                              is_visible: nextVisible,
+                                            };
+                                            if (includeUpdatedAt) {
+                                              updatePayload.updated_at = new Date().toISOString();
+                                            }
+                                            result = (await supabase
+                                              .from("judge_message")
+                                              .update(updatePayload)
+                                              .eq("id", msg.id)
+                                              .select<string>(
+                                                buildSelect({
+                                                  includeVisibility,
+                                                  includeUpdatedAt,
+                                                }),
+                                              )
+                                              .limit(1)) as unknown as PostgrestResult;
+                                            if (!result?.error) break;
+
+                                            const message =
+                                              typeof result.error.message === "string"
+                                                ? result.error.message
+                                                : "";
+                                            const missingVisibility = schemaMissingColumn(
+                                              message,
+                                              "is_visible",
+                                            );
+                                            const missingUpdatedAt = schemaMissingColumn(
+                                              message,
+                                              "updated_at",
+                                            );
+
+                                            if (missingUpdatedAt && includeUpdatedAt) {
+                                              includeUpdatedAt = false;
+                                              setIsJudgeMessageUpdatedAtAvailable(false);
+                                              setMonitorMessageError(
+                                                "Database schema is missing judge_message.updated_at (or the API schema cache needs reload). Run: ALTER TABLE public.judge_message ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now(); then: NOTIFY pgrst, 'reload schema';",
+                                              );
+                                              continue;
+                                            }
+
+                                            if (missingVisibility) {
+                                              setIsJudgeMessageVisibilityAvailable(false);
+                                              setMonitorMessageError(
+                                                "Database schema is missing judge_message.is_visible (or the API schema cache needs reload). Run: ALTER TABLE public.judge_message ADD COLUMN IF NOT EXISTS is_visible boolean NOT NULL DEFAULT true; then: NOTIFY pgrst, 'reload schema';",
+                                              );
+                                              break;
+                                            }
+
+                                            break;
+                                          }
+                                          setIsTogglingMonitorMessageId(null);
+                                          if (!result) {
+                                            setMonitorMessageError(
+                                              "Unable to update message visibility.",
+                                            );
+                                            return;
+                                          }
+                                          if (result.error) {
+                                            setMonitorMessageError(
+                                              result.error.message ||
+                                                "Unable to update message visibility.",
+                                            );
+                                            return;
+                                          }
+                                          if (
+                                            result.data &&
+                                            Array.isArray(result.data) &&
+                                            result.data.length > 0
+                                          ) {
+                                            const updated = result.data[0] as JudgeMessageRow;
+                                            setMonitorMessages((prev) =>
+                                              prev.map((m) =>
+                                                m.id === updated.id ? updated : m,
+                                              ),
+                                            );
+                                          }
+                                        }}
+                                        className="rounded-full bg-white px-3 py-1.5 text-[11px] font-bold text-slate-700 ring-1 ring-slate-200 transition hover:bg-slate-50 disabled:opacity-50"
+                                      >
+                                        {isVisible ? "Hide" : "Show"}
+                                      </button>
+                                    )}
+                                    <button
+                                      type="button"
+                                      disabled={isDeletingMonitorMessageId === msg.id}
+                                      onClick={async () => {
+                                        const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+                                        const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+                                        if (!supabaseUrl || !supabaseAnonKey) {
+                                          setMonitorMessageError("Supabase is not configured.");
+                                          return;
+                                        }
+                                        setIsDeletingMonitorMessageId(msg.id);
+                                        const supabase = createClient(supabaseUrl, supabaseAnonKey);
+                                        const { error } = await supabase
+                                          .from("judge_message")
+                                          .delete()
+                                          .eq("id", msg.id);
+                                        setIsDeletingMonitorMessageId(null);
+                                        if (error) {
+                                          setMonitorMessageError(error.message || "Unable to delete message.");
+                                          return;
+                                        }
+                                        setMonitorMessages((prev) => prev.filter((m) => m.id !== msg.id));
+                                        if (editingMonitorMessageId === msg.id) {
+                                          setEditingMonitorMessageId(null);
+                                        }
+                                      }}
+                                      className="rounded-full bg-red-50 px-3 py-1.5 text-[11px] font-bold text-red-700 transition hover:bg-red-100 disabled:opacity-50"
+                                    >
+                                      Delete
+                                    </button>
+                                  </div>
+                                </div>
+                                <div className="mt-3 whitespace-pre-wrap text-[12px] leading-relaxed text-slate-700">
+                                  {msg.body}
+                                </div>
+                              </div>
+                            );
+                          })}
                         </div>
-                      </div>
+                      )}
                     </div>
                   </div>
                 </div>

@@ -273,6 +273,16 @@ type JudgeMessageRow = {
   title: string | null;
   body: string;
   created_at: string;
+  is_visible?: boolean | null;
+};
+
+type JudgeMessageSeenRow = {
+  message_id: number;
+};
+
+type PostgrestResult = {
+  data: unknown;
+  error: { message?: string } | null;
 };
 
 export default function JudgeDashboardPage() {
@@ -434,22 +444,83 @@ export default function JudgeDashboardPage() {
       setJudge(judgeRow);
 
       try {
-        const lastSeenRaw =
-          typeof window !== "undefined"
-            ? window.localStorage.getItem(`judge_last_seen_message_${judgeRow.id}`)
-            : null;
-        const lastSeenId = lastSeenRaw ? Number.parseInt(lastSeenRaw, 10) : null;
-        const { data: messageRows } = await supabase
+        const visibilityMissing = (message: string) =>
+          message.includes("judge_message") &&
+          message.includes("is_visible") &&
+          (message.includes("schema cache") ||
+            message.includes("Could not find") ||
+            message.includes("does not exist"));
+
+        let result = (await supabase
           .from("judge_message")
-          .select("id, event_id, judge_id, title, body, created_at")
+          .select<string>(
+            "id, event_id, judge_id, title, body, created_at, is_visible",
+          )
           .eq("event_id", judgeRow.event_id)
           .or(`judge_id.is.null,judge_id.eq.${judgeRow.id}`)
+          .eq("is_visible", true)
           .order("created_at", { ascending: false })
-          .limit(5);
-        if (messageRows && Array.isArray(messageRows) && messageRows.length > 0) {
-          const unseen = (messageRows as JudgeMessageRow[]).filter((m) =>
-            lastSeenId ? m.id > lastSeenId : true,
-          );
+          .limit(50)) as unknown as PostgrestResult;
+
+        if (result.error && visibilityMissing(result.error.message ?? "")) {
+          result = (await supabase
+            .from("judge_message")
+            .select<string>("id, event_id, judge_id, title, body, created_at")
+            .eq("event_id", judgeRow.event_id)
+            .or(`judge_id.is.null,judge_id.eq.${judgeRow.id}`)
+            .order("created_at", { ascending: false })
+            .limit(50)) as unknown as PostgrestResult;
+        }
+
+        if (
+          !result.error &&
+          result.data &&
+          Array.isArray(result.data) &&
+          result.data.length > 0
+        ) {
+          const rows = result.data as JudgeMessageRow[];
+          let unseen = rows;
+
+          try {
+            const ids = rows.map((m) => m.id);
+            const { data: seenRows, error: seenError } = await supabase
+              .from("judge_message_seen")
+              .select("message_id")
+              .eq("judge_id", judgeRow.id)
+              .in("message_id", ids);
+
+            if (!seenError && seenRows && Array.isArray(seenRows)) {
+              const seenSet = new Set(
+                (seenRows as JudgeMessageSeenRow[]).map((r) =>
+                  Number(r.message_id),
+                ),
+              );
+              unseen = rows.filter((m) => !seenSet.has(m.id));
+            } else {
+              const lastSeenRaw =
+                typeof window !== "undefined"
+                  ? window.localStorage.getItem(
+                      `judge_last_seen_message_${judgeRow.id}`,
+                    )
+                  : null;
+              const lastSeenId = lastSeenRaw
+                ? Number.parseInt(lastSeenRaw, 10)
+                : null;
+              unseen = rows.filter((m) => (lastSeenId ? m.id > lastSeenId : true));
+            }
+          } catch {
+            const lastSeenRaw =
+              typeof window !== "undefined"
+                ? window.localStorage.getItem(
+                    `judge_last_seen_message_${judgeRow.id}`,
+                  )
+                : null;
+            const lastSeenId = lastSeenRaw
+              ? Number.parseInt(lastSeenRaw, 10)
+              : null;
+            unseen = rows.filter((m) => (lastSeenId ? m.id > lastSeenId : true));
+          }
+
           if (unseen.length > 0) {
             const ordered = [...unseen].sort((a, b) => a.id - b.id);
             setMessageQueue(ordered);
@@ -1077,12 +1148,57 @@ export default function JudgeDashboardPage() {
             const newRow = payload.new as JudgeMessageRow;
             if (newRow.event_id !== judgeRow.event_id) return;
             if (newRow.judge_id !== null && newRow.judge_id !== judgeRow.id) return;
+            if (newRow.is_visible === false) return;
             setMessageQueue((prev) => {
               if (prev.some((m) => m.id === newRow.id)) return prev;
               const next = [...prev, newRow].sort((a, b) => a.id - b.id);
               return next;
             });
             setActiveMessage((prev) => prev ?? newRow);
+          },
+        )
+        .on(
+          "postgres_changes",
+          { event: "UPDATE", schema: "public", table: "judge_message" },
+          async (payload) => {
+            const updatedRow = payload.new as JudgeMessageRow;
+            if (updatedRow.event_id !== judgeRow.event_id) return;
+            if (updatedRow.judge_id !== null && updatedRow.judge_id !== judgeRow.id) return;
+
+            if (updatedRow.is_visible === false) {
+              setMessageQueue((prev) => {
+                const next = prev.filter((m) => m.id !== updatedRow.id);
+                setActiveMessage((current) => {
+                  if (!current) return next.length > 0 ? next[0] : null;
+                  if (current.id !== updatedRow.id) return current;
+                  return next.length > 0 ? next[0] : null;
+                });
+                return next;
+              });
+              return;
+            }
+
+            if (updatedRow.is_visible === true) {
+              try {
+                const { data: seenRows, error: seenError } = await supabase
+                  .from("judge_message_seen")
+                  .select("message_id")
+                  .eq("judge_id", judgeRow.id)
+                  .eq("message_id", updatedRow.id)
+                  .limit(1);
+
+                if (!seenError && seenRows && Array.isArray(seenRows) && seenRows.length > 0) {
+                  return;
+                }
+              } catch {}
+
+              setMessageQueue((prev) => {
+                if (prev.some((m) => m.id === updatedRow.id)) return prev;
+                const next = [...prev, updatedRow].sort((a, b) => a.id - b.id);
+                return next;
+              });
+              setActiveMessage((prev) => prev ?? updatedRow);
+            }
           },
         )
         .subscribe((status, err) => {
@@ -2115,13 +2231,29 @@ export default function JudgeDashboardPage() {
     router.push("/");
   };
 
-  const dismissActiveMessage = () => {
+  const dismissActiveMessage = async () => {
     const current = activeMessage;
     if (!current) return;
+
+    let saved = false;
     try {
-      if (typeof window !== "undefined") {
+      if (judge?.id) {
+        const supabase = getSupabaseClient();
+        const { error } = await supabase.from("judge_message_seen").upsert(
+          {
+            judge_id: judge.id,
+            message_id: current.id,
+          },
+          { onConflict: "judge_id,message_id" },
+        );
+        if (!error) saved = true;
+      }
+    } catch {}
+
+    try {
+      if (!saved && typeof window !== "undefined" && judge?.id) {
         window.localStorage.setItem(
-          `judge_last_seen_message_${judge?.id ?? 0}`,
+          `judge_last_seen_message_${judge.id}`,
           String(current.id),
         );
       }
