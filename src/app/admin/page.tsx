@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { createClient } from "@supabase/supabase-js";
 import LottieIcon from "@/components/LottieIcon";
+import { createPortal } from "react-dom";
 import {
   type ReactNode,
   useCallback,
@@ -57,7 +58,7 @@ type EventRow = {
   created_at: string;
 };
 
-type ContestScoringType = "percentage" | "points";
+type ContestScoringType = "percentage" | "ranking" | "points";
 
 type ContestRow = {
   id: number;
@@ -3177,6 +3178,7 @@ export default function AdminDashboard() {
 
     const supabase = createClient(supabaseUrl, supabaseAnonKey);
     let cancelled = false;
+    let messageChannel: ReturnType<typeof supabase.channel> | null = null;
     const schemaMissingColumn = (message: string, column: string) => {
       const msg = message.toLowerCase();
       const col = column.toLowerCase();
@@ -3255,8 +3257,67 @@ export default function AdminDashboard() {
 
     load();
 
+    messageChannel = supabase
+      .channel(`admin-judge-messages-${effectiveEventId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "judge_message",
+          filter: `event_id=eq.${effectiveEventId}`,
+        },
+        (payload) => {
+          if (cancelled) return;
+
+          if (payload.eventType === "INSERT") {
+            const row = payload.new as JudgeMessageRow;
+            setMonitorMessages((prev) => {
+              if (prev.some((m) => m.id === row.id)) return prev;
+              const next = [row, ...prev];
+              next.sort(
+                (a, b) =>
+                  new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+              );
+              return next;
+            });
+            return;
+          }
+
+          if (payload.eventType === "UPDATE") {
+            const row = payload.new as JudgeMessageRow;
+            setMonitorMessages((prev) => {
+              const exists = prev.some((m) => m.id === row.id);
+              const next = exists
+                ? prev.map((m) => (m.id === row.id ? row : m))
+                : [row, ...prev];
+              next.sort(
+                (a, b) =>
+                  new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+              );
+              return next;
+            });
+            return;
+          }
+
+          if (payload.eventType === "DELETE") {
+            const oldRow = payload.old as Partial<JudgeMessageRow>;
+            const deletedId = typeof oldRow?.id === "number" ? oldRow.id : null;
+            if (!deletedId) return;
+            setMonitorMessages((prev) => prev.filter((m) => m.id !== deletedId));
+            setEditingMonitorMessageId((current) =>
+              current === deletedId ? null : current,
+            );
+          }
+        },
+      )
+      .subscribe();
+
     return () => {
       cancelled = true;
+      if (messageChannel) {
+        supabase.removeChannel(messageChannel);
+      }
     };
   }, [monitorTab, participantsTabEventFilterId, activeEventId]);
 
@@ -3446,6 +3507,8 @@ export default function AdminDashboard() {
       participantName: string;
       contestantNumber: string;
       totalScore: number;
+      rawSum: number;
+      judgeCount: number;
       rank: number;
       judgeScores: Record<number, number>;
     };
@@ -3487,7 +3550,9 @@ export default function AdminDashboard() {
         participantId: participant.id,
         participantName: participant.full_name,
         contestantNumber: participant.contestant_number,
-        totalScore: Number(totalSum.toFixed(2)),
+        totalScore: 0,
+        rawSum: Number(totalSum.toFixed(2)),
+        judgeCount: totalsForParticipant.count,
         rank: 0,
         judgeScores: totalsForParticipant.judgeScores,
       });
@@ -3504,7 +3569,75 @@ export default function AdminDashboard() {
     const rankedRows: Row[] = [];
 
     for (const contestRows of rowsByContest.values()) {
-      contestRows.sort((a, b) => b.totalScore - a.totalScore);
+      const contest = contests.find((row) => row.id === contestRows[0]?.contestId);
+      const scoringType = contest?.scoring_type ?? "percentage";
+
+      if (scoringType === "ranking") {
+        const judgeIds = new Set<number>();
+        for (const row of contestRows) {
+          for (const key of Object.keys(row.judgeScores)) {
+            judgeIds.add(Number(key));
+          }
+        }
+        const judgeIdList = Array.from(judgeIds).sort((a, b) => a - b);
+        const rankByJudgeAndParticipant = new Map<string, number>();
+
+        for (const judgeId of judgeIdList) {
+          const perJudge: Array<[number, number]> = [];
+          for (const row of contestRows) {
+            const score = row.judgeScores[judgeId];
+            if (score == null) continue;
+            perJudge.push([row.participantId, score]);
+          }
+          perJudge.sort((a, b) => b[1] - a[1]);
+          let prevScore: number | null = null;
+          let rank = 0;
+          let index = 0;
+          for (const [participantId, score] of perJudge) {
+            index += 1;
+            if (prevScore === null || score < prevScore) {
+              rank = index;
+            }
+            rankByJudgeAndParticipant.set(`${judgeId}-${participantId}`, rank);
+            prevScore = score;
+          }
+        }
+
+        for (const row of contestRows) {
+          if (judgeIdList.length === 0) {
+            row.totalScore = Number.POSITIVE_INFINITY;
+            continue;
+          }
+          let sumRanks = 0;
+          let hasAll = true;
+          for (const judgeId of judgeIdList) {
+            const r = rankByJudgeAndParticipant.get(`${judgeId}-${row.participantId}`);
+            if (r == null) {
+              hasAll = false;
+              break;
+            }
+            sumRanks += r;
+          }
+          row.totalScore = hasAll ? Number((sumRanks / judgeIdList.length).toFixed(2)) : Number.POSITIVE_INFINITY;
+        }
+
+        contestRows.sort((a, b) => {
+          if (a.totalScore !== b.totalScore) {
+            return a.totalScore - b.totalScore;
+          }
+          return b.rawSum - a.rawSum;
+        });
+      } else if (scoringType === "percentage") {
+        for (const row of contestRows) {
+          row.totalScore = row.judgeCount > 0 ? Number((row.rawSum / row.judgeCount).toFixed(2)) : 0;
+        }
+        contestRows.sort((a, b) => b.totalScore - a.totalScore);
+      } else {
+        for (const row of contestRows) {
+          row.totalScore = row.rawSum;
+        }
+        contestRows.sort((a, b) => b.totalScore - a.totalScore);
+      }
 
       let previousScore: number | null = null;
       let currentRank = 0;
@@ -3512,8 +3645,14 @@ export default function AdminDashboard() {
 
       for (const row of contestRows) {
         index += 1;
-        if (previousScore === null || row.totalScore < previousScore) {
-          currentRank = index;
+        if (scoringType === "ranking") {
+          if (previousScore === null || row.totalScore > previousScore) {
+            currentRank = index;
+          }
+        } else {
+          if (previousScore === null || row.totalScore < previousScore) {
+            currentRank = index;
+          }
         }
         row.rank = currentRank;
         previousScore = row.totalScore;
@@ -3849,6 +3988,9 @@ export default function AdminDashboard() {
     }
 
     const contestId = selectedTabulationAwardResult.contestId;
+    const scoringType =
+      contests.find((contest) => contest.id === contestId)?.scoring_type ??
+      "percentage";
     const assignedJudgeIds = new Set(
       judgeAssignments
         .filter((ja) => ja.contest_id === contestId)
@@ -3880,6 +4022,7 @@ export default function AdminDashboard() {
     }
 
     const rankByJudgeAndParticipant = new Map<string, number>();
+    if (scoringType === "ranking") {
     for (const [jid, pmap] of totalsByJudge.entries()) {
       const entries = Array.from(pmap.entries()).sort((a, b) => b[1] - a[1]);
       let currentRank = 1;
@@ -3890,9 +4033,28 @@ export default function AdminDashboard() {
         rankByJudgeAndParticipant.set(jid + "-" + entries[i][0], currentRank);
       }
     }
+    }
 
     const rows = [...selectedTabulationAwardResult.allParticipants]
       .map((p) => {
+        if (scoringType !== "ranking") {
+          let sum = 0;
+          let count = 0;
+          for (const jid of judgeIds) {
+            const v = p.judgeCriteriaScores[jid];
+            if (v != null) {
+              sum += v;
+              count += 1;
+            }
+          }
+          if (count !== judgeIds.length) {
+            return { participant: p, value: null };
+          }
+          const total =
+            scoringType === "percentage" ? sum / Math.max(judgeIds.length, 1) : sum;
+          return { participant: p, value: Number(total.toFixed(2)) };
+        }
+
         let sum = 0;
         let count = 0;
         for (const jid of judgeIds) {
@@ -3902,15 +4064,23 @@ export default function AdminDashboard() {
             count += 1;
           }
         }
-        const avg = count === judgeIds.length ? sum / count : Number.POSITIVE_INFINITY;
-        return { participant: p, avg };
+        const avg =
+          count === judgeIds.length ? Number((sum / count).toFixed(2)) : null;
+        return { participant: p, value: avg };
       })
       .sort((a, b) => {
-        if (a.avg !== b.avg) return a.avg - b.avg;
+        const av = a.value ?? (scoringType === "ranking" ? Number.POSITIVE_INFINITY : -Infinity);
+        const bv = b.value ?? (scoringType === "ranking" ? Number.POSITIVE_INFINITY : -Infinity);
+        if (scoringType === "ranking") {
+          if (av !== bv) return av - bv;
+        } else {
+          if (av !== bv) return bv - av;
+        }
         return a.participant.participantName.localeCompare(b.participant.participantName);
       });
 
     return {
+      scoringType,
       judges: orderedJudges,
       judgeIds,
       rankByJudgeAndParticipant,
@@ -3921,6 +4091,7 @@ export default function AdminDashboard() {
     judgeAssignments,
     judges,
     selectedTabulationAwardResult,
+    contests,
   ]);
 
   const tabulationSubCriteriaTable = useMemo(() => {
@@ -6469,22 +6640,49 @@ export default function AdminDashboard() {
                           <th className="px-6 py-4">Represent</th>
                           <th className="px-6 py-4">Contestant</th>
                           {tabulationAwardsTable.judges.map((judge) => (
-                            <th key={judge.id} className="px-6 py-4 text-center" colSpan={2}>{judge.username}</th>
+                            <th
+                              key={judge.id}
+                              className="px-6 py-4 text-center"
+                              colSpan={tabulationAwardsTable.scoringType === "ranking" ? 2 : 1}
+                            >
+                              {judge.username}
+                            </th>
                           ))}
-                          <th className="px-6 py-4 text-right">Rank Total</th>
+                          <th className="px-6 py-4 text-right">
+                            {tabulationAwardsTable.scoringType === "ranking"
+                              ? "Rank Total"
+                              : "Total"}
+                          </th>
                         </tr>
                         <tr className="border-t border-slate-100 bg-slate-50 text-[9px] font-bold uppercase tracking-widest text-slate-400">
                           <th className="px-6 py-2"></th>
                           <th className="px-6 py-2"></th>
-                          {tabulationAwardsTable.judges.flatMap((judge) => ([
-                            <th key={"hdr-s-" + judge.id} className="px-6 py-2 text-center">Score</th>,
-                            <th key={"hdr-r-" + judge.id} className="px-6 py-2 text-center">Rank</th>,
-                          ]))}
+                          {tabulationAwardsTable.judges.flatMap((judge) => {
+                            const cols: ReactNode[] = [
+                              <th
+                                key={"hdr-s-" + judge.id}
+                                className="px-6 py-2 text-center"
+                              >
+                                Score
+                              </th>,
+                            ];
+                            if (tabulationAwardsTable.scoringType === "ranking") {
+                              cols.push(
+                                <th
+                                  key={"hdr-r-" + judge.id}
+                                  className="px-6 py-2 text-center"
+                                >
+                                  Rank
+                                </th>,
+                              );
+                            }
+                            return cols;
+                          })}
                           <th className="px-6 py-2"></th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
-                        {tabulationAwardsTable.rows.map(({ participant, avg }, index) => (
+                        {tabulationAwardsTable.rows.map(({ participant, value }, index) => (
                           <tr key={participant.participantId} className="group transition-colors hover:bg-slate-50/50">
                             <td className="px-6 py-4 text-slate-500 font-medium">{participant.teamName ?? "—"}</td>
                             <td className="px-6 py-4">
@@ -6492,20 +6690,35 @@ export default function AdminDashboard() {
                               <div className="text-[11px] font-medium text-slate-400">Contestant #{participant.contestantNumber}</div>
                             </td>
                             {tabulationAwardsTable.judges.flatMap((judge) => {
+                              const cells: ReactNode[] = [];
                               const score = participant.judgeCriteriaScores[judge.id];
-                              const rank = tabulationAwardsTable.rankByJudgeAndParticipant.get(judge.id + "-" + participant.participantId) ?? null;
-                              return ([
-                                <td key={"cell-s-" + participant.participantId + "-" + judge.id} className="px-6 py-4 text-center text-slate-600 font-medium">
+                              cells.push(
+                                <td
+                                  key={"cell-s-" + participant.participantId + "-" + judge.id}
+                                  className="px-6 py-4 text-center text-slate-600 font-medium"
+                                >
                                   {score !== undefined ? score.toFixed(2) : "—"}
                                 </td>,
-                                <td key={"cell-r-" + participant.participantId + "-" + judge.id} className="px-6 py-4 text-center font-bold text-[#1F4D3A]">
-                                  {rank ?? "—"}
-                                </td>,
-                              ]);
+                              );
+                              if (tabulationAwardsTable.scoringType === "ranking") {
+                                const rank =
+                                  tabulationAwardsTable.rankByJudgeAndParticipant.get(
+                                    judge.id + "-" + participant.participantId,
+                                  ) ?? null;
+                                cells.push(
+                                  <td
+                                    key={"cell-r-" + participant.participantId + "-" + judge.id}
+                                    className="px-6 py-4 text-center font-bold text-[#1F4D3A]"
+                                  >
+                                    {rank ?? "—"}
+                                  </td>,
+                                );
+                              }
+                              return cells;
                             })}
                             <td className="px-6 py-4 text-right">
                               <span className={"inline-flex h-8 w-12 items-center justify-center rounded-xl text-[11px] font-bold " + (index < 3 ? "bg-[#1F4D3A] text-white shadow-sm" : "bg-slate-100 text-slate-600")}>
-                                {avg !== Number.POSITIVE_INFINITY ? avg.toFixed(2) : "—"}
+                                {value !== null ? value.toFixed(2) : "—"}
                               </span>
                             </td>
                           </tr>
@@ -9536,283 +9749,439 @@ export default function AdminDashboard() {
                       </button>
                     </div>
                   </div>
-                </div>
-              </div>
-            )}
-            {isEventModalOpen && (
-              <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-md animate-in fade-in duration-300">
-                <div className="w-full max-w-md scale-100 rounded-[40px] border border-white/40 bg-white/90 p-8 shadow-[0_32px_64px_-12px_rgba(0,0,0,0.14)] backdrop-blur-2xl animate-in zoom-in-95 duration-300">
-                  <div className="mb-8 flex items-center justify-between">
-                    <div>
-                      <h3 className="text-xl font-black tracking-tight text-slate-900">
-                        {editingEventId === null ? "Create Event" : "Edit Event"}
-                      </h3>
-                      <p className="text-[13px] font-medium text-slate-500">
-                        {editingEventId === null ? "Launch a new tabulation event." : "Update event configuration."}
-                      </p>
-                    </div>
-                    <button 
-                      onClick={() => setIsEventModalOpen(false)}
-                      className="flex h-10 w-10 items-center justify-center rounded-2xl bg-slate-100 text-slate-500 transition-all hover:bg-slate-200 hover:text-slate-900 active:scale-90"
-                    >
-                      <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" /></svg>
-                    </button>
                   </div>
-
-                  <div className="space-y-6">
-                    <div className="space-y-2">
-                      <label className="text-[13px] font-bold text-slate-700">Event Name</label>
-                      <input
-                        placeholder="e.g. Annual Sports Fest 2026"
-                        value={eventName}
-                        onChange={(e) => setEventName(e.target.value)}
-                        className="w-full rounded-2xl border border-slate-200 bg-slate-50/50 px-5 py-3.5 text-[14px] font-medium text-slate-900 outline-none transition-all focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/10"
-                      />
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-4">
-                      <div className="space-y-2">
-                        <label className="text-[13px] font-bold text-slate-700">Code</label>
-                        <input
-                          placeholder="ASF-26"
-                          value={eventCode}
-                          onChange={(e) => setEventCode(e.target.value)}
-                          className="w-full rounded-2xl border border-slate-200 bg-slate-50/50 px-5 py-3.5 text-[14px] font-medium text-slate-900 outline-none transition-all focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/10"
-                        />
+                </div>
+            )}
+            {isEventModalOpen &&
+              typeof document !== "undefined" &&
+              createPortal(
+                <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 p-0 backdrop-blur-lg animate-in fade-in duration-300">
+                  <div className="flex max-h-[85vh] w-full max-w-md scale-100 flex-col overflow-hidden rounded-[40px] border border-white/20 bg-white p-0 shadow-[0_32px_64px_-12px_rgba(0,0,0,0.14)] animate-in zoom-in-95 duration-300">
+                    <div className="sticky top-0 z-10 flex items-center justify-between border-b border-white/20 bg-white px-8 py-6">
+                      <div>
+                        <h3 className="text-xl font-black tracking-tight text-slate-900">
+                          {editingEventId === null ? "Create Event" : "Edit Event"}
+                        </h3>
+                        <p className="text-[13px] font-medium text-slate-500">
+                          {editingEventId === null
+                            ? "Launch a new tabulation event."
+                            : "Update event configuration."}
+                        </p>
                       </div>
-                      <div className="space-y-2">
-                        <label className="text-[13px] font-bold text-slate-700">Year</label>
-                        <input
-                          type="number"
-                          placeholder="2026"
-                          value={eventYear}
-                          onChange={(e) => setEventYear(e.target.value)}
-                          className="w-full rounded-2xl border border-slate-200 bg-slate-50/50 px-5 py-3.5 text-[14px] font-medium text-slate-900 outline-none transition-all focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/10"
-                        />
-                      </div>
-                    </div>
-
-                    {(eventError || eventSuccess) && (
-                      <div className={`rounded-2xl px-4 py-3 text-[13px] font-bold flex items-center gap-2 ${
-                        eventError ? "bg-red-50 text-red-600 border border-red-100" : "bg-emerald-50 text-emerald-700 border border-emerald-100"
-                      }`}>
-                        <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          {eventError ? (
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                          ) : (
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                          )}
-                        </svg>
-                        {eventError ?? eventSuccess}
-                      </div>
-                    )}
-
-                    <div className="flex gap-3 pt-4">
                       <button
                         onClick={() => setIsEventModalOpen(false)}
-                        className="flex-1 rounded-2xl border border-slate-200 py-4 text-[14px] font-bold text-slate-600 transition-all hover:bg-slate-50 active:scale-95"
+                        className="flex h-10 w-10 items-center justify-center rounded-2xl bg-slate-100 text-slate-500 transition-all hover:bg-slate-200 hover:text-slate-900 active:scale-90"
                       >
-                        Cancel
-                      </button>
-                      <button
-                        onClick={handleSaveEvent}
-                        disabled={isSavingEvent}
-                        className="flex-[1.5] rounded-2xl bg-slate-900 py-4 text-[14px] font-bold text-white shadow-xl transition-all hover:bg-black active:scale-95 disabled:opacity-50"
-                      >
-                        {isSavingEvent ? (
-                          <div className="flex items-center justify-center gap-2">
-                            <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
-                            <span>Saving...</span>
-                          </div>
-                        ) : (
-                          editingEventId === null ? "Create Event" : "Update Event"
-                        )}
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-
-
-            {isContestModalOpen && (
-              <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-md animate-in fade-in duration-300">
-                <div className="w-full max-w-md scale-100 rounded-[40px] border border-white/40 bg-white/90 p-8 shadow-[0_32px_64px_-12px_rgba(0,0,0,0.14)] backdrop-blur-2xl animate-in zoom-in-95 duration-300">
-                  <div className="mb-8 flex items-center justify-between">
-                    <div>
-                      <h3 className="text-xl font-black tracking-tight text-slate-900">
-                        {editingContestId === null ? "Add Contest" : "Edit Contest"}
-                      </h3>
-                      <p className="text-[13px] font-medium text-slate-500">
-                        Configure a contest for this event.
-                      </p>
-                    </div>
-                    <button 
-                      onClick={() => setIsContestModalOpen(false)}
-                      className="flex h-10 w-10 items-center justify-center rounded-2xl bg-slate-100 text-slate-500 transition-all hover:bg-slate-200 hover:text-slate-900 active:scale-90"
-                    >
-                      <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" /></svg>
-                    </button>
-                  </div>
-
-                  <div className="space-y-6">
-                    <div className="space-y-2">
-                      <label className="text-[13px] font-bold text-slate-700">Select Event *</label>
-                      <div className="relative">
-                        <select
-                          value={selectedEventIdForContest ?? ""}
-                          onChange={(e) => setSelectedEventIdForContest(e.target.value ? Number(e.target.value) : null)}
-                          className="w-full appearance-none rounded-2xl border border-slate-200 bg-slate-50/50 px-4 py-3 text-[14px] font-medium text-slate-900 outline-none transition-all focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/10"
+                        <svg
+                          className="h-5 w-5"
+                          fill="none"
+                          viewBox="0 0 24 24"
+                          stroke="currentColor"
                         >
-                          <option value="">Choose an event</option>
-                          {events.filter(e => e.is_active).map((event) => (
-                            <option key={event.id} value={event.id}>{event.name} ({event.year})</option>
-                          ))}
-                        </select>
-                        <div className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-slate-400">
-                          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={2.5}
+                            d="M6 18L18 6M6 6l12 12"
+                          />
+                        </svg>
+                      </button>
+                    </div>
+
+                    <div className="flex-1 overflow-y-auto px-8 py-6 space-y-6 custom-scrollbar">
+                      <div className="space-y-2">
+                        <label className="text-[13px] font-bold text-slate-700">
+                          Event Name
+                        </label>
+                        <input
+                          placeholder="e.g. Annual Sports Fest 2026"
+                          value={eventName}
+                          onChange={(e) => setEventName(e.target.value)}
+                          className="w-full rounded-2xl border border-slate-200 bg-slate-50/50 px-5 py-3.5 text-[14px] font-medium text-slate-900 outline-none transition-all focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/10"
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="space-y-2">
+                          <label className="text-[13px] font-bold text-slate-700">
+                            Code
+                          </label>
+                          <input
+                            placeholder="ASF-26"
+                            value={eventCode}
+                            onChange={(e) => setEventCode(e.target.value)}
+                            className="w-full rounded-2xl border border-slate-200 bg-slate-50/50 px-5 py-3.5 text-[14px] font-medium text-slate-900 outline-none transition-all focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/10"
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <label className="text-[13px] font-bold text-slate-700">
+                            Year
+                          </label>
+                          <input
+                            type="number"
+                            placeholder="2026"
+                            value={eventYear}
+                            onChange={(e) => setEventYear(e.target.value)}
+                            className="w-full rounded-2xl border border-slate-200 bg-slate-50/50 px-5 py-3.5 text-[14px] font-medium text-slate-900 outline-none transition-all focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/10"
+                          />
                         </div>
                       </div>
-                    </div>
 
-                    <div className="space-y-2">
-                      <label className="text-[13px] font-bold text-slate-700">Contest Name *</label>
-                      <input
-                        placeholder="e.g. Swimsuit Competition"
-                        value={contestName}
-                        onChange={(e) => setContestName(e.target.value)}
-                        className="w-full rounded-2xl border border-slate-200 bg-slate-50/50 px-5 py-3.5 text-[14px] font-medium text-slate-900 outline-none transition-all focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/10"
-                      />
-                    </div>
-
-                    <div className="space-y-3">
-                      <label className="text-[13px] font-bold text-slate-700">Scoring System *</label>
-                      <div className="flex gap-2 rounded-2xl bg-slate-100 p-1">
-                        <button
-                          onClick={() => setContestScoringType("percentage")}
-                          className={`flex-1 rounded-xl py-2 text-[13px] font-bold transition-all ${
-                            contestScoringType === "percentage" ? "bg-white text-emerald-700 shadow-sm" : "text-slate-500 hover:text-slate-700"
+                      {(eventError || eventSuccess) && (
+                        <div
+                          className={`rounded-2xl px-4 py-3 text-[13px] font-bold flex items-center gap-2 ${
+                            eventError
+                              ? "bg-red-50 text-red-600 border border-red-100"
+                              : "bg-emerald-50 text-emerald-700 border border-emerald-100"
                           }`}
                         >
-                          Percentage
-                        </button>
-                        <button
-                          onClick={() => setContestScoringType("points")}
-                          className={`flex-1 rounded-xl py-2 text-[13px] font-bold transition-all ${
-                            contestScoringType === "points" ? "bg-white text-emerald-700 shadow-sm" : "text-slate-500 hover:text-slate-700"
-                          }`}
-                        >
-                          Raw Points
-                        </button>
-                      </div>
-                      <p className="px-2 text-[11px] font-medium text-slate-400 italic">
-                        {contestScoringType === "percentage" 
-                          ? "Scores are 0–100 with weighted criteria percentages." 
-                          : "Scores are total points based on raw criteria values."}
-                      </p>
-                    </div>
-
-                    <div className="space-y-3">
-                      <label className="text-[13px] font-bold text-slate-700">Divisions (Optional)</label>
-                      <div className="flex gap-2">
-                        <input
-                          placeholder="e.g. Male / Female"
-                          value={contestCategoryText}
-                          onChange={(e) => setContestCategoryText(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter") {
-                              e.preventDefault();
-                              const val = contestCategoryText.trim();
-                              if (val && !contestDivisionNames.includes(val)) {
-                                setContestDivisionNames(prev => [...prev, val]);
-                                setContestCategoryText("");
-                              }
-                            }
-                          }}
-                          className="flex-1 rounded-2xl border border-slate-200 bg-slate-50/50 px-5 py-3 text-[14px] font-medium text-slate-900 outline-none transition-all focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/10"
-                        />
-                        <button
-                          onClick={() => {
-                            const val = contestCategoryText.trim();
-                            if (val && !contestDivisionNames.includes(val)) {
-                              setContestDivisionNames(prev => [...prev, val]);
-                              setContestCategoryText("");
-                            }
-                          }}
-                          className="flex h-12 w-12 items-center justify-center rounded-2xl bg-emerald-600 text-white shadow-lg transition-all hover:bg-emerald-700 active:scale-90"
-                        >
-                          <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 4v16m8-8H4" /></svg>
-                        </button>
-                      </div>
-
-                      {contestDivisionNames.length > 0 && (
-                        <div className="flex flex-wrap gap-2 pt-1">
-                          {contestDivisionNames.map((name) => (
-                            <button
-                              key={name}
-                              onClick={() => setContestDivisionNames(prev => prev.filter(n => n !== name))}
-                              className="group flex items-center gap-2 rounded-xl bg-emerald-50 px-3 py-1.5 text-[12px] font-bold text-emerald-700 ring-1 ring-emerald-600/10 transition-all hover:bg-red-50 hover:text-red-700 hover:ring-red-600/10"
-                            >
-                              <span>{name}</span>
-                              <svg className="h-3 w-3 opacity-50 group-hover:opacity-100" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" /></svg>
-                            </button>
-                          ))}
+                          <svg
+                            className="h-4 w-4"
+                            fill="none"
+                            viewBox="0 0 24 24"
+                            stroke="currentColor"
+                          >
+                            {eventError ? (
+                              <path
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                strokeWidth={2}
+                                d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                              />
+                            ) : (
+                              <path
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                strokeWidth={2}
+                                d="M5 13l4 4L19 7"
+                              />
+                            )}
+                          </svg>
+                          {eventError ?? eventSuccess}
                         </div>
                       )}
-                    </div>
 
-                    {(contestError || contestSuccess) && (
-                      <div className={`rounded-2xl px-4 py-3 text-[13px] font-bold flex items-center gap-2 ${
-                        contestError ? "bg-red-50 text-red-600 border border-red-100" : "bg-emerald-50 text-emerald-700 border border-emerald-100"
-                      }`}>
-                        <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          {contestError ? (
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      <div className="sticky bottom-0 -mx-8 flex gap-3 bg-white/85 px-8 pt-4 pb-6 backdrop-blur-2xl">
+                        <button
+                          onClick={() => setIsEventModalOpen(false)}
+                          className="flex-1 rounded-2xl border border-slate-200 py-4 text-[14px] font-bold text-slate-600 transition-all hover:bg-slate-50 active:scale-95"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          onClick={handleSaveEvent}
+                          disabled={isSavingEvent}
+                          className="flex-[1.5] rounded-2xl bg-slate-900 py-4 text-[14px] font-bold text-white shadow-xl transition-all hover:bg-black active:scale-95 disabled:opacity-50"
+                        >
+                          {isSavingEvent ? (
+                            <div className="flex items-center justify-center gap-2">
+                              <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                              <span>Saving...</span>
+                            </div>
+                          ) : editingEventId === null ? (
+                            "Create Event"
                           ) : (
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                            "Update Event"
                           )}
-                        </svg>
-                        {contestError ?? contestSuccess}
+                        </button>
                       </div>
-                    )}
-
-                    <div className="flex gap-3 pt-4">
-                      <button
-                        onClick={() => setIsContestModalOpen(false)}
-                        className="flex-1 rounded-2xl border border-slate-200 py-4 text-[14px] font-bold text-slate-600 transition-all hover:bg-slate-50 active:scale-95"
-                      >
-                        Cancel
-                      </button>
-                      <button
-                        onClick={handleSaveContest}
-                        disabled={isSavingContest}
-                        className="flex-[1.5] rounded-2xl bg-slate-900 py-4 text-[14px] font-bold text-white shadow-xl transition-all hover:bg-black active:scale-95 disabled:opacity-50"
-                      >
-                        {isSavingContest ? (
-                          <div className="flex items-center justify-center gap-2">
-                            <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
-                            <span>Saving...</span>
-                          </div>
-                        ) : (
-                          editingContestId === null ? "Create Contest" : "Update Contest"
-                        )}
-                      </button>
                     </div>
                   </div>
-                </div>
-              </div>
-            )}
+                </div>,
+                document.body,
+              )}
 
 
-            {isCriteriaModalOpen && (
-              <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-md animate-in fade-in duration-300">
-                <div className="w-full max-w-lg scale-100 rounded-[40px] border border-white/40 bg-white/90 p-8 shadow-[0_32px_64px_-12px_rgba(0,0,0,0.14)] backdrop-blur-2xl animate-in zoom-in-95 duration-300">
-                  <div className="mb-8 flex items-center justify-between">
+            {isContestModalOpen &&
+              typeof document !== "undefined" &&
+              createPortal(
+                <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 p-0 backdrop-blur-lg animate-in fade-in duration-300">
+                  <div className="flex max-h-[92vh] w-full max-w-2xl scale-100 flex-col overflow-hidden rounded-[40px] border border-white/20 bg-white p-0 shadow-[0_32px_64px_-12px_rgba(0,0,0,0.14)] animate-in zoom-in-95 duration-300">
+                    <div className="sticky top-0 z-10 flex items-center justify-between border-b border-white/20 bg-white px-6 py-4">
+                      <div>
+                        <h3 className="text-lg font-black tracking-tight text-slate-900">
+                          {editingContestId === null ? "Add Contest" : "Edit Contest"}
+                        </h3>
+                        <p className="text-[12px] font-medium text-slate-500">
+                          Configure a contest for this event.
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => setIsContestModalOpen(false)}
+                        className="flex h-10 w-10 items-center justify-center rounded-2xl bg-slate-100 text-slate-500 transition-all hover:bg-slate-200 hover:text-slate-900 active:scale-90"
+                      >
+                        <svg
+                          className="h-5 w-5"
+                          fill="none"
+                          viewBox="0 0 24 24"
+                          stroke="currentColor"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={2.5}
+                            d="M6 18L18 6M6 6l12 12"
+                          />
+                        </svg>
+                      </button>
+                    </div>
+
+                    <div className="flex-1 overflow-y-auto px-6 py-4 custom-scrollbar">
+                      <div className="grid gap-4 md:grid-cols-2">
+                        <div className="space-y-2">
+                          <label className="text-[13px] font-bold text-slate-700">
+                            Select Event *
+                          </label>
+                          <div className="relative">
+                            <select
+                              value={selectedEventIdForContest ?? ""}
+                              onChange={(e) =>
+                                setSelectedEventIdForContest(
+                                  e.target.value ? Number(e.target.value) : null,
+                                )
+                              }
+                              className="w-full appearance-none rounded-2xl border border-slate-200 bg-slate-50/50 px-4 py-3 text-[14px] font-medium text-slate-900 outline-none transition-all focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/10"
+                            >
+                              <option value="">Choose an event</option>
+                              {events
+                                .filter((e) => e.is_active)
+                                .map((event) => (
+                                  <option key={event.id} value={event.id}>
+                                    {event.name} ({event.year})
+                                  </option>
+                                ))}
+                            </select>
+                            <div className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-slate-400">
+                              <svg
+                                className="h-4 w-4"
+                                fill="none"
+                                viewBox="0 0 24 24"
+                                stroke="currentColor"
+                              >
+                                <path
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  strokeWidth={2}
+                                  d="M19 9l-7 7-7-7"
+                                />
+                              </svg>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="space-y-2">
+                          <label className="text-[13px] font-bold text-slate-700">
+                            Contest Name *
+                          </label>
+                          <input
+                            placeholder="e.g. Swimsuit Competition"
+                            value={contestName}
+                            onChange={(e) => setContestName(e.target.value)}
+                            className="w-full rounded-2xl border border-slate-200 bg-slate-50/50 px-5 py-3 text-[14px] font-medium text-slate-900 outline-none transition-all focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/10"
+                          />
+                        </div>
+
+                        <div className="space-y-3 md:col-span-2">
+                          <label className="text-[13px] font-bold text-slate-700">
+                            Scoring System *
+                          </label>
+                          <div className="flex gap-2 rounded-2xl bg-slate-100 p-1">
+                            <button
+                              onClick={() => setContestScoringType("percentage")}
+                              className={`flex-1 rounded-xl py-1.5 text-[12px] font-bold transition-all ${
+                                contestScoringType === "percentage"
+                                  ? "bg-white text-emerald-700 shadow-sm"
+                                  : "text-slate-500 hover:text-slate-700"
+                              }`}
+                            >
+                              Percentage
+                            </button>
+                            <button
+                              onClick={() => setContestScoringType("ranking")}
+                              className={`flex-1 rounded-xl py-1.5 text-[12px] font-bold transition-all ${
+                                contestScoringType === "ranking"
+                                  ? "bg-white text-emerald-700 shadow-sm"
+                                  : "text-slate-500 hover:text-slate-700"
+                              }`}
+                            >
+                              Ranking
+                            </button>
+                            <button
+                              onClick={() => setContestScoringType("points")}
+                              className={`flex-1 rounded-xl py-1.5 text-[12px] font-bold transition-all ${
+                                contestScoringType === "points"
+                                  ? "bg-white text-emerald-700 shadow-sm"
+                                  : "text-slate-500 hover:text-slate-700"
+                              }`}
+                            >
+                              Points
+                            </button>
+                          </div>
+                          <p className="px-2 text-[11px] font-medium text-slate-400 italic">
+                            {contestScoringType === "percentage"
+                              ? "Scores are 0–100 with weighted criteria percentages."
+                              : contestScoringType === "ranking"
+                                ? "Judges rank participants per criteria. Lowest total rank wins."
+                                : "Scores are total points based on raw criteria values."}
+                          </p>
+                        </div>
+
+                        <div className="space-y-3 md:col-span-2">
+                          <label className="text-[13px] font-bold text-slate-700">
+                            Divisions (Optional)
+                          </label>
+                          <div className="flex gap-2">
+                            <input
+                              placeholder="e.g. Male / Female"
+                              value={contestCategoryText}
+                              onChange={(e) => setContestCategoryText(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") {
+                                  e.preventDefault();
+                                  const val = contestCategoryText.trim();
+                                  if (val && !contestDivisionNames.includes(val)) {
+                                    setContestDivisionNames((prev) => [...prev, val]);
+                                    setContestCategoryText("");
+                                  }
+                                }
+                              }}
+                              className="flex-1 rounded-2xl border border-slate-200 bg-slate-50/50 px-5 py-3 text-[14px] font-medium text-slate-900 outline-none transition-all focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/10"
+                            />
+                            <button
+                              onClick={() => {
+                                const val = contestCategoryText.trim();
+                                if (val && !contestDivisionNames.includes(val)) {
+                                  setContestDivisionNames((prev) => [...prev, val]);
+                                  setContestCategoryText("");
+                                }
+                              }}
+                              className="flex h-10 w-10 items-center justify-center rounded-2xl bg-emerald-600 text-white shadow-lg transition-all hover:bg-emerald-700 active:scale-90"
+                            >
+                              <svg
+                                className="h-6 w-6"
+                                fill="none"
+                                viewBox="0 0 24 24"
+                                stroke="currentColor"
+                              >
+                                <path
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  strokeWidth={2.5}
+                                  d="M12 4v16m8-8H4"
+                                />
+                              </svg>
+                            </button>
+                          </div>
+
+                          {contestDivisionNames.length > 0 && (
+                            <div className="flex flex-wrap gap-2 pt-1">
+                              {contestDivisionNames.map((name) => (
+                                <button
+                                  key={name}
+                                  onClick={() =>
+                                    setContestDivisionNames((prev) =>
+                                      prev.filter((n) => n !== name),
+                                    )
+                                  }
+                                  className="group flex items-center gap-2 rounded-xl bg-emerald-50 px-3 py-1.5 text-[12px] font-bold text-emerald-700 ring-1 ring-emerald-600/10 transition-all hover:bg-red-50 hover:text-red-700 hover:ring-red-600/10"
+                                >
+                                  <span>{name}</span>
+                                  <svg
+                                    className="h-3 w-3 opacity-50 group-hover:opacity-100"
+                                    fill="none"
+                                    viewBox="0 0 24 24"
+                                    stroke="currentColor"
+                                  >
+                                    <path
+                                      strokeLinecap="round"
+                                      strokeLinejoin="round"
+                                      strokeWidth={2.5}
+                                      d="M6 18L18 6M6 6l12 12"
+                                    />
+                                  </svg>
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+
+                        {(contestError || contestSuccess) && (
+                          <div
+                            className={`rounded-2xl px-4 py-3 text-[13px] font-bold flex items-center gap-2 ${
+                              contestError
+                                ? "bg-red-50 text-red-600 border border-red-100"
+                                : "bg-emerald-50 text-emerald-700 border border-emerald-100"
+                            } md:col-span-2`}
+                          >
+                            <svg
+                              className="h-4 w-4"
+                              fill="none"
+                              viewBox="0 0 24 24"
+                              stroke="currentColor"
+                            >
+                              {contestError ? (
+                                <path
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  strokeWidth={2}
+                                  d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                                />
+                              ) : (
+                                <path
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  strokeWidth={2}
+                                  d="M5 13l4 4L19 7"
+                                />
+                              )}
+                            </svg>
+                            {contestError ?? contestSuccess}
+                          </div>
+                        )}
+
+                        <div className="sticky bottom-0 -mx-6 mt-6 flex gap-3 bg-white/85 px-6 pt-3 pb-4 backdrop-blur-2xl md:col-span-2">
+                          <button
+                            onClick={() => setIsContestModalOpen(false)}
+                            className="flex-1 rounded-2xl border border-slate-200 py-4 text-[14px] font-bold text-slate-600 transition-all hover:bg-slate-50 active:scale-95"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            onClick={handleSaveContest}
+                            disabled={isSavingContest}
+                            className="flex-[1.5] rounded-2xl bg-slate-900 py-4 text-[14px] font-bold text-white shadow-xl transition-all hover:bg-black active:scale-95 disabled:opacity-50"
+                          >
+                            {isSavingContest ? (
+                              <div className="flex items-center justify-center gap-2">
+                                <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                                <span>Saving...</span>
+                              </div>
+                            ) : editingContestId === null ? (
+                              "Create Contest"
+                            ) : (
+                              "Update Contest"
+                            )}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>,
+                document.body,
+              )}
+
+
+            {isCriteriaModalOpen &&
+              typeof document !== "undefined" &&
+              createPortal(
+                <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 p-4 backdrop-blur-lg animate-in fade-in duration-300">
+                  <div className="flex max-h-[92vh] w-full max-w-2xl scale-100 flex-col overflow-hidden rounded-[40px] border border-white/20 bg-white p-0 shadow-[0_32px_64px_-12px_rgba(0,0,0,0.14)] animate-in zoom-in-95 duration-300">
+                  <div className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-100 bg-white px-6 py-4">
                     <div>
-                      <h3 className="text-xl font-black tracking-tight text-slate-900">
+                      <h3 className="text-lg font-black tracking-tight text-slate-900">
                         {editingCriteriaId === null ? "Add Criteria" : "Edit Criteria"}
                       </h3>
-                      <p className="text-[13px] font-medium text-slate-500">
+                      <p className="text-[12px] font-medium text-slate-500">
                         {editingCriteriaId === null ? "Define scoring criteria categories and items." : "Update criteria details."}
                       </p>
                     </div>
@@ -9824,7 +10193,8 @@ export default function AdminDashboard() {
                     </button>
                   </div>
 
-                  <div className="max-h-[60vh] overflow-y-auto pr-2 space-y-6 custom-scrollbar">
+                  <div className="flex-1 overflow-y-auto bg-white px-6 py-4 custom-scrollbar">
+                    <div className="grid gap-4 md:grid-cols-2">
                     {editingCriteriaId === null ? (
                       <>
                         <div className="space-y-2">
@@ -9856,7 +10226,7 @@ export default function AdminDashboard() {
                           />
                         </div>
 
-                        <div className="space-y-4">
+                        <div className="space-y-4 md:col-span-2">
                           <div className="flex items-center justify-between">
                             <label className="text-[13px] font-bold text-slate-700">Criteria Items</label>
                             <button
@@ -9870,29 +10240,40 @@ export default function AdminDashboard() {
 
                           <div className="space-y-3">
                             {criteriaItems.map((item, index) => (
-                              <div key={index} className="group relative grid grid-cols-[1fr_100px_40px] gap-3 rounded-3xl border border-slate-100 bg-slate-50/30 p-4 transition-all hover:bg-white hover:shadow-sm">
+                              <div
+                                key={index}
+                                className="group relative grid gap-3 rounded-3xl border border-slate-100 bg-slate-50/30 p-4 transition-all hover:bg-white hover:shadow-sm md:grid-cols-[1fr_140px_40px]"
+                              >
                                 <div className="space-y-1">
+                                  <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                                    Criteria Name
+                                  </div>
                                   <input
-                                    placeholder="Criteria Name"
+                                    placeholder="e.g. Stage Presence"
                                     value={item.name}
                                     onChange={(e) => handleChangeCriteriaItem(index, "name", e.target.value)}
-                                    className="w-full bg-transparent text-[13px] font-bold text-slate-800 outline-none placeholder:text-slate-300"
+                                    className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-2.5 text-[13px] font-medium text-slate-900 outline-none transition-all focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10"
                                   />
                                 </div>
                                 <div className="space-y-1">
+                                  <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                                    Points
+                                  </div>
                                   <input
                                     type="number"
-                                    placeholder="Points"
+                                    placeholder="0"
                                     value={item.weight}
                                     onChange={(e) => handleChangeCriteriaItem(index, "weight", e.target.value)}
-                                    className="w-full bg-transparent text-[13px] font-bold text-emerald-600 outline-none placeholder:text-slate-300"
+                                    className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-2.5 text-[13px] font-bold text-slate-900 outline-none transition-all focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/10"
                                   />
                                 </div>
                                 <button
-                                  onClick={() => setCriteriaItems(prev => prev.filter((_, i) => i !== index))}
-                                  className="flex h-8 w-8 items-center justify-center rounded-xl text-slate-300 transition-all hover:bg-red-50 hover:text-red-500"
+                                  onClick={() => setCriteriaItems((prev) => prev.filter((_, i) => i !== index))}
+                                  className="mt-6 flex h-10 w-10 items-center justify-center rounded-2xl bg-slate-100 text-slate-400 transition-all hover:bg-red-50 hover:text-red-600 active:scale-90 md:mt-5"
                                 >
-                                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                                  <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" />
+                                  </svg>
                                 </button>
                               </div>
                             ))}
@@ -9901,7 +10282,7 @@ export default function AdminDashboard() {
                       </>
                     ) : (
                       <>
-                        <div className="space-y-2">
+                        <div className="space-y-2 md:col-span-2">
                           <label className="text-[13px] font-bold text-slate-700">Contest</label>
                           <div className="rounded-2xl border border-slate-100 bg-slate-50/50 px-5 py-3.5 text-[14px] font-bold text-slate-400">
                             {contests.find(c => c.id === selectedContestIdForCriteria)?.name ?? "Unknown Contest"}
@@ -9936,7 +10317,7 @@ export default function AdminDashboard() {
                           />
                         </div>
 
-                        <div className="space-y-2">
+                        <div className="space-y-2 md:col-span-2">
                           <label className="text-[13px] font-bold text-slate-700">Description</label>
                           <textarea
                             rows={3}
@@ -9947,11 +10328,8 @@ export default function AdminDashboard() {
                         </div>
                       </>
                     )}
-                  </div>
-
-                  <div className="mt-8 space-y-4">
                     {(criteriaError || criteriaSuccess) && (
-                      <div className={`rounded-2xl px-4 py-3 text-[13px] font-bold flex items-center gap-2 ${
+                      <div className={`rounded-2xl px-4 py-3 text-[13px] font-bold flex items-center gap-2 md:col-span-2 ${
                         criteriaError ? "bg-red-50 text-red-600 border border-red-100" : "bg-emerald-50 text-emerald-700 border border-emerald-100"
                       }`}>
                         <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -9965,7 +10343,7 @@ export default function AdminDashboard() {
                       </div>
                     )}
 
-                    <div className="flex gap-3">
+                    <div className="sticky bottom-0 -mx-6 mt-6 flex gap-3 border-t border-slate-100 bg-white px-6 pt-3 pb-4 md:col-span-2">
                       <button
                         onClick={() => setIsCriteriaModalOpen(false)}
                         className="flex-1 rounded-2xl border border-slate-200 py-4 text-[14px] font-bold text-slate-600 transition-all hover:bg-slate-50 active:scale-95"
@@ -9987,21 +10365,25 @@ export default function AdminDashboard() {
                         )}
                       </button>
                     </div>
+                    </div>
                   </div>
                 </div>
-              </div>
+              </div>,
+              document.body,
             )}
 
 
-            {isAwardModalOpen && (
-              <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-md animate-in fade-in duration-300">
-                <div className="w-full max-w-lg scale-100 rounded-[40px] border border-white/40 bg-white/90 p-8 shadow-[0_32px_64px_-12px_rgba(0,0,0,0.14)] backdrop-blur-2xl animate-in zoom-in-95 duration-300">
-                  <div className="mb-8 flex items-center justify-between">
+            {isAwardModalOpen &&
+              typeof document !== "undefined" &&
+              createPortal(
+                <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 p-4 backdrop-blur-lg animate-in fade-in duration-300">
+                  <div className="flex max-h-[92vh] w-full max-w-4xl scale-100 flex-col overflow-hidden rounded-[40px] border border-white/20 bg-white p-0 shadow-[0_32px_64px_-12px_rgba(0,0,0,0.14)] animate-in zoom-in-95 duration-300">
+                  <div className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-100 bg-white px-6 py-4">
                     <div>
-                      <h3 className="text-xl font-black tracking-tight text-slate-900">
+                      <h3 className="text-lg font-black tracking-tight text-slate-900">
                         {editingAwardId === null ? "Add Award" : "Edit Award"}
                       </h3>
-                      <p className="text-[13px] font-medium text-slate-500">
+                      <p className="text-[12px] font-medium text-slate-500">
                         Configure awards for this event.
                       </p>
                     </div>
@@ -10013,37 +10395,47 @@ export default function AdminDashboard() {
                     </button>
                   </div>
 
-                  <div className="max-h-[60vh] overflow-y-auto pr-2 space-y-6 custom-scrollbar">
-                    <div className="space-y-2">
-                      <label className="text-[13px] font-bold text-slate-700">Award Name *</label>
-                      <input
-                        placeholder="e.g. Best in Talent"
-                        value={awardName}
-                        onChange={(e) => setAwardName(e.target.value)}
-                        className="w-full rounded-2xl border border-slate-200 bg-slate-50/50 px-5 py-3.5 text-[14px] font-medium text-slate-900 outline-none transition-all focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/10"
-                      />
-                    </div>
+                  <div className="flex-1 overflow-y-auto bg-white px-6 py-4 custom-scrollbar">
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <div className="space-y-2">
+                        <label className="text-[13px] font-bold text-slate-700">Award Name *</label>
+                        <input
+                          placeholder="e.g. Best in Talent"
+                          value={awardName}
+                          onChange={(e) => setAwardName(e.target.value)}
+                          className="w-full rounded-2xl border border-slate-200 bg-slate-50/50 px-5 py-3.5 text-[14px] font-medium text-slate-900 outline-none transition-all focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/10"
+                        />
+                      </div>
 
-                    <div className="space-y-2">
-                      <label className="text-[13px] font-bold text-slate-700">Select Event *</label>
-                      <div className="relative">
-                        <select
-                          value={selectedEventIdForAward ?? ""}
-                          onChange={(e) => setSelectedEventIdForAward(e.target.value ? Number(e.target.value) : null)}
-                          className="w-full appearance-none rounded-2xl border border-slate-200 bg-slate-50/50 px-4 py-3 text-[14px] font-medium text-slate-900 outline-none transition-all focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/10"
-                        >
-                          <option value="">Choose an event</option>
-                          {events.filter(e => e.is_active).map((event) => (
-                            <option key={event.id} value={event.id}>{event.name} ({event.year})</option>
-                          ))}
-                        </select>
-                        <div className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-slate-400">
-                          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+                      <div className="space-y-2">
+                        <label className="text-[13px] font-bold text-slate-700">Select Event *</label>
+                        <div className="relative">
+                          <select
+                            value={selectedEventIdForAward ?? ""}
+                            onChange={(e) =>
+                              setSelectedEventIdForAward(
+                                e.target.value ? Number(e.target.value) : null,
+                              )
+                            }
+                            className="w-full appearance-none rounded-2xl border border-slate-200 bg-slate-50/50 px-4 py-3 text-[14px] font-medium text-slate-900 outline-none transition-all focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/10"
+                          >
+                            <option value="">Choose an event</option>
+                            {events
+                              .filter((e) => e.is_active)
+                              .map((event) => (
+                                <option key={event.id} value={event.id}>
+                                  {event.name} ({event.year})
+                                </option>
+                              ))}
+                          </select>
+                          <div className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-slate-400">
+                            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                            </svg>
+                          </div>
                         </div>
                       </div>
-                    </div>
 
-                    <div className="grid grid-cols-2 gap-4">
                       <div className="space-y-2">
                         <label className="text-[13px] font-bold text-slate-700">Award Type *</label>
                         <select
@@ -10059,121 +10451,136 @@ export default function AdminDashboard() {
                         <label className="text-[13px] font-bold text-slate-700">Limit to Contest</label>
                         <select
                           value={awardContestId ?? ""}
-                          onChange={(e) => setAwardContestId(e.target.value ? Number(e.target.value) : null)}
+                          onChange={(e) =>
+                            setAwardContestId(e.target.value ? Number(e.target.value) : null)
+                          }
                           className="w-full appearance-none rounded-2xl border border-slate-200 bg-slate-50/50 px-4 py-3 text-[14px] font-medium text-slate-900 outline-none transition-all focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/10"
                         >
                           <option value="">All contests</option>
-                          {contests.filter(c => (selectedEventIdForAward ?? activeEventId) === null ? true : c.event_id === (selectedEventIdForAward ?? activeEventId)).map((contest) => (
-                            <option key={contest.id} value={contest.id}>{contest.name}</option>
-                          ))}
+                          {contests
+                            .filter((c) =>
+                              (selectedEventIdForAward ?? activeEventId) === null
+                                ? true
+                                : c.event_id === (selectedEventIdForAward ?? activeEventId),
+                            )
+                            .map((contest) => (
+                              <option key={contest.id} value={contest.id}>
+                                {contest.name}
+                              </option>
+                            ))}
                         </select>
                       </div>
-                    </div>
 
-                    {awardType === "criteria" && (
-                      <div className="space-y-2">
-                        <label className="text-[13px] font-bold text-slate-700">Linked Criteria *</label>
-                        <div className="relative" ref={awardCriteriaDropdownRef}>
-                          <button
-                            onClick={() => setIsAwardCriteriaDropdownOpen(!isAwardCriteriaDropdownOpen)}
-                            className="flex w-full items-center justify-between rounded-2xl border border-slate-200 bg-slate-50/50 px-4 py-3 text-[14px] font-medium text-slate-900 outline-none transition-all focus:border-emerald-500 focus:bg-white"
-                          >
-                            <span className={awardCriteriaIds.length === 0 ? "text-slate-400" : "text-slate-900"}>
-                              {awardCriteriaIds.length === 0 ? "Select criteria" : `${awardCriteriaIds.length} criteria selected`}
-                            </span>
-                            <svg className={`h-4 w-4 text-slate-400 transition-transform ${isAwardCriteriaDropdownOpen ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
-                          </button>
-                          
-                          {isAwardCriteriaDropdownOpen && (
-                            <div className="absolute left-0 top-full z-[110] mt-2 max-h-60 w-full overflow-auto rounded-3xl border border-slate-100 bg-white p-2 shadow-2xl animate-in fade-in zoom-in-95 duration-200">
-                              {criteriaForActiveEvent.length === 0 ? (
-                                <div className="px-4 py-3 text-[13px] text-slate-400">No criteria available.</div>
-                              ) : (
-                                Array.from(new Set(criteriaForActiveEvent.map(c => c.category || "Uncategorized"))).map((category) => {
-                                  const criteriaInCategory = criteriaForActiveEvent.filter(c => (c.category || "Uncategorized") === category);
-                                  const isExpanded = expandedAwardCategories.has(category);
-                                  return (
-                                    <div key={category} className="mb-1">
-                                      <button
-                                        onClick={() => {
-                                          const next = new Set(expandedAwardCategories);
-                                          if (next.has(category)) next.delete(category);
-                                          else next.add(category);
-                                          setExpandedAwardCategories(next);
-                                        }}
-                                        className="flex w-full items-center justify-between rounded-xl px-3 py-2 text-left hover:bg-slate-50"
-                                      >
-                                        <span className="text-[12px] font-bold text-slate-700">{category}</span>
-                                        <svg className={`h-3 w-3 text-slate-400 transition-transform ${isExpanded ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M19 9l-7 7-7-7" /></svg>
-                                      </button>
-                                      {isExpanded && (
-                                        <div className="ml-2 mt-1 space-y-1 pl-4 border-l-2 border-slate-100">
-                                          {criteriaInCategory.map((criterion) => (
-                                            <label key={criterion.id} className="flex items-center gap-3 rounded-lg px-2 py-1.5 transition-colors hover:bg-emerald-50/50 cursor-pointer">
-                                              <input
-                                                type="checkbox"
-                                                checked={awardCriteriaIds.includes(criterion.id)}
-                                                onChange={(e) => {
-                                                  if (e.target.checked) setAwardCriteriaIds(prev => [...prev, criterion.id]);
-                                                  else setAwardCriteriaIds(prev => prev.filter(id => id !== criterion.id));
-                                                }}
-                                                className="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500/20"
-                                              />
-                                              <span className="text-[12px] font-medium text-slate-600">{criterion.name}</span>
-                                            </label>
-                                          ))}
-                                        </div>
-                                      )}
-                                    </div>
-                                  );
-                                })
-                              )}
-                            </div>
-                          )}
+                      {awardType === "criteria" && (
+                        <div className="space-y-2" ref={awardCriteriaDropdownRef}>
+                          <label className="text-[13px] font-bold text-slate-700">Linked Criteria *</label>
+                          <div className="relative">
+                            <button
+                              onClick={() =>
+                                setIsAwardCriteriaDropdownOpen(!isAwardCriteriaDropdownOpen)
+                              }
+                              className="flex w-full items-center justify-between rounded-2xl border border-slate-200 bg-slate-50/50 px-4 py-3 text-[14px] font-medium text-slate-900 outline-none transition-all focus:border-emerald-500 focus:bg-white"
+                            >
+                              <span className={awardCriteriaIds.length === 0 ? "text-slate-400" : "text-slate-900"}>
+                                {awardCriteriaIds.length === 0
+                                  ? "Select criteria"
+                                  : `${awardCriteriaIds.length} criteria selected`}
+                              </span>
+                              <svg className={`h-4 w-4 text-slate-400 transition-transform ${isAwardCriteriaDropdownOpen ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                              </svg>
+                            </button>
+
+                            {isAwardCriteriaDropdownOpen && (
+                              <div className="absolute left-0 top-full z-[110] mt-2 max-h-60 w-full overflow-auto rounded-3xl border border-slate-100 bg-white p-2 shadow-2xl animate-in fade-in zoom-in-95 duration-200">
+                                {criteriaForActiveEvent.length === 0 ? (
+                                  <div className="px-4 py-3 text-[13px] text-slate-400">No criteria available.</div>
+                                ) : (
+                                  Array.from(new Set(criteriaForActiveEvent.map((c) => c.category || "Uncategorized"))).map((category) => {
+                                    const criteriaInCategory = criteriaForActiveEvent.filter((c) => (c.category || "Uncategorized") === category);
+                                    const isExpanded = expandedAwardCategories.has(category);
+                                    return (
+                                      <div key={category} className="mb-1">
+                                        <button
+                                          onClick={() => {
+                                            const next = new Set(expandedAwardCategories);
+                                            if (next.has(category)) next.delete(category);
+                                            else next.add(category);
+                                            setExpandedAwardCategories(next);
+                                          }}
+                                          className="flex w-full items-center justify-between rounded-xl px-3 py-2 text-left hover:bg-slate-50"
+                                        >
+                                          <span className="text-[12px] font-bold text-slate-700">{category}</span>
+                                          <svg className={`h-3 w-3 text-slate-400 transition-transform ${isExpanded ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M19 9l-7 7-7-7" />
+                                          </svg>
+                                        </button>
+                                        {isExpanded && (
+                                          <div className="ml-2 mt-1 space-y-1 border-l-2 border-slate-100 pl-4">
+                                            {criteriaInCategory.map((criterion) => (
+                                              <label key={criterion.id} className="flex items-center gap-3 rounded-lg px-2 py-1.5 transition-colors hover:bg-emerald-50/50 cursor-pointer">
+                                                <input
+                                                  type="checkbox"
+                                                  checked={awardCriteriaIds.includes(criterion.id)}
+                                                  onChange={(e) => {
+                                                    if (e.target.checked) setAwardCriteriaIds((prev) => [...prev, criterion.id]);
+                                                    else setAwardCriteriaIds((prev) => prev.filter((id) => id !== criterion.id));
+                                                  }}
+                                                  className="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500/20"
+                                                />
+                                                <span className="text-[12px] font-medium text-slate-600">{criterion.name}</span>
+                                              </label>
+                                            ))}
+                                          </div>
+                                        )}
+                                      </div>
+                                    );
+                                  })
+                                )}
+                              </div>
+                            )}
+                          </div>
                         </div>
+                      )}
+
+                      <div className={`space-y-2 ${awardType === "criteria" ? "" : "md:col-span-2"}`}>
+                        <label className="text-[13px] font-bold text-slate-700">Description</label>
+                        <textarea
+                          rows={3}
+                          value={awardDescription}
+                          onChange={(e) => setAwardDescription(e.target.value)}
+                          className="w-full resize-none rounded-2xl border border-slate-200 bg-slate-50/50 px-5 py-3.5 text-[14px] font-medium text-slate-900 outline-none transition-all focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/10"
+                          placeholder="Describe this award"
+                        />
                       </div>
-                    )}
 
-                    <div className="space-y-2">
-                      <label className="text-[13px] font-bold text-slate-700">Description</label>
-                      <textarea
-                        rows={3}
-                        value={awardDescription}
-                        onChange={(e) => setAwardDescription(e.target.value)}
-                        className="w-full resize-none rounded-2xl border border-slate-200 bg-slate-50/50 px-5 py-3.5 text-[14px] font-medium text-slate-900 outline-none transition-all focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/10"
-                        placeholder="Describe this award"
-                      />
-                    </div>
-
-                    <div className="flex items-center gap-3 rounded-2xl bg-slate-50/50 p-4 border border-slate-100">
-                      <input
-                        id="award-active"
-                        type="checkbox"
-                        checked={awardIsActive}
-                        onChange={(e) => setAwardIsActive(e.target.checked)}
-                        className="h-5 w-5 rounded-lg border-slate-300 text-emerald-600 focus:ring-emerald-500/20"
-                      />
-                      <label htmlFor="award-active" className="text-[13px] font-bold text-slate-700 cursor-pointer">Award is active</label>
-                    </div>
-                  </div>
-
-                  <div className="mt-8 space-y-4">
-                    {(awardError || awardSuccess) && (
-                      <div className={`rounded-2xl px-4 py-3 text-[13px] font-bold flex items-center gap-2 ${
-                        awardError ? "bg-red-50 text-red-600 border border-red-100" : "bg-emerald-50 text-emerald-700 border border-emerald-100"
-                      }`}>
-                        <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          {awardError ? (
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                          ) : (
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                          )}
-                        </svg>
-                        {awardError ?? awardSuccess}
+                      <div className="flex items-center gap-3 rounded-2xl bg-slate-50/50 p-4 border border-slate-100 md:col-span-2">
+                        <input
+                          id="award-active"
+                          type="checkbox"
+                          checked={awardIsActive}
+                          onChange={(e) => setAwardIsActive(e.target.checked)}
+                          className="h-5 w-5 rounded-lg border-slate-300 text-emerald-600 focus:ring-emerald-500/20"
+                        />
+                        <label htmlFor="award-active" className="text-[13px] font-bold text-slate-700 cursor-pointer">Award is active</label>
                       </div>
-                    )}
 
-                    <div className="flex gap-3">
+                      {(awardError || awardSuccess) && (
+                        <div className={`rounded-2xl px-4 py-3 text-[13px] font-bold flex items-center gap-2 md:col-span-2 ${
+                          awardError ? "bg-red-50 text-red-600 border border-red-100" : "bg-emerald-50 text-emerald-700 border border-emerald-100"
+                        }`}>
+                          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            {awardError ? (
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            ) : (
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                            )}
+                          </svg>
+                          {awardError ?? awardSuccess}
+                        </div>
+                      )}
+
+                    <div className="sticky bottom-0 -mx-6 mt-6 flex gap-3 border-t border-slate-100 bg-white px-6 pt-3 pb-4 md:col-span-2">
                       <button
                         onClick={() => setIsAwardModalOpen(false)}
                         className="flex-1 rounded-2xl border border-slate-200 py-4 text-[14px] font-bold text-slate-600 transition-all hover:bg-slate-50 active:scale-95"
@@ -10195,10 +10602,12 @@ export default function AdminDashboard() {
                         )}
                       </button>
                     </div>
+                    </div>
                   </div>
                 </div>
-              </div>
-                )}
+              </div>,
+              document.body,
+            )}
               </div>
             </section>
           )}
@@ -11778,26 +12187,36 @@ export default function AdminDashboard() {
                                       type="button"
                                       disabled={isDeletingMonitorMessageId === msg.id}
                                       onClick={async () => {
-                                        const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-                                        const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-                                        if (!supabaseUrl || !supabaseAnonKey) {
-                                          setMonitorMessageError("Supabase is not configured.");
-                                          return;
-                                        }
+                                        setMonitorMessageError(null);
+                                        const removed = msg;
                                         setIsDeletingMonitorMessageId(msg.id);
-                                        const supabase = createClient(supabaseUrl, supabaseAnonKey);
-                                        const { error } = await supabase
-                                          .from("judge_message")
-                                          .delete()
-                                          .eq("id", msg.id);
+                                        setMonitorMessages((prev) =>
+                                          prev.filter((m) => m.id !== removed.id),
+                                        );
+                                        setEditingMonitorMessageId((current) =>
+                                          current === removed.id ? null : current,
+                                        );
+                                        const response = await fetch("/api/judge-message/delete", {
+                                          method: "POST",
+                                          headers: { "content-type": "application/json" },
+                                          body: JSON.stringify({ id: msg.id }),
+                                        });
                                         setIsDeletingMonitorMessageId(null);
-                                        if (error) {
-                                          setMonitorMessageError(error.message || "Unable to delete message.");
+                                        if (!response.ok) {
+                                          const payload = await response.json().catch(() => ({}));
+                                          const message = typeof payload?.error === "string" ? payload.error : null;
+                                          setMonitorMessageError(message || "Unable to delete message.");
+                                          setMonitorMessages((prev) => {
+                                            if (prev.some((m) => m.id === removed.id)) return prev;
+                                            const next = [removed, ...prev];
+                                            next.sort(
+                                              (a, b) =>
+                                                new Date(b.created_at).getTime() -
+                                                new Date(a.created_at).getTime(),
+                                            );
+                                            return next;
+                                          });
                                           return;
-                                        }
-                                        setMonitorMessages((prev) => prev.filter((m) => m.id !== msg.id));
-                                        if (editingMonitorMessageId === msg.id) {
-                                          setEditingMonitorMessageId(null);
                                         }
                                       }}
                                       className="rounded-full bg-red-50 px-3 py-1.5 text-[11px] font-bold text-red-700 transition hover:bg-red-100 disabled:opacity-50"
@@ -11823,9 +12242,9 @@ export default function AdminDashboard() {
         )}
 
         {isCategoryModalOpen && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-md animate-in fade-in duration-300">
-            <div className="w-full max-w-md scale-100 rounded-[40px] border border-white/40 bg-white/90 p-8 shadow-[0_32px_64px_-12px_rgba(0,0,0,0.14)] backdrop-blur-2xl animate-in zoom-in-95 duration-300">
-              <div className="mb-8 flex items-center justify-between">
+          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 p-0 backdrop-blur-lg animate-in fade-in duration-300">
+            <div className="flex max-h-[85vh] w-full max-w-md scale-100 flex-col overflow-hidden rounded-[40px] border border-white/20 bg-white p-0 shadow-[0_32px_64px_-12px_rgba(0,0,0,0.14)] animate-in zoom-in-95 duration-300">
+              <div className="sticky top-0 z-10 flex items-center justify-between border-b border-white/20 bg-white px-8 py-6">
                 <div>
                   <h3 className="text-xl font-black tracking-tight text-slate-900">Add Team</h3>
                   <p className="text-[13px] font-medium text-slate-500">Create a team for an event.</p>
@@ -11838,7 +12257,7 @@ export default function AdminDashboard() {
                 </button>
               </div>
 
-              <div className="space-y-6">
+              <div className="flex-1 overflow-y-auto px-8 py-6 space-y-6 custom-scrollbar">
                 <div className="space-y-2">
                   <label className="text-[13px] font-bold text-slate-700">Select Event *</label>
                   <div className="relative">
@@ -11883,7 +12302,7 @@ export default function AdminDashboard() {
                   </div>
                 )}
 
-                <div className="flex gap-3 pt-4">
+                <div className="sticky bottom-0 -mx-8 flex gap-3 bg-white/85 px-8 pt-4 pb-6 backdrop-blur-2xl">
                   <button
                     onClick={() => setIsCategoryModalOpen(false)}
                     className="flex-1 rounded-2xl border border-slate-200 py-4 text-[14px] font-bold text-slate-600 transition-all hover:bg-slate-50 active:scale-95"
@@ -11912,9 +12331,9 @@ export default function AdminDashboard() {
 
 
         {isParticipantModalOpen && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-md animate-in fade-in duration-300">
-            <div className="w-full max-w-4xl scale-100 rounded-[40px] border border-white/40 bg-white/90 p-8 shadow-[0_32px_64px_-12px_rgba(0,0,0,0.14)] backdrop-blur-2xl animate-in zoom-in-95 duration-300">
-              <div className="mb-8 flex items-center justify-between">
+          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-transparent p-0 backdrop-blur-xl backdrop-brightness-75 animate-in fade-in duration-300">
+            <div className="flex max-h-[85vh] w-full max-w-4xl scale-100 flex-col overflow-hidden rounded-[40px] border border-white/40 bg-white/90 p-0 shadow-[0_32px_64px_-12px_rgba(0,0,0,0.14)] backdrop-blur-2xl animate-in zoom-in-95 duration-300">
+              <div className="sticky top-0 z-10 flex items-center justify-between border-b border-white/40 bg-white/85 px-8 py-6 backdrop-blur-2xl">
                 <div>
                   <h3 className="text-xl font-black tracking-tight text-slate-900">Add Participant</h3>
                   <p className="text-[13px] font-medium text-slate-500">Register a contestant for a contest.</p>
@@ -11927,7 +12346,7 @@ export default function AdminDashboard() {
                 </button>
               </div>
 
-              <div className="px-6 py-4 text-[11px]">
+              <div className="flex-1 overflow-y-auto px-8 py-6 text-[11px] custom-scrollbar">
                 <div className="grid items-start gap-8 lg:grid-cols-[1.5fr_1fr]">
                   <div className="space-y-6">
                     <div className="grid grid-cols-2 gap-4">
@@ -12421,7 +12840,7 @@ export default function AdminDashboard() {
                   </div>
                 )}
               </div>
-              <div className="flex items-center justify-end gap-2 border-t border-[#E2E8F0] px-5 py-3">
+              <div className="sticky bottom-0 flex items-center justify-end gap-2 border-t border-white/40 bg-white/85 px-8 py-5 backdrop-blur-2xl">
                 <button
                   type="button"
                   onClick={() => setIsParticipantModalOpen(false)}
@@ -12449,9 +12868,9 @@ export default function AdminDashboard() {
         )}
 
         {isAdminModalOpen && (
-          <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 px-4">
-            <div className="w-full max-w-md rounded-2xl border border-[#1F4D3A1F] bg-white shadow-xl">
-              <div className="flex items-center justify-between border-b border-[#E2E8F0] px-5 py-3">
+          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-transparent p-0 backdrop-blur-xl backdrop-brightness-75 animate-in fade-in duration-300">
+            <div className="flex max-h-[85vh] w-full max-w-md flex-col overflow-hidden rounded-[40px] border border-white/40 bg-white/90 shadow-[0_32px_64px_-12px_rgba(0,0,0,0.14)] backdrop-blur-2xl animate-in zoom-in-95 duration-300">
+              <div className="sticky top-0 z-10 flex items-center justify-between border-b border-white/40 bg-white/85 px-8 py-6 backdrop-blur-2xl">
                 <div>
                   <div className="text-sm font-semibold text-[#1F4D3A]">
                     {editingAdminId === null ? "Add admin" : "Edit admin"}
@@ -12468,7 +12887,7 @@ export default function AdminDashboard() {
                   Close
                 </button>
               </div>
-              <div className="space-y-3 px-5 py-4 text-[11px]">
+              <div className="flex-1 overflow-y-auto space-y-3 px-8 py-6 text-[11px] custom-scrollbar">
                 <div className="space-y-1">
                   <div className="text-[10px] text-slate-500">
                     New admin username
@@ -12504,7 +12923,7 @@ export default function AdminDashboard() {
                   </div>
                 )}
               </div>
-              <div className="flex items-center justify-end gap-2 border-t border-[#E2E8F0] px-5 py-3">
+              <div className="sticky bottom-0 flex items-center justify-end gap-2 border-t border-white/40 bg-white/85 px-8 py-5 backdrop-blur-2xl">
                 <button
                   type="button"
                   onClick={() => setIsAdminModalOpen(false)}
@@ -12530,9 +12949,9 @@ export default function AdminDashboard() {
         )}
 
         {isAdminGuardModalOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
-            <div className="w-full max-w-xs rounded-2xl border border-[#1F4D3A1F] bg-white shadow-xl">
-              <div className="border-b border-[#E2E8F0] px-5 py-3">
+          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-transparent p-0 backdrop-blur-xl backdrop-brightness-75 animate-in fade-in duration-300">
+            <div className="flex max-h-[85vh] w-full max-w-xs flex-col overflow-hidden rounded-[40px] border border-white/40 bg-white/90 shadow-[0_32px_64px_-12px_rgba(0,0,0,0.14)] backdrop-blur-2xl animate-in zoom-in-95 duration-300">
+              <div className="sticky top-0 z-10 border-b border-white/40 bg-white/85 px-8 py-6 backdrop-blur-2xl">
                 <div className="text-sm font-semibold text-[#1F4D3A]">
                   Admin password required
                 </div>
@@ -12540,7 +12959,7 @@ export default function AdminDashboard() {
                   Enter your admin password to manage admin accounts.
                 </div>
               </div>
-              <div className="space-y-3 px-5 py-4 text-[11px]">
+              <div className="flex-1 overflow-y-auto space-y-3 px-8 py-6 text-[11px] custom-scrollbar">
                 <div className="space-y-1">
                   <div className="text-[10px] text-slate-500">Admin password</div>
                   <input
@@ -12560,7 +12979,7 @@ export default function AdminDashboard() {
                   </div>
                 )}
               </div>
-              <div className="flex items-center justify-end gap-2 border-t border-[#E2E8F0] px-5 py-3">
+              <div className="sticky bottom-0 flex items-center justify-end gap-2 border-t border-white/40 bg-white/85 px-8 py-5 backdrop-blur-2xl">
                 <button
                   type="button"
                   onClick={() => {
@@ -12589,9 +13008,9 @@ export default function AdminDashboard() {
         )}
 
         {isJudgeModalOpen && (
-          <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 px-4">
-            <div className="flex w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-[#1F4D3A1F] bg-white shadow-xl max-h-[calc(100vh-2rem)]">
-              <div className="flex items-center justify-between border-b border-[#E2E8F0] px-5 py-3">
+          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-transparent p-0 backdrop-blur-xl backdrop-brightness-75 animate-in fade-in duration-300">
+            <div className="flex max-h-[85vh] w-full max-w-3xl flex-col overflow-hidden rounded-[40px] border border-white/40 bg-white/90 shadow-[0_32px_64px_-12px_rgba(0,0,0,0.14)] backdrop-blur-2xl animate-in zoom-in-95 duration-300">
+              <div className="sticky top-0 z-10 flex items-center justify-between border-b border-white/40 bg-white/85 px-8 py-6 backdrop-blur-2xl">
                 <div>
                   <div className="text-sm font-semibold text-[#1F4D3A]">
                     {editingJudgeId === null ? "Add judge" : "Edit judge"}
@@ -12608,7 +13027,7 @@ export default function AdminDashboard() {
                   Close
                 </button>
               </div>
-              <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 overflow-y-auto px-5 py-4 text-[11px] md:grid-cols-2">
+              <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 overflow-y-auto px-8 py-6 text-[11px] md:grid-cols-2 custom-scrollbar">
                 <div className="space-y-3">
                   <div className="space-y-1">
                     <div className="text-[10px] text-slate-500">
@@ -12938,7 +13357,7 @@ export default function AdminDashboard() {
                   </div>
                 )}
               </div>
-              <div className="flex items-center justify-end gap-2 border-t border-[#E2E8F0] px-5 py-3">
+              <div className="sticky bottom-0 flex items-center justify-end gap-2 border-t border-white/40 bg-white/85 px-8 py-5 backdrop-blur-2xl">
                 <button
                   type="button"
                   onClick={() => {
@@ -12971,9 +13390,9 @@ export default function AdminDashboard() {
         )}
 
         {isJudgeContestModalOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
-            <div className="w-full max-w-md rounded-2xl border border-[#1F4D3A1F] bg-white shadow-xl">
-              <div className="flex items-center justify-between border-b border-[#E2E8F0] px-5 py-3">
+          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-transparent p-0 backdrop-blur-xl backdrop-brightness-75 animate-in fade-in duration-300">
+            <div className="flex max-h-[85vh] w-full max-w-md flex-col overflow-hidden rounded-[40px] border border-white/40 bg-white/90 shadow-[0_32px_64px_-12px_rgba(0,0,0,0.14)] backdrop-blur-2xl animate-in zoom-in-95 duration-300">
+              <div className="sticky top-0 z-10 flex items-center justify-between border-b border-white/40 bg-white/85 px-8 py-6 backdrop-blur-2xl">
                 <div>
                   <div className="text-sm font-semibold text-[#1F4D3A]">
                     Assign contests
@@ -12990,7 +13409,7 @@ export default function AdminDashboard() {
                   Close
                 </button>
               </div>
-              <div className="space-y-3 px-5 py-4 text-[11px]">
+              <div className="flex-1 overflow-y-auto space-y-3 px-8 py-6 text-[11px] custom-scrollbar">
                 <div className="space-y-1">
                   <div className="text-[10px] text-slate-500">
                     Search contests
@@ -13062,7 +13481,7 @@ export default function AdminDashboard() {
                   </div>
                 </div>
               </div>
-              <div className="flex items-center justify-end gap-2 border-t border-[#E2E8F0] px-5 py-3">
+              <div className="sticky bottom-0 flex items-center justify-end gap-2 border-t border-white/40 bg-white/85 px-8 py-5 backdrop-blur-2xl">
                 <button
                   type="button"
                   onClick={() => setIsJudgeContestModalOpen(false)}
@@ -13076,9 +13495,9 @@ export default function AdminDashboard() {
         )}
 
         {isTabulatorModalOpen && (
-          <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 px-4">
-            <div className="w-full max-w-md rounded-2xl border border-[#1F4D3A1F] bg-white shadow-xl">
-              <div className="flex items-center justify-between border-b border-[#E2E8F0] px-5 py-3">
+          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-transparent p-0 backdrop-blur-xl backdrop-brightness-75 animate-in fade-in duration-300">
+            <div className="flex max-h-[85vh] w-full max-w-md flex-col overflow-hidden rounded-[40px] border border-white/40 bg-white/90 shadow-[0_32px_64px_-12px_rgba(0,0,0,0.14)] backdrop-blur-2xl animate-in zoom-in-95 duration-300">
+              <div className="sticky top-0 z-10 flex items-center justify-between border-b border-white/40 bg-white/85 px-8 py-6 backdrop-blur-2xl">
                 <div>
                   <div className="text-sm font-semibold text-[#1F4D3A]">
                     {editingTabulatorId === null ? "Add tabulator" : "Edit tabulator"}
@@ -13098,7 +13517,7 @@ export default function AdminDashboard() {
                   Close
                 </button>
               </div>
-              <div className="space-y-3 px-5 py-4 text-[11px]">
+              <div className="flex-1 overflow-y-auto space-y-3 px-8 py-6 text-[11px] custom-scrollbar">
                 <div className="space-y-1">
                   <div className="text-[10px] text-slate-500">
                     Select Event *
@@ -13167,7 +13586,7 @@ export default function AdminDashboard() {
                   </div>
                 )}
               </div>
-              <div className="flex items-center justify-end gap-2 border-t border-[#E2E8F0] px-5 py-3">
+              <div className="sticky bottom-0 flex items-center justify-end gap-2 border-t border-white/40 bg-white/85 px-8 py-5 backdrop-blur-2xl">
                 <button
                   type="button"
                   onClick={() => {

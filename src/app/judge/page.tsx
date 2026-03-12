@@ -13,7 +13,7 @@ type EventRow = {
   created_at: string;
 };
 
-type ContestScoringType = "percentage" | "points";
+type ContestScoringType = "percentage" | "ranking" | "points";
 
 type ContestRow = {
   id: number;
@@ -362,6 +362,30 @@ export default function JudgeDashboardPage() {
       .channel(`event-${event.id}-scores`, {
         config: { broadcast: { ack: true } },
       })
+      .on("broadcast", { event: "score-submitted" }, async () => {
+        if (!judge) return;
+        if (assignedContestIds.length === 0) return;
+        try {
+          const [totalsRes, scoresRes] = await Promise.all([
+            supabase
+              .from("judge_participant_total")
+              .select("id, judge_id, participant_id, contest_id, total_score, created_at")
+              .in("contest_id", assignedContestIds),
+            supabase
+              .from("score")
+              .select(
+                "id, judge_id, participant_id, criteria_id, score, created_at, criteria!inner(contest_id)",
+              )
+              .in("criteria.contest_id", assignedContestIds),
+          ]);
+          if (totalsRes.data) {
+            setJudgeTotals(totalsRes.data as JudgeParticipantTotalRow[]);
+          }
+          if (scoresRes.data) {
+            setScores(scoresRes.data as unknown as ScoreRow[]);
+          }
+        } catch {}
+      })
       .subscribe((status, err) => {
         if (status === 'SUBSCRIBED') {
           console.log('[JUDGE-SCORES] Connected to scores channel');
@@ -378,7 +402,7 @@ export default function JudgeDashboardPage() {
       } catch {}
       scoresBroadcastRef.current = null;
     };
-  }, [event?.id]);
+  }, [event?.id, assignedContestIds, judge]);
 
   useEffect(() => {
     activeContestIdRef.current = activeContestId;
@@ -633,6 +657,32 @@ export default function JudgeDashboardPage() {
             const newRow = payload.new as EventRow;
             console.log("[REALTIME] Event is_active changed to:", newRow.is_active);
             setEvent(newRow);
+          },
+        )
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "contest",
+            filter: `event_id=eq.${judgeRow.event_id}`,
+          },
+          (payload) => {
+            if (payload.eventType === "INSERT" || payload.eventType === "UPDATE") {
+              const newRow = payload.new as ContestRow;
+              setContests((previous) => {
+                const exists = previous.some((row) => row.id === newRow.id);
+                if (payload.eventType === "INSERT" && !exists) {
+                  return [newRow, ...previous];
+                }
+                return previous.map((row) => (row.id === newRow.id ? newRow : row));
+              });
+              return;
+            }
+            if (payload.eventType === "DELETE") {
+              const oldRow = payload.old as ContestRow;
+              setContests((previous) => previous.filter((row) => row.id !== oldRow.id));
+            }
           },
         )
         .on(
@@ -1165,7 +1215,9 @@ export default function JudgeDashboardPage() {
             if (updatedRow.event_id !== judgeRow.event_id) return;
             if (updatedRow.judge_id !== null && updatedRow.judge_id !== judgeRow.id) return;
 
-            if (updatedRow.is_visible === false) {
+            const isVisible = updatedRow.is_visible !== false;
+
+            if (!isVisible) {
               setMessageQueue((prev) => {
                 const next = prev.filter((m) => m.id !== updatedRow.id);
                 setActiveMessage((current) => {
@@ -1178,27 +1230,52 @@ export default function JudgeDashboardPage() {
               return;
             }
 
-            if (updatedRow.is_visible === true) {
-              try {
-                const { data: seenRows, error: seenError } = await supabase
-                  .from("judge_message_seen")
-                  .select("message_id")
-                  .eq("judge_id", judgeRow.id)
-                  .eq("message_id", updatedRow.id)
-                  .limit(1);
+            setMessageQueue((prev) => {
+              const exists = prev.some((m) => m.id === updatedRow.id);
+              if (!exists) return prev;
+              return prev.map((m) => (m.id === updatedRow.id ? updatedRow : m));
+            });
+            setActiveMessage((current) =>
+              current?.id === updatedRow.id ? updatedRow : current,
+            );
 
-                if (!seenError && seenRows && Array.isArray(seenRows) && seenRows.length > 0) {
-                  return;
-                }
-              } catch {}
+            try {
+              const { data: seenRows, error: seenError } = await supabase
+                .from("judge_message_seen")
+                .select("message_id")
+                .eq("judge_id", judgeRow.id)
+                .eq("message_id", updatedRow.id)
+                .limit(1);
 
-              setMessageQueue((prev) => {
-                if (prev.some((m) => m.id === updatedRow.id)) return prev;
-                const next = [...prev, updatedRow].sort((a, b) => a.id - b.id);
-                return next;
+              if (!seenError && seenRows && Array.isArray(seenRows) && seenRows.length > 0) {
+                return;
+              }
+            } catch {}
+
+            setMessageQueue((prev) => {
+              if (prev.some((m) => m.id === updatedRow.id)) return prev;
+              const next = [...prev, updatedRow].sort((a, b) => a.id - b.id);
+              return next;
+            });
+            setActiveMessage((prev) => prev ?? updatedRow);
+          },
+        )
+        .on(
+          "postgres_changes",
+          { event: "DELETE", schema: "public", table: "judge_message" },
+          (payload) => {
+            const oldRow = payload.old as Partial<JudgeMessageRow>;
+            const deletedId = typeof oldRow?.id === "number" ? oldRow.id : null;
+            if (!deletedId) return;
+            setMessageQueue((prev) => {
+              const next = prev.filter((m) => m.id !== deletedId);
+              setActiveMessage((current) => {
+                if (!current) return next.length > 0 ? next[0] : null;
+                if (current.id !== deletedId) return current;
+                return next.length > 0 ? next[0] : null;
               });
-              setActiveMessage((prev) => prev ?? updatedRow);
-            }
+              return next;
+            });
           },
         )
         .subscribe((status, err) => {
@@ -1437,6 +1514,35 @@ export default function JudgeDashboardPage() {
       statsByParticipant.set(totalRow.participant_id, current);
     }
 
+    const judgeIdsForContest = Array.from(
+      new Set(totalsForContest.map((row) => row.judge_id)),
+    ).sort((a, b) => a - b);
+
+    const rankByJudgeAndParticipant = new Map<string, number>();
+    if (activeContestScoringType === "ranking") {
+      for (const judgeId of judgeIdsForContest) {
+        const perJudge: Array<[number, number]> = [];
+        for (const participant of activeContestParticipants) {
+          const stats = statsByParticipant.get(participant.id);
+          const score = stats?.judgeScores[judgeId];
+          if (score == null) continue;
+          perJudge.push([participant.id, score]);
+        }
+        perJudge.sort((a, b) => b[1] - a[1]);
+        let prevScore: number | null = null;
+        let rank = 0;
+        let index = 0;
+        for (const [participantId, score] of perJudge) {
+          index += 1;
+          if (prevScore === null || score < prevScore) {
+            rank = index;
+          }
+          rankByJudgeAndParticipant.set(`${judgeId}-${participantId}`, rank);
+          prevScore = score;
+        }
+      }
+    }
+
     const rows: JudgeTabulationRow[] = [];
 
     for (const participant of activeContestParticipants) {
@@ -1454,11 +1560,30 @@ export default function JudgeDashboardPage() {
         (teamRow) => teamRow.id === participant.team_id,
       );
 
-      // If Chairman, show SUM. If normal judge, it's just their score (count is 1, so sum/1 = sum).
-      // Wait, if Chairman, the user wants to see individual scores + Total.
-      // The visual cue shows Total = Sum of judges.
-      // So we should use Sum.
-      const finalScore = judge.role === "chairman" ? stats.sum : (stats.count > 0 ? stats.sum / stats.count : 0);
+      let finalScore = 0;
+      if (activeContestScoringType === "percentage") {
+        finalScore = stats.count > 0 ? stats.sum / stats.count : 0;
+      } else if (activeContestScoringType === "points") {
+        finalScore = stats.sum;
+      } else {
+        if (judgeIdsForContest.length === 0) {
+          continue;
+        }
+        let sumRanks = 0;
+        let hasAll = true;
+        for (const judgeId of judgeIdsForContest) {
+          const r = rankByJudgeAndParticipant.get(`${judgeId}-${participant.id}`);
+          if (r == null) {
+            hasAll = false;
+            break;
+          }
+          sumRanks += r;
+        }
+        if (!hasAll) {
+          continue;
+        }
+        finalScore = sumRanks / judgeIdsForContest.length;
+      }
 
       rows.push({
         participant,
@@ -1470,7 +1595,11 @@ export default function JudgeDashboardPage() {
       });
     }
 
-    rows.sort((a, b) => b.totalScore - a.totalScore);
+    if (activeContestScoringType === "ranking") {
+      rows.sort((a, b) => a.totalScore - b.totalScore);
+    } else {
+      rows.sort((a, b) => b.totalScore - a.totalScore);
+    }
 
     let previousScore: number | null = null;
     let currentRank = 0;
@@ -1478,8 +1607,14 @@ export default function JudgeDashboardPage() {
 
     for (const row of rows) {
       index += 1;
-      if (previousScore === null || row.totalScore < previousScore) {
-        currentRank = index;
+      if (activeContestScoringType === "ranking") {
+        if (previousScore === null || row.totalScore > previousScore) {
+          currentRank = index;
+        }
+      } else {
+        if (previousScore === null || row.totalScore < previousScore) {
+          currentRank = index;
+        }
       }
       row.rank = currentRank;
       previousScore = row.totalScore;
@@ -1493,6 +1628,7 @@ export default function JudgeDashboardPage() {
     categories,
     judge,
     teams,
+    activeContestScoringType,
   ]);
 
   const currentParticipantTotalScore = useMemo(() => {
@@ -1549,7 +1685,10 @@ export default function JudgeDashboardPage() {
 
       hasAny = true;
 
-      if (activeContestScoringType === "points") {
+      if (
+        activeContestScoringType === "points" ||
+        activeContestScoringType === "ranking"
+      ) {
         total += value;
       } else {
         total += value * (criteria.percentage / 100);
@@ -1941,9 +2080,7 @@ export default function JudgeDashboardPage() {
         }
         const parsed = Number(value);
         const maxScore =
-          activeContestScoringType === "points"
-            ? criteria.percentage
-            : 100;
+          activeContestScoringType === "points" ? criteria.percentage : 100;
         if (!Number.isFinite(parsed) || parsed < 0 || parsed > maxScore) {
           setModalError(`Scores must be between 0 and ${maxScore}.`);
           setIsSubmittingParticipant(false);
@@ -2083,9 +2220,7 @@ export default function JudgeDashboardPage() {
       const parsed = Number(value);
       if (Number.isFinite(parsed)) {
         const maxScore =
-          activeContestScoringType === "points"
-            ? criteria?.percentage ?? 100
-            : 100;
+          activeContestScoringType === "points" ? criteria?.percentage ?? 100 : 100;
 
         if (parsed > maxScore) {
           setModalError(
@@ -2136,9 +2271,7 @@ export default function JudgeDashboardPage() {
     }
 
     const maxScore =
-      activeContestScoringType === "points"
-        ? criteria?.percentage ?? 100
-        : 100;
+      activeContestScoringType === "points" ? criteria?.percentage ?? 100 : 100;
 
     if (parsed > maxScore) {
       setModalError(
@@ -3955,7 +4088,8 @@ export default function JudgeDashboardPage() {
                                     />
                                     <span className="text-xs text-slate-400">
                                       /
-                                      {activeContestScoringType === "points"
+                                      {activeContestScoringType === "points" ||
+                                      activeContestScoringType === "ranking"
                                         ? criteria.percentage
                                         : 100}
                                     </span>

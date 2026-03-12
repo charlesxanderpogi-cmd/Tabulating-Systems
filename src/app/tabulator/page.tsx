@@ -13,12 +13,15 @@ type EventRow = {
   created_at: string;
 };
 
+type ContestScoringType = "percentage" | "ranking" | "points";
+
 type ContestRow = {
   id: number;
   event_id: number;
   name: string;
   contest_code: string | null;
   created_at: string;
+  scoring_type: ContestScoringType | null;
 };
 
 type CategoryRow = {
@@ -439,7 +442,7 @@ export default function TabulatorPage() {
         error: contestError,
       } = await supabase
         .from("contest")
-        .select("id, event_id, name, contest_code, created_at")
+        .select("id, event_id, name, contest_code, created_at, scoring_type")
         .eq("event_id", activeEvent.id)
         .order("created_at", { ascending: false });
 
@@ -585,6 +588,32 @@ export default function TabulatorPage() {
           (payload) => {
             const newRow = payload.new as EventRow;
             setEvent(newRow);
+          },
+        )
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "contest",
+            filter: `event_id=eq.${activeEvent.id}`,
+          },
+          (payload) => {
+            if (payload.eventType === "INSERT" || payload.eventType === "UPDATE") {
+              const newRow = payload.new as ContestRow;
+              setContests((previous) => {
+                const exists = previous.some((row) => row.id === newRow.id);
+                if (payload.eventType === "INSERT" && !exists) {
+                  return [newRow, ...previous];
+                }
+                return previous.map((row) => (row.id === newRow.id ? newRow : row));
+              });
+              return;
+            }
+            if (payload.eventType === "DELETE") {
+              const oldRow = payload.old as ContestRow;
+              setContests((previous) => previous.filter((row) => row.id !== oldRow.id));
+            }
           },
         )
         .on(
@@ -1100,6 +1129,9 @@ export default function TabulatorPage() {
     [contests, activeContestId],
   );
 
+  const activeContestScoringType: ContestScoringType =
+    activeContest?.scoring_type ?? "percentage";
+
   const categoriesForActiveEvent = useMemo(
     () =>
       event === null
@@ -1135,22 +1167,59 @@ export default function TabulatorPage() {
       return [];
     }
 
-    const sumByParticipant = new Map<number, number>();
+    const statsByParticipant = new Map<
+      number,
+      { sum: number; count: number; judgeScores: Record<number, number> }
+    >();
 
     for (const totalRow of totalsForContest) {
-      const current = sumByParticipant.get(totalRow.participant_id) ?? 0;
-      sumByParticipant.set(
-        totalRow.participant_id,
-        current + Number(totalRow.total_score),
-      );
+      const current = statsByParticipant.get(totalRow.participant_id) ?? {
+        sum: 0,
+        count: 0,
+        judgeScores: {},
+      };
+      current.sum += Number(totalRow.total_score);
+      current.count += 1;
+      current.judgeScores[totalRow.judge_id] = Number(totalRow.total_score);
+      statsByParticipant.set(totalRow.participant_id, current);
     }
 
     const rows: RankingRow[] = [];
+    const tieBreakerByParticipant = new Map<number, number>();
+
+    const judgeIdsForContest = Array.from(
+      new Set(totalsForContest.map((row) => row.judge_id)),
+    ).sort((a, b) => a - b);
+
+    const rankByJudgeAndParticipant = new Map<string, number>();
+    if (activeContestScoringType === "ranking") {
+      for (const judgeId of judgeIdsForContest) {
+        const perJudge: Array<[number, number]> = [];
+        for (const participant of activeContestParticipants) {
+          const stats = statsByParticipant.get(participant.id);
+          const score = stats?.judgeScores[judgeId];
+          if (score == null) continue;
+          perJudge.push([participant.id, score]);
+        }
+        perJudge.sort((a, b) => b[1] - a[1]);
+        let prevScore: number | null = null;
+        let rank = 0;
+        let index = 0;
+        for (const [participantId, score] of perJudge) {
+          index += 1;
+          if (prevScore === null || score < prevScore) {
+            rank = index;
+          }
+          rankByJudgeAndParticipant.set(`${judgeId}-${participantId}`, rank);
+          prevScore = score;
+        }
+      }
+    }
 
     for (const participant of activeContestParticipants) {
-      const sum = sumByParticipant.get(participant.id);
+      const stats = statsByParticipant.get(participant.id);
 
-      if (sum === undefined) {
+      if (!stats) {
         continue;
       }
 
@@ -1163,16 +1232,53 @@ export default function TabulatorPage() {
           ? null
           : teams.find((teamRow) => teamRow.id === participant.team_id) ?? null;
 
+      let displayValue = 0;
+      if (activeContestScoringType === "percentage") {
+        displayValue = stats.count > 0 ? stats.sum / stats.count : 0;
+      } else if (activeContestScoringType === "points") {
+        displayValue = stats.sum;
+      } else {
+        if (judgeIdsForContest.length === 0) {
+          continue;
+        }
+        let sumRanks = 0;
+        let hasAll = true;
+        for (const judgeId of judgeIdsForContest) {
+          const r = rankByJudgeAndParticipant.get(`${judgeId}-${participant.id}`);
+          if (r == null) {
+            hasAll = false;
+            break;
+          }
+          sumRanks += r;
+        }
+        if (!hasAll) {
+          continue;
+        }
+        displayValue = sumRanks / judgeIdsForContest.length;
+        tieBreakerByParticipant.set(participant.id, stats.sum);
+      }
+
       rows.push({
         participant,
         categoryName: category ? category.name : "Uncategorized",
         teamName: team ? team.name : null,
-        totalScore: Number(sum.toFixed(2)),
+        totalScore: Number(displayValue.toFixed(2)),
         rank: 0,
       });
     }
 
-    rows.sort((a, b) => a.totalScore - b.totalScore);
+    if (activeContestScoringType === "ranking") {
+      rows.sort((a, b) => {
+        if (a.totalScore !== b.totalScore) {
+          return a.totalScore - b.totalScore;
+        }
+        const aTie = tieBreakerByParticipant.get(a.participant.id) ?? -Infinity;
+        const bTie = tieBreakerByParticipant.get(b.participant.id) ?? -Infinity;
+        return bTie - aTie;
+      });
+    } else {
+      rows.sort((a, b) => b.totalScore - a.totalScore);
+    }
 
     let previousScore: number | null = null;
     let currentRank = 0;
@@ -1180,15 +1286,28 @@ export default function TabulatorPage() {
 
     for (const row of rows) {
       index += 1;
-      if (previousScore === null || row.totalScore > previousScore) {
-        currentRank = index;
+      if (activeContestScoringType === "ranking") {
+        if (previousScore === null || row.totalScore > previousScore) {
+          currentRank = index;
+        }
+      } else {
+        if (previousScore === null || row.totalScore < previousScore) {
+          currentRank = index;
+        }
       }
       row.rank = currentRank;
       previousScore = row.totalScore;
     }
 
     return rows;
-  }, [activeContest, activeContestParticipants, totals, categories, teams]);
+  }, [
+    activeContest,
+    activeContestParticipants,
+    totals,
+    categories,
+    teams,
+    activeContestScoringType,
+  ]);
 
   const judgeIdsForActiveContest = useMemo<number[]>(() => {
     if (!activeContest) {
@@ -1203,6 +1322,14 @@ export default function TabulatorPage() {
     uniqueIds.sort((a, b) => a - b);
     return uniqueIds;
   }, [activeContest, totals]);
+
+  const judgeUsernameById = useMemo(() => {
+    const map = new Map<number, string>();
+    for (const j of judges) {
+      map.set(j.id, j.username);
+    }
+    return map;
+  }, [judges]);
 
   const totalScoreByJudgeAndParticipant = useMemo(() => {
     const map = new Map<string, number>();
@@ -1366,6 +1493,9 @@ export default function TabulatorPage() {
 
   const awardRankByJudgeAndParticipant = useMemo(() => {
     const rankMap = new Map<string, number>();
+    if (activeContestScoringType !== "ranking") {
+      return rankMap;
+    }
     for (const [judgeId, pmap] of awardTotalsByJudge.entries()) {
       const entries = Array.from(pmap.entries());
       entries.sort((a, b) => b[1] - a[1]);
@@ -1383,7 +1513,7 @@ export default function TabulatorPage() {
       }
     }
     return rankMap;
-  }, [awardTotalsByJudge]);
+  }, [awardTotalsByJudge, activeContestScoringType]);
 
   const awardRankingRows = useMemo<AwardRankingRow[]>(() => {
     if (!selectedAwardResult) {
@@ -1442,11 +1572,45 @@ export default function TabulatorPage() {
 
         return {
           row,
-          criteriaTotal: hasValue ? Number(totalForCriteria.toFixed(2)) : null,
+          criteriaTotal: hasValue
+            ? Number(
+                (
+                  activeContestScoringType === "percentage"
+                    ? totalForCriteria / Math.max(judgeIdsForActiveContest.length, 1)
+                    : totalForCriteria
+                ).toFixed(2),
+              )
+            : null,
           rank: null,
         };
       },
     );
+
+    if (activeContestScoringType !== "ranking") {
+      const ranked = rowsWithTotals
+        .filter((item) => item.criteriaTotal !== null)
+        .sort((a, b) => (b.criteriaTotal! - a.criteriaTotal!));
+
+      let previousScore: number | null = null;
+      let currentRank = 0;
+      let index = 0;
+      for (const item of ranked) {
+        index += 1;
+        if (previousScore === null || item.criteriaTotal! < previousScore) {
+          currentRank = index;
+        }
+        item.rank = currentRank;
+        previousScore = item.criteriaTotal!;
+      }
+
+      rowsWithTotals.sort((a, b) => {
+        const aTot = a.criteriaTotal ?? -Infinity;
+        const bTot = b.criteriaTotal ?? -Infinity;
+        return bTot - aTot;
+      });
+
+      return rowsWithTotals;
+    }
 
     // Compute average rank across judges for each participant
     const averageByParticipant = new Map<number, number | null>();
@@ -1505,6 +1669,7 @@ export default function TabulatorPage() {
     criteriaScoreByJudgeAndParticipant,
     criteriaList,
     awardRankByJudgeAndParticipant,
+    activeContestScoringType,
   ]);
 
   const handleAddSignature = async () => {
@@ -1836,11 +2001,14 @@ export default function TabulatorPage() {
 
   const judgesForActiveContest = useMemo(() => {
     if (!activeContest) return [];
-    const judgeIds = new Set(
-      totals.filter((t) => t.contest_id === activeContest.id).map((t) => t.judge_id),
-    );
-    return judges.filter((j) => judgeIds.has(j.id));
-  }, [activeContest, totals, judges]);
+    const byId = new Map<number, JudgeRow>();
+    for (const j of judges) {
+      byId.set(j.id, j);
+    }
+    return judgeIdsForActiveContest
+      .map((id) => byId.get(id))
+      .filter((j): j is JudgeRow => Boolean(j));
+  }, [activeContest, judgeIdsForActiveContest, judges]);
 
   const subCriteriaRows = useMemo<SubCriteriaRow[]>(() => {
     if (!activeContest) return [];
@@ -2480,11 +2648,17 @@ export default function TabulatorPage() {
                                   <th className="px-4 py-3 font-medium">College/University</th>
                                   <th className="px-4 py-3 font-medium">Contestant</th>
                                   {judgeIdsForActiveContest.map((judgeId, index) => (
-                                    <th key={judgeId} className="px-4 py-3 text-center font-medium" colSpan={2}>
-                                      Judge {index + 1}
+                                    <th
+                                      key={judgeId}
+                                      className="px-4 py-3 text-center font-medium"
+                                      colSpan={activeContestScoringType === "ranking" ? 2 : 1}
+                                    >
+                                      {judgeUsernameById.get(judgeId) ?? `Judge ${index + 1}`}
                                     </th>
                                   ))}
-                                  <th className="px-4 py-3 text-right font-medium">Rank total</th>
+                                  <th className="px-4 py-3 text-right font-medium">
+                                    {activeContestScoringType === "ranking" ? "Rank total" : "Total"}
+                                  </th>
                                 </tr>
                                 <tr className="bg-[#F5F7FF] text-[10px] font-semibold uppercase tracking-wide text-[#1F4D3A]">
                                   <th className="px-4 py-2"></th>
@@ -2492,7 +2666,9 @@ export default function TabulatorPage() {
                                   {judgeIdsForActiveContest.map((judgeId) => (
                                     <Fragment key={`hdr-${judgeId}`}>
                                       <th className="px-4 py-2 text-center">Score</th>
-                                      <th className="px-4 py-2 text-center">Rank</th>
+                                      {activeContestScoringType === "ranking" && (
+                                        <th className="px-4 py-2 text-center">Rank</th>
+                                      )}
                                     </Fragment>
                                   ))}
                                   <th className="px-4 py-2"></th>
@@ -2527,29 +2703,35 @@ export default function TabulatorPage() {
                                           <td className="px-4 py-3 align-middle text-center text-sm text-slate-700">
                                             {total !== undefined ? total.toFixed(2) : "—"}
                                           </td>
-                                          <td className="px-4 py-3 align-middle text-center text-sm font-semibold text-[#1F4D3A]">
-                                            {rank ?? "—"}
-                                          </td>
+                                          {activeContestScoringType === "ranking" && (
+                                            <td className="px-4 py-3 align-middle text-center text-sm font-semibold text-[#1F4D3A]">
+                                              {rank ?? "—"}
+                                            </td>
+                                          )}
                                         </Fragment>
                                       );
                                     })}
                                     <td className="px-4 py-3 align-middle text-right text-sm font-semibold text-[#1F4D3A]">
-                                      {(() => {
-                                        let sum = 0;
-                                        let count = 0;
-                                        for (const judgeId of judgeIdsForActiveContest) {
-                                          const r = awardRankByJudgeAndParticipant.get(
-                                            `${judgeId}-${item.row.participant.id}`,
-                                          );
-                                          if (r != null) {
-                                            sum += r;
-                                            count += 1;
-                                          }
-                                        }
-                                        return count === judgeIdsForActiveContest.length
-                                          ? (sum / count).toFixed(2)
-                                          : "—";
-                                      })()}
+                                      {activeContestScoringType === "ranking"
+                                        ? (() => {
+                                            let sum = 0;
+                                            let count = 0;
+                                            for (const judgeId of judgeIdsForActiveContest) {
+                                              const r = awardRankByJudgeAndParticipant.get(
+                                                `${judgeId}-${item.row.participant.id}`,
+                                              );
+                                              if (r != null) {
+                                                sum += r;
+                                                count += 1;
+                                              }
+                                            }
+                                            return count === judgeIdsForActiveContest.length
+                                              ? (sum / count).toFixed(2)
+                                              : "—";
+                                          })()
+                                        : item.criteriaTotal !== null
+                                          ? item.criteriaTotal.toFixed(2)
+                                          : "—"}
                                     </td>
                                   </tr>
                                 ))}
@@ -2586,12 +2768,12 @@ export default function TabulatorPage() {
                               <tr>
                                 <th className="px-4 py-3 font-medium">Contestant</th>
                                 <th className="px-4 py-3 font-medium">Criteria</th>
-                                {judgesForActiveContest.map((j, idx) => (
+                                {judgesForActiveContest.map((j) => (
                                   <th
                                     key={j.id}
                                     className="px-4 py-3 text-right font-medium"
                                   >
-                                    Judge {idx + 1}
+                                    {j.username}
                                   </th>
                                 ))}
                                 <th className="px-4 py-3 text-right font-medium">Total</th>
