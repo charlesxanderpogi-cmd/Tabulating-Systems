@@ -1,8 +1,8 @@
 "use client";
 
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { createClient } from "@supabase/supabase-js";
+import { getSupabaseClient } from "@/lib/supabase";
 import LottieIcon from "@/components/LottieIcon";
 import { createPortal } from "react-dom";
 import {
@@ -46,7 +46,7 @@ type EventSubTab =
   | "awards"
   | "template";
 type ParticipantSubTab = "category" | "participant";
-type MonitorSubTab = "permissions" | "monitoring" | "message";
+type MonitorSubTab = "permissions" | "monitoring" | "message" | "screen";
 type UserSubTab = "admin" | "judge" | "tabulator";
 
 type EventRow = {
@@ -113,6 +113,14 @@ type TeamRow = {
   id: number;
   event_id: number;
   name: string;
+  created_at: string;
+};
+
+type EventScreenVideoRow = {
+  id: number;
+  event_id: number;
+  video_url: string;
+  video_name: string;
   created_at: string;
 };
 
@@ -478,6 +486,314 @@ const pageantRoyalLayout: ContestLayout = {
   },
 };
 
+const pageantVelvetAmethystLayout: ContestLayout = {
+  version: 1,
+  templateKey: "pageant",
+  theme: {
+    workspaceBg: "#140A22",
+    workspaceBgOpacity: 100,
+    femaleGroupBg: "#1F1036",
+    femaleGroupBgOpacity: 100,
+    femaleBadgeBg: "#D946EF",
+    femaleBadgeBgOpacity: 100,
+    maleGroupBg: "#1A0F2D",
+    maleGroupBgOpacity: 100,
+    maleBadgeBg: "#A855F7",
+    maleBadgeBgOpacity: 100,
+    cardBg: "#25143E",
+    cardBgOpacity: 100,
+    numberTextColor: "#FDF4FF",
+    numberTextColorOpacity: 100,
+    numberBadgeBg: "#9333EA",
+    numberBadgeBgOpacity: 100,
+    numberFontSize: 11,
+    numberFontFamily: "sans",
+    nameTextColor: "#F5E8FF",
+    nameTextColorOpacity: 100,
+    nameFontSize: 11,
+    nameFontFamily: "sans",
+    criteriaHeaderBg: "#1A0F2D",
+    criteriaHeaderBgOpacity: 100,
+    criteriaHeaderTextColor: "#F0ABFC",
+    criteriaHeaderTextColorOpacity: 100,
+    criteriaHeaderFontSize: 11,
+    criteriaHeaderFontFamily: "sans",
+    criteriaTextColor: "#E9D5FF",
+    criteriaTextColorOpacity: 100,
+    criteriaTextFontSize: 13,
+    criteriaTextFontFamily: "sans",
+    scoringTableBg: "#1A0F2D",
+    scoringTableBgOpacity: 100,
+    scoringCategoryRowBg: "#25143E",
+    scoringCategoryRowBgOpacity: 100,
+    scoringTotalRowBg: "#3B1761",
+    scoringTotalRowBgOpacity: 100,
+    scoringTotalRowLabelTextColor: "#F3E8FF",
+    scoringTotalRowLabelTextColorOpacity: 100,
+    scoringTotalRowScoreTextColor: "#F0ABFC",
+    scoringTotalRowScoreTextColorOpacity: 100,
+    scoreInputBg: "#2E1750",
+    scoreInputBgOpacity: 100,
+    scoreInputBorderColor: "#9333EA",
+    scoreInputBorderColorOpacity: 100,
+    scoreInputTextColor: "#FAE8FF",
+    scoreInputTextColorOpacity: 100,
+    modalBodyBg: "#1A0F2D",
+    modalBodyBgOpacity: 100,
+    modalFooterBg: "#140A22",
+    modalFooterBgOpacity: 100,
+    modalHeaderBg: "#0F0719",
+    modalHeaderBgOpacity: 100,
+    modalHeaderPrimaryTextColor: "#F5D0FE",
+    modalHeaderPrimaryTextColorOpacity: 100,
+    modalHeaderSecondaryTextColor: "#C084FC",
+    modalHeaderSecondaryTextColorOpacity: 100,
+    modalContestantBadgeBg: "#9333EA",
+    modalContestantBadgeBgOpacity: 100,
+    modalContestantBadgeTextColor: "#FDF4FF",
+    modalContestantBadgeTextColorOpacity: 100,
+    modalPrimaryButtonBg: "#C026D3",
+    modalPrimaryButtonBgOpacity: 100,
+    modalPrimaryButtonTextColor: "#FDF4FF",
+    modalPrimaryButtonTextColorOpacity: 100,
+    modalSecondaryButtonBg: "#2E1750",
+    modalSecondaryButtonBgOpacity: 100,
+    modalSecondaryButtonTextColor: "#F5D0FE",
+    modalSecondaryButtonTextColorOpacity: 100,
+  },
+};
+
+const pageantIvoryEleganceLayout: ContestLayout = {
+  version: 1,
+  templateKey: "pageant",
+  theme: {
+    workspaceBg: "#F8F8F7",
+    workspaceBgOpacity: 100,
+    femaleGroupBg: "#F4F4F3",
+    femaleGroupBgOpacity: 100,
+    femaleBadgeBg: "#D6D3D1",
+    femaleBadgeBgOpacity: 100,
+    maleGroupBg: "#F4F4F3",
+    maleGroupBgOpacity: 100,
+    maleBadgeBg: "#CFCAC6",
+    maleBadgeBgOpacity: 100,
+    cardBg: "#FFFFFF",
+    cardBgOpacity: 100,
+    numberTextColor: "#44403C",
+    numberTextColorOpacity: 100,
+    numberBadgeBg: "#ECEAE8",
+    numberBadgeBgOpacity: 100,
+    numberFontSize: 11,
+    numberFontFamily: "sans",
+    nameTextColor: "#292524",
+    nameTextColorOpacity: 100,
+    nameFontSize: 11,
+    nameFontFamily: "sans",
+    criteriaHeaderBg: "#F6F5F4",
+    criteriaHeaderBgOpacity: 100,
+    criteriaHeaderTextColor: "#57534E",
+    criteriaHeaderTextColorOpacity: 100,
+    criteriaHeaderFontSize: 11,
+    criteriaHeaderFontFamily: "sans",
+    criteriaTextColor: "#44403C",
+    criteriaTextColorOpacity: 100,
+    criteriaTextFontSize: 13,
+    criteriaTextFontFamily: "sans",
+    scoringTableBg: "#FFFFFF",
+    scoringTableBgOpacity: 100,
+    scoringCategoryRowBg: "#FAFAF9",
+    scoringCategoryRowBgOpacity: 100,
+    scoringTotalRowBg: "#F5F5F4",
+    scoringTotalRowBgOpacity: 100,
+    scoringTotalRowLabelTextColor: "#44403C",
+    scoringTotalRowLabelTextColorOpacity: 100,
+    scoringTotalRowScoreTextColor: "#57534E",
+    scoringTotalRowScoreTextColorOpacity: 100,
+    scoreInputBg: "#FFFFFF",
+    scoreInputBgOpacity: 100,
+    scoreInputBorderColor: "#E7E5E4",
+    scoreInputBorderColorOpacity: 100,
+    scoreInputTextColor: "#292524",
+    scoreInputTextColorOpacity: 100,
+    modalBodyBg: "#FFFFFF",
+    modalBodyBgOpacity: 100,
+    modalFooterBg: "#F7F7F6",
+    modalFooterBgOpacity: 100,
+    modalHeaderBg: "#F1F0EE",
+    modalHeaderBgOpacity: 100,
+    modalHeaderPrimaryTextColor: "#292524",
+    modalHeaderPrimaryTextColorOpacity: 100,
+    modalHeaderSecondaryTextColor: "#78716C",
+    modalHeaderSecondaryTextColorOpacity: 100,
+    modalContestantBadgeBg: "#ECEAE8",
+    modalContestantBadgeBgOpacity: 100,
+    modalContestantBadgeTextColor: "#44403C",
+    modalContestantBadgeTextColorOpacity: 100,
+    modalPrimaryButtonBg: "#44403C",
+    modalPrimaryButtonBgOpacity: 100,
+    modalPrimaryButtonTextColor: "#FFFFFF",
+    modalPrimaryButtonTextColorOpacity: 100,
+    modalSecondaryButtonBg: "#FFFFFF",
+    modalSecondaryButtonBgOpacity: 100,
+    modalSecondaryButtonTextColor: "#44403C",
+    modalSecondaryButtonTextColorOpacity: 100,
+  },
+};
+
+const pageantLuxuryNoirLayout: ContestLayout = {
+  version: 1,
+  templateKey: "pageant",
+  theme: {
+    workspaceBg: "#0B0B0C",
+    workspaceBgOpacity: 100,
+    femaleGroupBg: "#131315",
+    femaleGroupBgOpacity: 100,
+    femaleBadgeBg: "#BFA46F",
+    femaleBadgeBgOpacity: 100,
+    maleGroupBg: "#131315",
+    maleGroupBgOpacity: 100,
+    maleBadgeBg: "#8E7A4F",
+    maleBadgeBgOpacity: 100,
+    cardBg: "#171719",
+    cardBgOpacity: 100,
+    numberTextColor: "#F8F4EA",
+    numberTextColorOpacity: 100,
+    numberBadgeBg: "#6E5B36",
+    numberBadgeBgOpacity: 100,
+    numberFontSize: 11,
+    numberFontFamily: "sans",
+    nameTextColor: "#F8F4EA",
+    nameTextColorOpacity: 100,
+    nameFontSize: 11,
+    nameFontFamily: "sans",
+    criteriaHeaderBg: "#101012",
+    criteriaHeaderBgOpacity: 100,
+    criteriaHeaderTextColor: "#D6C39A",
+    criteriaHeaderTextColorOpacity: 100,
+    criteriaHeaderFontSize: 11,
+    criteriaHeaderFontFamily: "sans",
+    criteriaTextColor: "#E7DDC7",
+    criteriaTextColorOpacity: 100,
+    criteriaTextFontSize: 13,
+    criteriaTextFontFamily: "sans",
+    scoringTableBg: "#121214",
+    scoringTableBgOpacity: 100,
+    scoringCategoryRowBg: "#1A1A1D",
+    scoringCategoryRowBgOpacity: 100,
+    scoringTotalRowBg: "#252329",
+    scoringTotalRowBgOpacity: 100,
+    scoringTotalRowLabelTextColor: "#E7DDC7",
+    scoringTotalRowLabelTextColorOpacity: 100,
+    scoringTotalRowScoreTextColor: "#D6C39A",
+    scoringTotalRowScoreTextColorOpacity: 100,
+    scoreInputBg: "#1E1D21",
+    scoreInputBgOpacity: 100,
+    scoreInputBorderColor: "#6E5B36",
+    scoreInputBorderColorOpacity: 100,
+    scoreInputTextColor: "#FFF8E7",
+    scoreInputTextColorOpacity: 100,
+    modalBodyBg: "#131315",
+    modalBodyBgOpacity: 100,
+    modalFooterBg: "#0F0F11",
+    modalFooterBgOpacity: 100,
+    modalHeaderBg: "#09090B",
+    modalHeaderBgOpacity: 100,
+    modalHeaderPrimaryTextColor: "#E7DDC7",
+    modalHeaderPrimaryTextColorOpacity: 100,
+    modalHeaderSecondaryTextColor: "#B9A884",
+    modalHeaderSecondaryTextColorOpacity: 100,
+    modalContestantBadgeBg: "#6E5B36",
+    modalContestantBadgeBgOpacity: 100,
+    modalContestantBadgeTextColor: "#FFF8E7",
+    modalContestantBadgeTextColorOpacity: 100,
+    modalPrimaryButtonBg: "#BFA46F",
+    modalPrimaryButtonBgOpacity: 100,
+    modalPrimaryButtonTextColor: "#111111",
+    modalPrimaryButtonTextColorOpacity: 100,
+    modalSecondaryButtonBg: "#222226",
+    modalSecondaryButtonBgOpacity: 100,
+    modalSecondaryButtonTextColor: "#E7DDC7",
+    modalSecondaryButtonTextColorOpacity: 100,
+  },
+};
+
+const pageantPearlSlateLayout: ContestLayout = {
+  version: 1,
+  templateKey: "pageant",
+  theme: {
+    workspaceBg: "#F4F6F8",
+    workspaceBgOpacity: 100,
+    femaleGroupBg: "#F1F4F7",
+    femaleGroupBgOpacity: 100,
+    femaleBadgeBg: "#94A3B8",
+    femaleBadgeBgOpacity: 100,
+    maleGroupBg: "#F1F4F7",
+    maleGroupBgOpacity: 100,
+    maleBadgeBg: "#64748B",
+    maleBadgeBgOpacity: 100,
+    cardBg: "#FFFFFF",
+    cardBgOpacity: 100,
+    numberTextColor: "#334155",
+    numberTextColorOpacity: 100,
+    numberBadgeBg: "#E2E8F0",
+    numberBadgeBgOpacity: 100,
+    numberFontSize: 11,
+    numberFontFamily: "sans",
+    nameTextColor: "#1E293B",
+    nameTextColorOpacity: 100,
+    nameFontSize: 11,
+    nameFontFamily: "sans",
+    criteriaHeaderBg: "#EEF2F6",
+    criteriaHeaderBgOpacity: 100,
+    criteriaHeaderTextColor: "#334155",
+    criteriaHeaderTextColorOpacity: 100,
+    criteriaHeaderFontSize: 11,
+    criteriaHeaderFontFamily: "sans",
+    criteriaTextColor: "#334155",
+    criteriaTextColorOpacity: 100,
+    criteriaTextFontSize: 13,
+    criteriaTextFontFamily: "sans",
+    scoringTableBg: "#FFFFFF",
+    scoringTableBgOpacity: 100,
+    scoringCategoryRowBg: "#F8FAFC",
+    scoringCategoryRowBgOpacity: 100,
+    scoringTotalRowBg: "#EEF2F7",
+    scoringTotalRowBgOpacity: 100,
+    scoringTotalRowLabelTextColor: "#334155",
+    scoringTotalRowLabelTextColorOpacity: 100,
+    scoringTotalRowScoreTextColor: "#475569",
+    scoringTotalRowScoreTextColorOpacity: 100,
+    scoreInputBg: "#FFFFFF",
+    scoreInputBgOpacity: 100,
+    scoreInputBorderColor: "#CBD5E1",
+    scoreInputBorderColorOpacity: 100,
+    scoreInputTextColor: "#1E293B",
+    scoreInputTextColorOpacity: 100,
+    modalBodyBg: "#FFFFFF",
+    modalBodyBgOpacity: 100,
+    modalFooterBg: "#F8FAFC",
+    modalFooterBgOpacity: 100,
+    modalHeaderBg: "#E2E8F0",
+    modalHeaderBgOpacity: 100,
+    modalHeaderPrimaryTextColor: "#1E293B",
+    modalHeaderPrimaryTextColorOpacity: 100,
+    modalHeaderSecondaryTextColor: "#64748B",
+    modalHeaderSecondaryTextColorOpacity: 100,
+    modalContestantBadgeBg: "#E2E8F0",
+    modalContestantBadgeBgOpacity: 100,
+    modalContestantBadgeTextColor: "#334155",
+    modalContestantBadgeTextColorOpacity: 100,
+    modalPrimaryButtonBg: "#334155",
+    modalPrimaryButtonBgOpacity: 100,
+    modalPrimaryButtonTextColor: "#FFFFFF",
+    modalPrimaryButtonTextColorOpacity: 100,
+    modalSecondaryButtonBg: "#FFFFFF",
+    modalSecondaryButtonBgOpacity: 100,
+    modalSecondaryButtonTextColor: "#334155",
+    modalSecondaryButtonTextColorOpacity: 100,
+  },
+};
+
 const pageantImperialTopazLayout: ContestLayout = {
   version: 1,
   templateKey: "pageant",
@@ -784,6 +1100,7 @@ export default function AdminDashboard() {
   const [participantTab, setParticipantTab] =
     useState<ParticipantSubTab>("category");
   const [monitorTab, setMonitorTab] = useState<MonitorSubTab>("permissions");
+  const [expandedMonitoringRowKey, setExpandedMonitoringRowKey] = useState<string | null>(null);
   const [isJudgeMessageVisibilityAvailable, setIsJudgeMessageVisibilityAvailable] =
     useState(true);
   const [isJudgeMessageUpdatedAtAvailable, setIsJudgeMessageUpdatedAtAvailable] =
@@ -828,10 +1145,23 @@ export default function AdminDashboard() {
   );
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const username = window.localStorage.getItem("admin_username");
-    if (!username) {
-      router.push("/");
-    }
+    let cancelled = false;
+    fetch("/api/auth/session")
+      .then((res) => res.json())
+      .then((payload) => {
+        if (cancelled) return;
+        const role = payload?.session?.role;
+        if (role !== "admin") {
+          router.push("/");
+        }
+      })
+      .catch(() => {
+        if (cancelled) return;
+        router.push("/");
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [router]);
   const [editingCriteriaCategory, setEditingCriteriaCategory] = useState<string>("");
   const [editingContestId, setEditingContestId] = useState<number | null>(null);
@@ -939,9 +1269,7 @@ export default function AdminDashboard() {
     { name: string; weight: string }[]
   >([{ name: "", weight: "" }]);
   const [awards, setAwards] = useState<AwardRow[]>([]);
-  const [awardRecipients, setAwardRecipients] = useState<AwardRecipientRow[]>(
-    [],
-  );
+  const [, setAwardRecipients] = useState<AwardRecipientRow[]>([]);
   const [isAwardModalOpen, setIsAwardModalOpen] = useState(false);
   const [editingAwardId, setEditingAwardId] = useState<number | null>(null);
   const [awardName, setAwardName] = useState("");
@@ -965,9 +1293,6 @@ export default function AdminDashboard() {
   const [awardsTabulationSuccess, setAwardsTabulationSuccess] = useState<
     string | null
   >(null);
-  const [isConfirmingAwardId, setIsConfirmingAwardId] = useState<number | null>(
-    null,
-  );
   const [selectedContestIdForTemplate, setSelectedContestIdForTemplate] =
     useState<number | null>(null);
   const [selectedTemplateKey, setSelectedTemplateKey] =
@@ -1037,11 +1362,34 @@ export default function AdminDashboard() {
   const [selectedTemplateId, setSelectedTemplateId] = useState<number | null>(
     null,
   );
-  const [editingDivisionIdForEvent, setEditingDivisionIdForEvent] = useState<number | null>(null);
-  const [editingDivisionNameForEvent, setEditingDivisionNameForEvent] = useState("");
   const [categoryName, setCategoryName] = useState("");
   const [isSavingCategory, setIsSavingCategory] = useState(false);
   const [categoryError, setCategoryError] = useState<string | null>(null);
+
+  // Screen State
+  const [screenVideoFile, setScreenVideoFile] = useState<File | null>(null);
+  const adminVideoRef = useRef<HTMLVideoElement>(null);
+  const [screenPreviewUrl, setScreenPreviewUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (screenPreviewUrl) {
+      console.log("Admin Loading Video URL:", screenPreviewUrl);
+      if (adminVideoRef.current) {
+        adminVideoRef.current.load();
+      }
+    }
+  }, [screenPreviewUrl]);
+
+  const [screenVideoTitle, setScreenVideoTitle] = useState("");
+  const [screenVideoUrl, setScreenVideoUrl] = useState<string | null>(null);
+  const [isScreenActive, setIsScreenActive] = useState<boolean>(false);
+  const [isSavingScreen, setIsSavingScreen] = useState<boolean>(false);
+  const [screenError, setScreenError] = useState<string | null>(null);
+  const [screenSuccess, setScreenSuccess] = useState<string | null>(null);
+  const [screenUploadProgress, setScreenUploadProgress] = useState<number>(0);
+  const [eventVideos, setEventVideos] = useState<EventScreenVideoRow[]>([]);
+
+  const [isDeletingVideoId, setIsDeletingVideoId] = useState<number | null>(null);
   const [categorySuccess, setCategorySuccess] = useState<string | null>(null);
   const [isDeletingCategoryId, setIsDeletingCategoryId] = useState<number | null>(
     null,
@@ -1161,7 +1509,7 @@ export default function AdminDashboard() {
   const [eventFilterMonth, setEventFilterMonth] = useState("all");
   const [isJudgeContestModalOpen, setIsJudgeContestModalOpen] = useState(false);
   const [judgeContestSearch, setJudgeContestSearch] = useState("");
-  const [judgeContestSubmissions, setJudgeContestSubmissions] = useState<
+  const [, setJudgeContestSubmissions] = useState<
     JudgeContestSubmissionRow[]
   >([]);
   const [tabulationEventFilterId, setTabulationEventFilterId] = useState<
@@ -1250,6 +1598,9 @@ export default function AdminDashboard() {
           const active = typed.find((event) => event.is_active);
           if (active) {
             setActiveEventId(active.id);
+            if (participantsTabEventFilterId === null) {
+              setParticipantsTabEventFilterId(active.id);
+            }
           }
         }
       });
@@ -1527,6 +1878,118 @@ export default function AdminDashboard() {
             }
           }
 
+          const velvetTemplate = typed.find((template) => {
+            const nameLower = template.name.toLowerCase();
+            return nameLower.includes("velvet") && nameLower.includes("amethyst");
+          });
+
+          if (velvetTemplate) {
+            await supabase
+              .from("layout_template")
+              .update({ layout_json: pageantVelvetAmethystLayout })
+              .eq("id", velvetTemplate.id);
+
+            velvetTemplate.layout_json = pageantVelvetAmethystLayout;
+          } else {
+            const { data: insertedVelvet, error: insertVelvetError } =
+              await supabase
+                .from("layout_template")
+                .insert({
+                  name: "Velvet Amethyst",
+                  layout_json: pageantVelvetAmethystLayout,
+                })
+                .select("id, name, layout_json, created_at")
+                .single();
+
+            if (!insertVelvetError && insertedVelvet) {
+              typed.unshift(insertedVelvet as LayoutTemplateRow);
+            }
+          }
+
+          const ivoryTemplate = typed.find((template) => {
+            const nameLower = template.name.toLowerCase();
+            return nameLower.includes("ivory") && nameLower.includes("elegance");
+          });
+
+          if (ivoryTemplate) {
+            await supabase
+              .from("layout_template")
+              .update({ layout_json: pageantIvoryEleganceLayout })
+              .eq("id", ivoryTemplate.id);
+
+            ivoryTemplate.layout_json = pageantIvoryEleganceLayout;
+          } else {
+            const { data: insertedIvory, error: insertIvoryError } =
+              await supabase
+                .from("layout_template")
+                .insert({
+                  name: "Ivory Elegance",
+                  layout_json: pageantIvoryEleganceLayout,
+                })
+                .select("id, name, layout_json, created_at")
+                .single();
+
+            if (!insertIvoryError && insertedIvory) {
+              typed.unshift(insertedIvory as LayoutTemplateRow);
+            }
+          }
+
+          const luxuryTemplate = typed.find((template) => {
+            const nameLower = template.name.toLowerCase();
+            return nameLower.includes("luxury") && nameLower.includes("noir");
+          });
+
+          if (luxuryTemplate) {
+            await supabase
+              .from("layout_template")
+              .update({ layout_json: pageantLuxuryNoirLayout })
+              .eq("id", luxuryTemplate.id);
+
+            luxuryTemplate.layout_json = pageantLuxuryNoirLayout;
+          } else {
+            const { data: insertedLuxury, error: insertLuxuryError } =
+              await supabase
+                .from("layout_template")
+                .insert({
+                  name: "Luxury Noir",
+                  layout_json: pageantLuxuryNoirLayout,
+                })
+                .select("id, name, layout_json, created_at")
+                .single();
+
+            if (!insertLuxuryError && insertedLuxury) {
+              typed.unshift(insertedLuxury as LayoutTemplateRow);
+            }
+          }
+
+          const pearlTemplate = typed.find((template) => {
+            const nameLower = template.name.toLowerCase();
+            return nameLower.includes("pearl") && nameLower.includes("slate");
+          });
+
+          if (pearlTemplate) {
+            await supabase
+              .from("layout_template")
+              .update({ layout_json: pageantPearlSlateLayout })
+              .eq("id", pearlTemplate.id);
+
+            pearlTemplate.layout_json = pageantPearlSlateLayout;
+          } else {
+            const { data: insertedPearl, error: insertPearlError } =
+              await supabase
+                .from("layout_template")
+                .insert({
+                  name: "Pearl Slate",
+                  layout_json: pageantPearlSlateLayout,
+                })
+                .select("id, name, layout_json, created_at")
+                .single();
+
+            if (!insertPearlError && insertedPearl) {
+              typed.unshift(insertedPearl as LayoutTemplateRow);
+            }
+          }
+
           setLayoutTemplates(typed);
           return;
         }
@@ -1549,6 +2012,22 @@ export default function AdminDashboard() {
             {
               name: "Royal",
               layout_json: pageantRoyalLayout,
+            },
+            {
+              name: "Velvet Amethyst",
+              layout_json: pageantVelvetAmethystLayout,
+            },
+            {
+              name: "Ivory Elegance",
+              layout_json: pageantIvoryEleganceLayout,
+            },
+            {
+              name: "Luxury Noir",
+              layout_json: pageantLuxuryNoirLayout,
+            },
+            {
+              name: "Pearl Slate",
+              layout_json: pageantPearlSlateLayout,
             },
           ])
           .select("id, name, layout_json, created_at");
@@ -2112,6 +2591,51 @@ export default function AdminDashboard() {
     };
   }, []);
 
+  // Screen Settings Effect
+  useEffect(() => {
+    if (!participantsTabEventFilterId) {
+      setScreenVideoUrl(null);
+      setIsScreenActive(false);
+      return;
+    }
+
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+    if (!supabaseUrl || !supabaseAnonKey) return;
+
+    const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
+    const fetchScreen = async () => {
+      const { data, error } = await supabase
+        .from("event_screen")
+        .select("video_url, is_active")
+        .eq("event_id", participantsTabEventFilterId)
+        .single();
+
+      if (!error && data) {
+        setScreenVideoUrl(data.video_url);
+        setIsScreenActive(data.is_active);
+      } else {
+        setScreenVideoUrl(null);
+        setIsScreenActive(false);
+      }
+
+      const { data: videosData } = await supabase
+        .from("event_screen_videos")
+        .select("*")
+        .eq("event_id", participantsTabEventFilterId)
+        .order("created_at", { ascending: false });
+
+      if (videosData) {
+        setEventVideos(videosData as EventScreenVideoRow[]);
+      } else {
+        setEventVideos([]);
+      }
+    };
+
+    fetchScreen();
+  }, [participantsTabEventFilterId]);
+
   useEffect(() => {
     if (
       activeJudgeIdForPermissions === null ||
@@ -2445,9 +2969,21 @@ export default function AdminDashboard() {
       return;
     }
 
-    const storedAdminUsername = window.localStorage.getItem("admin_username");
-
-    if (!storedAdminUsername) {
+    let storedAdminUsername: string | null = null;
+    try {
+      const response = await fetch("/api/auth/session");
+      const payload = await response.json().catch(() => ({}));
+      const role = payload?.session?.role;
+      const username =
+        typeof payload?.session?.username === "string"
+          ? payload.session.username
+          : null;
+      if (role !== "admin" || !username) {
+        setAdminGuardError("No admin session found. Please sign in again.");
+        return;
+      }
+      storedAdminUsername = username;
+    } catch {
       setAdminGuardError("No admin session found. Please sign in again.");
       return;
     }
@@ -2899,14 +3435,6 @@ export default function AdminDashboard() {
     }
   }, [activeEventId, eventTabEventFilterId, events]);
 
-  const contestsForActiveEvent = useMemo(
-    () =>
-      activeEventId === null
-        ? []
-        : contests.filter((contest) => contest.event_id === activeEventId),
-    [contests, activeEventId],
-  );
-
   const criteriaForActiveEvent = useMemo(() => {
     if (activeEventId === null) {
       return [];
@@ -3083,23 +3611,6 @@ export default function AdminDashboard() {
   useEffect(() => {
     setTabulationAwardFilterId("all");
   }, [tabulationContestFilterId]);
-
-  const debugTabulationInfo = useMemo(() => {
-    const eventId = effectiveTabulationEventId;
-    const contestIds = eventId === null
-      ? []
-      : contests.filter((c) => c.event_id === eventId).map((c) => c.id);
-
-    const participantCount = participants.filter((p) => contestIds.includes(p.contest_id)).length;
-    const judgeTotalsCount = judgeTotals.filter((t) => contestIds.includes(t.contest_id)).length;
-
-    return {
-      eventId,
-      contestCount: contestIds.length,
-      participantCount,
-      judgeTotalsCount,
-    };
-  }, [effectiveTabulationEventId, contests, participants, judgeTotals]);
 
   const awardsForTabulationEvent = useMemo(() => {
     const eventId = effectiveTabulationEventId;
@@ -3319,29 +3830,7 @@ export default function AdminDashboard() {
         supabase.removeChannel(messageChannel);
       }
     };
-  }, [monitorTab, participantsTabEventFilterId, activeEventId]);
-
-  const tabulatorsForActiveEvent = useMemo(
-    () => {
-      if (activeEventId === null) {
-        const activeEventIds = new Set(events.filter(e => e.is_active).map(e => e.id));
-        return tabulators.filter(t => activeEventIds.has(t.event_id));
-      }
-      return tabulators.filter((tabulator) => tabulator.event_id === activeEventId);
-    },
-    [tabulators, activeEventId, events],
-  );
-
-  const awardsForActiveEvent = useMemo(
-    () => {
-      if (activeEventId === null) {
-        const activeEventIds = new Set(events.filter(e => e.is_active).map(e => e.id));
-        return awards.filter(a => activeEventIds.has(a.event_id));
-      }
-      return awards.filter((award) => award.event_id === activeEventId);
-    },
-    [awards, activeEventId, events],
-  );
+  }, [monitorTab, participantsTabEventFilterId, activeEventId, isJudgeMessageVisibilityAvailable, isJudgeMessageUpdatedAtAvailable]);
 
   const filteredAdmins = useMemo(() => {
     const q = adminSearch.trim().toLowerCase();
@@ -3372,14 +3861,6 @@ export default function AdminDashboard() {
       (p) => p.full_name.toLowerCase().includes(q) || p.contestant_number.toLowerCase().includes(q),
     );
   }, [participantsForActiveEvent, participantSearch]);
-
-  const filteredAwards = useMemo(() => {
-    const q = awardSearch.trim().toLowerCase();
-    if (!q) return awardsForActiveEvent;
-    return awardsForActiveEvent.filter(
-      (a) => a.name.toLowerCase().includes(q) || (a.description ?? "").toLowerCase().includes(q),
-    );
-  }, [awardsForActiveEvent, awardSearch]);
 
   useEffect(() => {
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -3681,13 +4162,12 @@ export default function AdminDashboard() {
     participants,
     categories,
     teams,
-    judgeAssignments,
-    judgeContestSubmissions,
     tabulationEventFilterId,
     tabulationContestFilterId,
     tabulationDivisionFilterId,
     judgeTotals,
     events,
+    activeEventId,
   ]);
 
   const awardsResults = useMemo(() => {
@@ -3915,57 +4395,8 @@ export default function AdminDashboard() {
       }
     }
 
-    // Now populate judgeCriteriaScores after basic setup, because accessing 'scores' state
-    // inside the loop above might be slow if we filter repeatedly.
-    // However, we need 'scores' state.
-    // Let's optimize: build a map of scores by (criteria_id, participant_id, judge_id) -> score
-    // Or just (criteria_id, participant_id) -> { judge_id: score }
-
-    const scoresMap = new Map<string, Record<number, number>>();
-    // Key: `${criteriaId}-${participantId}`
-
-    /* REMOVED PREVIOUS SCORE MAPPING LOGIC AS IT IS NOW HANDLED INSIDE THE LOOP ABOVE */
-    /*
-    if (scores.length > 0) {
-      for (const s of scores) {
-        const key = `${s.criteria_id}-${s.participant_id}`;
-        if (!scoresMap.has(key)) {
-          scoresMap.set(key, {});
-        }
-        const record = scoresMap.get(key)!;
-        record[s.judge_id] = Number(s.score);
-      }
-    }
-
-    for (const awardRow of result) {
-      if (awardRow.awardType !== "criteria") continue;
-      
-      // Find the criteria ID from the original award list
-      const originalAward = activeAwards.find(a => a.id === awardRow.awardId);
-      if (!originalAward || !originalAward.criteria_id) continue;
-      const cId = originalAward.criteria_id;
-
-      for (const p of awardRow.allParticipants) {
-        const key = `${cId}-${p.participantId}`;
-        const judgeScores = scoresMap.get(key);
-        if (judgeScores) {
-          p.judgeCriteriaScores = judgeScores;
-        }
-      }
-      
-      // Also update winners array (it's a subset/copy)
-      for (const w of awardRow.winners) {
-         const key = `${cId}-${w.participantId}`;
-         const judgeScores = scoresMap.get(key);
-         if (judgeScores) {
-           w.judgeCriteriaScores = judgeScores;
-         }
-      }
-    }
-    */
-
     return result;
-  }, [awardsForActiveEvent, criteriaList, contests, tabulationRows, scores]);
+  }, [awardsForTabulationEvent, criteriaList, contests, tabulationRows, scores]);
 
   const selectedTabulationAwardResult = useMemo(() => {
     if (tabulationAwardFilterId === "all") {
@@ -4590,44 +5021,6 @@ export default function AdminDashboard() {
     setContestCategoryText("");
     setEditingContestId(null);
     setIsContestModalOpen(false);
-  };
-
-  const handleSaveDivisionNameForEvent = async () => {
-    setContestError(null);
-    setContestSuccess(null);
-    if (selectedEventIdForContest === null || editingDivisionIdForEvent === null) {
-      return;
-    }
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-    if (!supabaseUrl || !supabaseAnonKey) {
-      setContestError("Supabase is not configured.");
-      return;
-    }
-    const supabase = createClient(supabaseUrl, supabaseAnonKey);
-    const newName = editingDivisionNameForEvent.trim();
-    if (!newName) {
-      setContestError("Division name cannot be empty.");
-      return;
-    }
-    const { data, error } = await supabase
-      .from("division")
-      .update({ name: newName })
-      .eq("id", editingDivisionIdForEvent)
-      .select("id, event_id, name, created_at");
-    if (error) {
-      setContestError(error.message || "Unable to rename division.");
-      return;
-    }
-    const updated = (data as CategoryRow[] | null) ?? null;
-    if (updated && updated.length > 0) {
-      setCategories((prev) =>
-        prev.map((d) => (d.id === updated[0].id ? updated[0] : d)),
-      );
-      setContestSuccess("Division name has been updated.");
-    }
-    setEditingDivisionIdForEvent(null);
-    setEditingDivisionNameForEvent("");
   };
 
   const handleSaveTemplate = async () => {
@@ -5399,89 +5792,6 @@ export default function AdminDashboard() {
     }
 
     setAwards((previous) => previous.filter((award) => award.id !== id));
-  };
-
-  const handleConfirmAwardWinners = async (awardId: number) => {
-    setAwardsTabulationError(null);
-    setAwardsTabulationSuccess(null);
-
-    const award = awardsForActiveEvent.find((item) => item.id === awardId);
-
-    if (!award) {
-      setAwardsTabulationError("Award not found.");
-      return;
-    }
-
-    if (award.award_type !== "criteria") {
-      setAwardsTabulationError(
-        "Only criteria-based awards can be auto-confirmed.",
-      );
-      return;
-    }
-
-    const awardResult = awardsResults.find(
-      (result) => result.awardId === awardId,
-    );
-
-    if (!awardResult || awardResult.winners.length === 0) {
-      setAwardsTabulationError("No winners available to confirm for this award.");
-      return;
-    }
-
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-
-    if (!supabaseUrl || !supabaseAnonKey) {
-      setAwardsTabulationError("Supabase is not configured.");
-      return;
-    }
-
-    const existingRecipientIds = new Set(
-      awardRecipients
-        .filter((row) => row.award_id === awardId)
-        .map((row) => row.participant_id),
-    );
-
-    const winnersToSave = awardResult.winners.filter(
-      (winner) => !existingRecipientIds.has(winner.participantId),
-    );
-
-    if (winnersToSave.length === 0) {
-      setAwardsTabulationSuccess("Recipients for this award are already saved.");
-      return;
-    }
-
-    setIsConfirmingAwardId(awardId);
-
-    const supabase = createClient(supabaseUrl, supabaseAnonKey);
-
-    const rowsToInsert = winnersToSave.map((winner) => ({
-      award_id: awardId,
-      participant_id: winner.participantId,
-    }));
-
-    const { data, error } = await supabase
-      .from("award_recipient")
-      .insert(rowsToInsert)
-      .select("id, award_id, participant_id, created_at");
-
-    setIsConfirmingAwardId(null);
-
-    if (error) {
-      setAwardsTabulationError(
-        error.message || "Unable to confirm award recipients.",
-      );
-      return;
-    }
-
-    if (data && Array.isArray(data)) {
-      setAwardRecipients((previous) => [
-        ...data.map((row) => row as AwardRecipientRow),
-        ...previous,
-      ]);
-    }
-
-    setAwardsTabulationSuccess("Award recipients have been saved.");
   };
 
   const handleSaveCategory = async () => {
@@ -6375,6 +6685,20 @@ export default function AdminDashboard() {
     setAdmins((previous) => previous.filter((admin) => admin.id !== id));
   };
 
+  const activeEventIds = events
+    .filter((event) => event.is_active)
+    .map((event) => event.id);
+  const activeEventIdSet = new Set(activeEventIds);
+
+  const totalJudgesInActiveEvents = judges.filter((judge) =>
+    activeEventIdSet.has(judge.event_id),
+  ).length;
+
+  const totalParticipantsInActiveEvents = participants.filter((participant) => {
+    const contest = contests.find((item) => item.id === participant.contest_id);
+    return contest ? activeEventIdSet.has(contest.event_id) : false;
+  }).length;
+
   return (
     <div className="flex min-h-screen flex-col overflow-x-hidden bg-[#F1F5F9] text-slate-900">
       {/* Background patterns */}
@@ -6425,15 +6749,21 @@ export default function AdminDashboard() {
                 Administrator
               </span>
             </div>
-            <Link
-              href="/"
+            <button
+              type="button"
+              onClick={async () => {
+                try {
+                  await fetch("/api/auth/logout", { method: "POST" });
+                } catch {}
+                router.push("/");
+              }}
               className="group flex items-center gap-2 rounded-xl border-2 border-slate-100 bg-white px-4 py-2 text-[11px] font-bold text-slate-600 transition-all duration-300 hover:border-red-100 hover:bg-red-50 hover:text-red-500"
             >
               <span>Sign out</span>
               <svg className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
               </svg>
-            </Link>
+            </button>
           </div>
         </div>
       </header>
@@ -6459,9 +6789,9 @@ export default function AdminDashboard() {
 
                 <div className="grid gap-4 sm:grid-cols-3">
                   {[
-                    { label: "Active Events", value: events.filter((e) => e.is_active).length, lottiePath: "/Confetti.json" },
-                    { label: "Total Judges", value: activeEventId ? judges.filter((j) => j.event_id === activeEventId).length : 0, lottiePath: "/Scales.json" },
-                    { label: "Participants", value: activeEventId ? participants.filter((p) => contests.find((c) => c.id === p.contest_id)?.event_id === activeEventId).length : 0, lottiePath: "/Fashionable%20girl%20in%20red%20dress.json" }
+                    { label: "Active Events", value: activeEventIds.length, lottiePath: "/Confetti.json" },
+                    { label: "Total Judges", value: totalJudgesInActiveEvents, lottiePath: "/Scales.json" },
+                    { label: "Participants", value: totalParticipantsInActiveEvents, lottiePath: "/Fashionable%20girl%20in%20red%20dress.json" }
                   ].map((stat, i) => (
                     <div
                       key={i}
@@ -8625,7 +8955,7 @@ export default function AdminDashboard() {
                           ) : (
                             layoutTemplates.map((template) => {
                               const isBuiltIn = template.layout_json.templateKey === "pageant" && 
-                                ["Pageant \u2013 Default", "Platinum Mist", "Imperial Topaz", "Royal"].includes(template.name);
+                                ["Pageant \u2013 Default", "Platinum Mist", "Imperial Topaz", "Royal", "Velvet Amethyst", "Ivory Elegance", "Luxury Noir", "Pearl Slate"].includes(template.name);
                               return (
                                 <div key={template.id} className="group flex items-center justify-between gap-3 rounded-2xl bg-white p-3 shadow-sm transition-all hover:shadow-md">
                                   <div className="min-w-0">
@@ -10848,7 +11178,7 @@ export default function AdminDashboard() {
                                 </td>
                                 <td className="px-8 py-5">
                                   <span className="text-[13px] font-medium text-slate-600">
-                                    {categories.find(c => c.id === participant.division_id)?.name ?? "Unknown"}
+                                    {teams.find((team) => team.id === participant.team_id)?.name ?? "Unknown"}
                                   </span>
                                 </td>
                                 <td className="px-8 py-5">
@@ -10898,6 +11228,7 @@ export default function AdminDashboard() {
                   { id: "permissions", label: "Judge Permissions" },
                   { id: "monitoring", label: "Live Monitoring" },
                   { id: "message", label: "Message" },
+                  { id: "screen", label: "Screen" },
                 ].map((tab) => (
                   <button
                     key={tab.id}
@@ -11354,10 +11685,18 @@ export default function AdminDashboard() {
                     {(() => {
                       const effectiveEventId = participantsTabEventFilterId ?? activeEventId;
                       const rows: Array<{
+                        rowKey: string;
                         contestName: string;
                         judgeName: string;
                         filled: number;
                         expected: number;
+                        participantDetails: Array<{
+                          participantName: string;
+                          filled: number;
+                          expected: number;
+                          missing: number;
+                          percent: number;
+                        }>;
                       }> = [];
                       for (const contest of contestsForParticipantsTab) {
                         if (effectiveEventId !== null && contest.event_id !== effectiveEventId) continue;
@@ -11369,7 +11708,39 @@ export default function AdminDashboard() {
                         for (const judge of judgesForActiveEvent) {
                           if (!assignedJudgeIds.has(judge.id)) continue;
                           const filled = scores.filter(s => s.judge_id === judge.id && pIds.has(s.participant_id) && cIds.has(s.criteria_id)).length;
-                          rows.push({ contestName: contest.name, judgeName: judge.full_name, filled, expected });
+                          const participantDetails = participants
+                            .filter((participant) => participant.contest_id === contest.id)
+                            .map((participant) => {
+                              const filledPerParticipant = scores.filter(
+                                (score) =>
+                                  score.judge_id === judge.id &&
+                                  score.participant_id === participant.id &&
+                                  cIds.has(score.criteria_id),
+                              ).length;
+                              const expectedPerParticipant = cIds.size;
+                              const missingPerParticipant = Math.max(0, expectedPerParticipant - filledPerParticipant);
+                              const percentPerParticipant =
+                                expectedPerParticipant === 0
+                                  ? 0
+                                  : Math.round((filledPerParticipant / expectedPerParticipant) * 100);
+                              return {
+                                participantName: participant.full_name,
+                                filled: filledPerParticipant,
+                                expected: expectedPerParticipant,
+                                missing: missingPerParticipant,
+                                percent: percentPerParticipant,
+                              };
+                            })
+                            .sort((a, b) => b.missing - a.missing || a.participantName.localeCompare(b.participantName));
+
+                          rows.push({
+                            rowKey: `${contest.id}-${judge.id}`,
+                            contestName: contest.name,
+                            judgeName: judge.full_name,
+                            filled,
+                            expected,
+                            participantDetails,
+                          });
                         }
                       }
 
@@ -11384,11 +11755,11 @@ export default function AdminDashboard() {
                         );
                       }
 
-                      return rows.map((row, idx) => {
+                      return rows.map((row) => {
                         const complete = row.filled >= row.expected;
                         const percent = Math.round((row.filled / row.expected) * 100);
                         return (
-                          <div key={idx} className="group relative overflow-hidden rounded-[32px] border border-white/40 bg-white/80 p-6 shadow-[0_8px_30px_rgb(0,0,0,0.04)] backdrop-blur-xl transition-all hover:shadow-[0_20px_40px_rgba(0,0,0,0.08)]">
+                          <div key={row.rowKey} className="group relative overflow-hidden rounded-[32px] border border-white/40 bg-white/80 p-6 shadow-[0_8px_30px_rgb(0,0,0,0.04)] backdrop-blur-xl transition-all hover:shadow-[0_20px_40px_rgba(0,0,0,0.08)]">
                             <div className="mb-4 flex items-start justify-between">
                               <div className="space-y-1">
                                 <div className="text-[11px] font-bold uppercase tracking-wider text-emerald-600">{row.contestName}</div>
@@ -11417,6 +11788,50 @@ export default function AdminDashboard() {
                                 <span>{row.filled} Filled</span>
                                 <span>{row.expected} Expected</span>
                               </div>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setExpandedMonitoringRowKey((previous) =>
+                                    previous === row.rowKey ? null : row.rowKey,
+                                  )
+                                }
+                                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-[10px] font-bold text-slate-600 transition hover:bg-slate-50"
+                              >
+                                {expandedMonitoringRowKey === row.rowKey ? "Hide Participant Details" : "View Participant Details"}
+                              </button>
+                              {expandedMonitoringRowKey === row.rowKey && (
+                                <div className="rounded-xl border border-slate-100 bg-slate-50/70 p-3">
+                                  <div className="mb-2 text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                                    Per Participant
+                                  </div>
+                                  <div className="space-y-2">
+                                    {row.participantDetails.map((participantRow) => (
+                                      <div
+                                        key={participantRow.participantName}
+                                        className="rounded-lg border border-slate-100 bg-white px-2.5 py-2"
+                                      >
+                                        <div className="mb-1 flex items-center justify-between gap-2">
+                                          <span className="truncate text-[11px] font-semibold text-slate-700">
+                                            {participantRow.participantName}
+                                          </span>
+                                          <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${
+                                            participantRow.missing === 0
+                                              ? "bg-emerald-100 text-emerald-700"
+                                              : "bg-amber-100 text-amber-700"
+                                          }`}>
+                                            {participantRow.percent}%
+                                          </span>
+                                        </div>
+                                        <div className="flex items-center justify-between text-[10px] text-slate-500">
+                                          <span>{participantRow.filled} Filled</span>
+                                          <span>{participantRow.expected} Expected</span>
+                                          <span>{participantRow.missing} Missing</span>
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
                             </div>
                           </div>
                         );
@@ -12233,6 +12648,493 @@ export default function AdminDashboard() {
                           })}
                         </div>
                       )}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {monitorTab === "screen" && (
+                <div className="space-y-8 animate-in fade-in duration-500">
+                  {/* Event Selection */}
+                  <div className="rounded-[32px] border border-white/40 bg-white/80 p-6 shadow-[0_8px_30px_rgb(0,0,0,0.04)] backdrop-blur-xl">
+                    <div className="flex items-center justify-between">
+                      <div className="flex-1">
+                        <label className="mb-2 block text-[13px] font-bold text-slate-700">Select Event</label>
+                        <div className="relative max-w-md">
+                          <select
+                            value={participantsTabEventFilterId ?? ""}
+                            onChange={(e) =>
+                              setParticipantsTabEventFilterId(
+                                e.target.value ? Number(e.target.value) : null,
+                              )
+                            }
+                            className="w-full appearance-none rounded-2xl border border-slate-200 bg-slate-50/50 px-4 py-3 text-[13px] font-medium text-slate-700 outline-none transition-all focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/10"
+                          >
+                            <option value="">Choose an event</option>
+                            {events.filter((e) => e.is_active).map((event) => (
+                              <option key={event.id} value={event.id}>
+                                {event.name} ({event.year})
+                              </option>
+                            ))}
+                          </select>
+                          <div className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-slate-400">
+                            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Global Stop Transmission */}
+                      {isScreenActive && screenVideoUrl && (
+                        <button
+                          onClick={async () => {
+                            if (!participantsTabEventFilterId) return;
+                            setIsSavingScreen(true);
+                            const supabase = getSupabaseClient();
+                            const { error } = await supabase
+                              .from("event_screen")
+                              .upsert({
+                                event_id: participantsTabEventFilterId,
+                                is_active: false,
+                                video_url: null,
+                                updated_at: new Date().toISOString(),
+                              }, { onConflict: "event_id" });
+
+                            if (!error) {
+                              setIsScreenActive(false);
+                              setScreenVideoUrl(null);
+                              setScreenSuccess("Transmission stopped successfully.");
+                            } else {
+                              setScreenError(error.message);
+                            }
+                            setIsSavingScreen(false);
+                          }}
+                          className="flex items-center gap-2 rounded-2xl bg-red-50 px-6 py-3 text-[13px] font-bold text-red-600 ring-1 ring-red-200 transition-all hover:bg-red-100 active:scale-95 disabled:opacity-50"
+                          disabled={isSavingScreen}
+                        >
+                          <div className="h-2 w-2 animate-pulse rounded-full bg-red-500" />
+                          Stop Transmission
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* 1. Video Preview Section (Top) */}
+                  <div className="rounded-[32px] border border-white/40 bg-white/80 p-8 shadow-[0_8px_30px_rgb(0,0,0,0.04)] backdrop-blur-xl">
+                    <div className="mb-6 flex items-center justify-between">
+                      <div>
+                        <h4 className="text-[17px] font-black tracking-tight text-slate-900">Video Preview</h4>
+                        <p className="text-[13px] font-medium text-slate-500">View currently playing or selected video</p>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        {screenPreviewUrl && (
+                          <button
+                            onClick={() => {
+                              if (adminVideoRef.current) {
+                                adminVideoRef.current.load();
+                                setScreenSuccess("Refreshing player...");
+                                setTimeout(() => setScreenSuccess(null), 2000);
+                              }
+                            }}
+                            className="flex items-center gap-2 rounded-xl bg-slate-100 px-4 py-2 text-[11px] font-bold text-slate-600 hover:bg-slate-200 transition-all"
+                          >
+                            <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+                            Refresh Player
+                          </button>
+                        )}
+                        {screenVideoUrl && isScreenActive && (
+                          <div className="flex items-center gap-2 rounded-full bg-emerald-50 px-4 py-1.5 text-[11px] font-black uppercase tracking-wider text-emerald-600 ring-1 ring-emerald-200">
+                            <div className="h-2 w-2 animate-pulse rounded-full bg-emerald-500" />
+                            Transmitting to Judges
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="mx-auto max-w-4xl aspect-video w-full overflow-hidden rounded-[24px] bg-black shadow-2xl relative border border-white/10 group">
+                      {screenPreviewUrl ? (
+                        <video
+                          key={screenPreviewUrl}
+                          ref={adminVideoRef}
+                          controls
+                          autoPlay
+                          muted
+                          loop
+                          playsInline
+                          preload="auto"
+                          className="h-full w-full object-contain"
+                          onError={(e) => {
+                            const videoTarget = e.currentTarget;
+                            const errorCode = videoTarget.error?.code;
+                            const errorMessage = videoTarget.error?.message;
+                            const sourceUrl = videoTarget.currentSrc || videoTarget.src || screenPreviewUrl;
+                            
+                            console.error(`Video Playback Error Detail:`, {
+                              code: errorCode,
+                              message: errorMessage,
+                              url: sourceUrl
+                            });
+                            
+                            setScreenError(
+                              errorCode === 4 
+                                ? "Video format not supported or URL unavailable. Check Cloudinary URL." 
+                                : `Playback failed (Code: ${errorCode ?? '?'}). Please try refreshing.`
+                            );
+                          }}
+                        >
+                          {screenPreviewUrl && (
+                            <source 
+                              src={screenPreviewUrl} 
+                              type="video/mp4" 
+                              onError={() => {
+                                console.error("Source tag error:", screenPreviewUrl);
+                                setScreenError("Format Error: The browser could not load the video source.");
+                              }}
+                            />
+                          )}
+                          Your browser does not support the video tag.
+                        </video>
+                      ) : (
+                        <div className="flex h-full w-full flex-col items-center justify-center bg-slate-900/50 backdrop-blur-sm text-slate-400">
+                          <div className="mb-4 flex h-20 w-20 items-center justify-center rounded-full bg-slate-800/50 text-slate-600 ring-1 ring-white/5">
+                            <svg className="h-10 w-10" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>
+                          </div>
+                          <span className="text-[14px] font-bold tracking-tight">No Video Selected</span>
+                          <p className="mt-1 text-[12px] text-slate-500">Select a video from the library to preview</p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="grid gap-8 lg:grid-cols-3">
+                    {/* 2. Video Upload Section */}
+                    <div className="lg:col-span-1">
+                      <div className="h-full space-y-6 rounded-[32px] border border-white/40 bg-white/80 p-8 shadow-[0_8px_30px_rgb(0,0,0,0.04)] backdrop-blur-xl">
+                        <div>
+                          <h4 className="text-[17px] font-black tracking-tight text-slate-900">Upload Video</h4>
+                          <p className="text-[13px] font-medium text-slate-500">Add new video to Cloudinary</p>
+                        </div>
+
+                        <div className="space-y-4">
+                          <div className="space-y-2">
+                            <label className="text-[12px] font-bold uppercase tracking-wider text-slate-500">Video Title *</label>
+                            <input
+                              type="text"
+                              value={screenVideoTitle}
+                              onChange={(e) => setScreenVideoTitle(e.target.value)}
+                              placeholder="e.g. Grand Final Intro"
+                              className="w-full rounded-2xl border border-slate-200 bg-slate-50/50 px-4 py-3 text-[13px] font-medium text-slate-900 outline-none transition-all focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/10"
+                            />
+                          </div>
+
+                          <div className="space-y-2">
+                            <label className="text-[12px] font-bold uppercase tracking-wider text-slate-500">Select File *</label>
+                            <div className="relative group">
+                              <input
+                                type="file"
+                                accept="video/*"
+                                onChange={(e) => setScreenVideoFile(e.target.files?.[0] || null)}
+                                className="w-full rounded-2xl border border-slate-200 bg-slate-50/50 px-4 py-3 text-[13px] font-medium text-slate-700 file:mr-4 file:rounded-full file:border-0 file:bg-emerald-50 file:px-4 file:py-2 file:text-[11px] file:font-bold file:text-emerald-700 hover:file:bg-emerald-100"
+                              />
+                            </div>
+                          </div>
+
+                          {isSavingScreen && screenVideoFile && (
+                            <div className="space-y-2 pt-2">
+                              <div className="flex items-center justify-between text-[11px] font-bold text-slate-500">
+                                <span className="flex items-center gap-2">
+                                  <div className="h-1.5 w-1.5 animate-bounce rounded-full bg-emerald-500" />
+                                  Uploading to Cloudinary...
+                                </span>
+                                <span>{screenUploadProgress}%</span>
+                              </div>
+                              <div className="h-2 w-full overflow-hidden rounded-full bg-slate-100">
+                                <div
+                                  className="h-full bg-emerald-500 transition-all duration-300"
+                                  style={{ width: `${screenUploadProgress}%` }}
+                                />
+                              </div>
+                            </div>
+                          )}
+
+                          <button
+                            onClick={async () => {
+                              if (!participantsTabEventFilterId) {
+                                setScreenError("Please select an event first.");
+                                return;
+                              }
+                              if (!screenVideoFile) {
+                                setScreenError("Please select a video file.");
+                                return;
+                              }
+                              if (!screenVideoTitle.trim()) {
+                                setScreenError("Please provide a video title.");
+                                return;
+                              }
+
+                              setIsSavingScreen(true);
+                              setScreenError(null);
+                              setScreenSuccess(null);
+                              setScreenUploadProgress(0);
+
+                              try {
+                                const cloudName = process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME;
+                                const uploadPreset = process.env.NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET;
+
+                                if (!cloudName || !uploadPreset) {
+                                  throw new Error("Cloudinary configuration missing.");
+                                }
+
+                                const videoData = await new Promise<{ secure_url: string }>((resolve, reject) => {
+                                  const xhr = new XMLHttpRequest();
+                                  xhr.open("POST", `https://api.cloudinary.com/v1_1/${cloudName}/video/upload`);
+                                  xhr.upload.onprogress = (e) => {
+                                    if (e.lengthComputable) {
+                                      setScreenUploadProgress(Math.round((e.loaded / e.total) * 100));
+                                    }
+                                  };
+                                  xhr.onload = () => {
+                                    if (xhr.status >= 200 && xhr.status < 300) resolve(JSON.parse(xhr.responseText));
+                                    else reject(new Error("Upload failed."));
+                                  };
+                                  xhr.onerror = () => reject(new Error("Network error."));
+                                  const formData = new FormData();
+                                  formData.append("file", screenVideoFile);
+                                  formData.append("upload_preset", uploadPreset);
+                                  formData.append("resource_type", "video");
+                                  xhr.send(formData);
+                                });
+
+                                const supabase = getSupabaseClient();
+                                const { error: dbError } = await supabase.from("event_screen_videos").insert({
+                                  event_id: participantsTabEventFilterId,
+                                  video_url: videoData.secure_url,
+                                  video_name: screenVideoTitle.trim(),
+                                });
+
+                                if (dbError) throw dbError;
+
+                                // Refresh list and auto-preview
+                                const { data: videosData } = await supabase
+                                  .from("event_screen_videos")
+                                  .select("*")
+                                  .eq("event_id", participantsTabEventFilterId)
+                                  .order("created_at", { ascending: false });
+                                
+                                if (videosData) setEventVideos(videosData as EventScreenVideoRow[]);
+                                setScreenPreviewUrl(videoData.secure_url);
+                                setScreenSuccess(`"${screenVideoTitle}" uploaded and ready!`);
+                                
+                                // Reset form
+                                setScreenVideoFile(null);
+                                setScreenVideoTitle("");
+                              } catch (err) {
+                                setScreenError((err as Error).message);
+                              } finally {
+                                setIsSavingScreen(false);
+                                setScreenUploadProgress(0);
+                              }
+                            }}
+                            disabled={isSavingScreen || !screenVideoFile || !screenVideoTitle}
+                            className="flex w-full items-center justify-center gap-2 rounded-2xl bg-slate-900 px-6 py-4 text-[13px] font-bold text-white shadow-xl transition-all hover:bg-black active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            {isSavingScreen ? (
+                              <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                            ) : (
+                              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
+                            )}
+                            Start Upload
+                          </button>
+
+                          {(screenError || screenSuccess) && (
+                            <div className={`rounded-2xl px-4 py-3 text-[12px] font-bold flex items-center gap-2 animate-in slide-in-from-top-2 ${
+                              screenError ? "bg-red-50 text-red-600 border border-red-100" : "bg-emerald-50 text-emerald-700 border border-emerald-100"
+                            }`}>
+                              <svg className="h-4 w-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                {screenError ? (
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                ) : (
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                                )}
+                              </svg>
+                              <span className="line-clamp-2">{screenError ?? screenSuccess}</span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* 3. Uploaded Videos Table */}
+                    <div className="lg:col-span-2">
+                      <div className="h-full space-y-6 rounded-[32px] border border-white/40 bg-white/80 p-8 shadow-[0_8px_30px_rgb(0,0,0,0.04)] backdrop-blur-xl">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <h4 className="text-[17px] font-black tracking-tight text-slate-900">Video Library</h4>
+                            <p className="text-[13px] font-medium text-slate-500">Manage all uploaded videos</p>
+                          </div>
+                          <div className="rounded-full bg-slate-100 px-3 py-1 text-[11px] font-bold text-slate-500">
+                            {eventVideos.length} Videos
+                          </div>
+                        </div>
+
+                        <div className="overflow-hidden rounded-[24px] border border-slate-100 bg-white shadow-sm">
+                          <table className="w-full text-left text-[12px]">
+                            <thead>
+                              <tr className="border-b border-slate-50 bg-slate-50/50 text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                                <th className="px-6 py-4">Preview</th>
+                                <th className="px-6 py-4">Title & Info</th>
+                                <th className="px-6 py-4">Upload Date</th>
+                                <th className="px-6 py-4 text-right">Actions</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-50">
+                              {eventVideos.length === 0 ? (
+                                <tr>
+                                  <td colSpan={4} className="px-6 py-12 text-center text-slate-400">
+                                    <div className="flex flex-col items-center">
+                                      <svg className="mb-2 h-8 w-8 opacity-20" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 4v16M17 4v16M3 8h4m10 0h4M3 12h18M3 16h4m10 0h4M4 20h16a1 1 0 001-1V5a1 1 0 00-1-1H4a1 1 0 00-1 1v14a1 1 0 001 1z" /></svg>
+                                      <p className="font-bold">No videos in library</p>
+                                      <p className="text-[11px]">Upload a video to see it here</p>
+                                    </div>
+                                  </td>
+                                </tr>
+                              ) : (
+                                eventVideos.map((vid) => {
+                                  const isLive = vid.video_url === screenVideoUrl && isScreenActive;
+                                  const isPreviewing = vid.video_url === screenPreviewUrl;
+                                  
+                                  // Cloudinary thumbnail logic: replace .mp4 with .jpg
+                                  const thumbnail = vid.video_url.replace(/\.[^/.]+$/, ".jpg");
+
+                                  return (
+                                    <tr key={vid.id} className={`group transition-all ${isLive ? "bg-emerald-50/30" : "hover:bg-slate-50/50"}`}>
+                                      <td className="px-6 py-4">
+                                        <div className="relative aspect-video w-24 overflow-hidden rounded-xl bg-slate-100 ring-1 ring-slate-200 group-hover:ring-emerald-200 transition-all">
+                                          <img 
+                                            src={thumbnail} 
+                                            alt={vid.video_name} 
+                                            className="h-full w-full object-cover"
+                                            onError={(e) => {
+                                              e.currentTarget.style.display = 'none';
+                                              e.currentTarget.parentElement?.classList.add('flex', 'items-center', 'justify-center');
+                                              const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+                                              svg.setAttribute("class", "h-6 w-6 text-slate-300");
+                                              svg.setAttribute("fill", "none");
+                                              svg.setAttribute("viewBox", "0 0 24 24");
+                                              svg.setAttribute("stroke", "currentColor");
+                                              svg.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />';
+                                              e.currentTarget.parentElement?.appendChild(svg);
+                                            }}
+                                          />
+                                          {isLive && (
+                                            <div className="absolute inset-0 flex items-center justify-center bg-emerald-600/20 backdrop-blur-[1px]">
+                                              <div className="rounded-full bg-emerald-500 px-2 py-0.5 text-[8px] font-black uppercase text-white shadow-lg">Live</div>
+                                            </div>
+                                          )}
+                                        </div>
+                                      </td>
+                                      <td className="px-6 py-4">
+                                        <div className="max-w-[180px]">
+                                          <div className="truncate font-black text-slate-800" title={vid.video_name}>{vid.video_name}</div>
+                                        </div>
+                                      </td>
+                                      <td className="px-6 py-4">
+                                        <div className="text-slate-500 font-medium">
+                                          {new Date(vid.created_at).toLocaleDateString(undefined, { 
+                                            month: "long", 
+                                            day: "numeric",
+                                            year: "numeric"
+                                          })}
+                                        </div>
+                                      </td>
+                                      <td className="px-6 py-4 text-right">
+                                        <div className="flex items-center justify-end gap-2">
+                                          <button
+                                            onClick={() =>
+                                              setScreenPreviewUrl((previous) =>
+                                                previous === vid.video_url ? null : vid.video_url,
+                                              )
+                                            }
+                                            className={`flex h-9 items-center gap-2 rounded-xl px-3 text-[11px] font-bold transition-all ${
+                                              isPreviewing
+                                                ? "bg-slate-900 text-white shadow-lg"
+                                                : "bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50"
+                                            }`}
+                                          >
+                                            <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
+                                            {isPreviewing ? "Previewing" : "Preview"}
+                                          </button>
+                                          
+                                          <button
+                                            onClick={async () => {
+                                              if (isLive) return;
+                                              const supabase = getSupabaseClient();
+                                              setIsSavingScreen(true);
+                                              const { error } = await supabase
+                                                .from("event_screen")
+                                                .upsert({
+                                                  event_id: participantsTabEventFilterId,
+                                                  video_url: vid.video_url,
+                                                  is_active: true,
+                                                  updated_at: new Date().toISOString(),
+                                                }, { onConflict: "event_id" });
+                                              
+                                              if (!error) {
+                                                setScreenVideoUrl(vid.video_url);
+                                                setScreenPreviewUrl(vid.video_url);
+                                                setIsScreenActive(true);
+                                                setScreenSuccess(`"${vid.video_name}" is now live!`);
+                                              } else {
+                                                setScreenError(error.message);
+                                              }
+                                              setIsSavingScreen(false);
+                                            }}
+                                            className={`flex h-9 items-center gap-2 rounded-xl px-4 text-[11px] font-black uppercase tracking-wider transition-all ${
+                                              isLive
+                                                ? "bg-emerald-500 text-white shadow-lg shadow-emerald-200"
+                                                : "bg-emerald-50 text-emerald-600 ring-1 ring-emerald-200 hover:bg-emerald-500 hover:text-white"
+                                            }`}
+                                          >
+                                            <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                                            {isLive ? "Active" : "Transmit"}
+                                          </button>
+
+                                          <button
+                                            disabled={isDeletingVideoId === vid.id}
+                                            onClick={async () => {
+                                              if (!confirm(`Permanently delete "${vid.video_name}"?`)) return;
+                                              setIsDeletingVideoId(vid.id);
+                                              const supabase = getSupabaseClient();
+                                              const { error } = await supabase.from("event_screen_videos").delete().eq("id", vid.id);
+                                              if (!error) {
+                                                setEventVideos(prev => prev.filter(v => v.id !== vid.id));
+                                                if (isPreviewing) setScreenPreviewUrl(null);
+                                                if (isLive && participantsTabEventFilterId) {
+                                                  await supabase.from("event_screen").update({ video_url: null, is_active: false }).eq("event_id", participantsTabEventFilterId);
+                                                  setScreenVideoUrl(null);
+                                                  setIsScreenActive(false);
+                                                }
+                                              }
+                                              setIsDeletingVideoId(null);
+                                            }}
+                                            className="flex h-9 w-9 items-center justify-center rounded-xl bg-red-50 text-red-500 transition-all hover:bg-red-500 hover:text-white disabled:opacity-50"
+                                            title="Delete video"
+                                          >
+                                            {isDeletingVideoId === vid.id ? (
+                                              <div className="h-3 w-3 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                                            ) : (
+                                              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                                            )}
+                                          </button>
+                                        </div>
+                                      </td>
+                                    </tr>
+                                  );
+                                })
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
                     </div>
                   </div>
                 </div>

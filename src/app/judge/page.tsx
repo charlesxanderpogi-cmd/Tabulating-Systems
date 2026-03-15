@@ -300,6 +300,19 @@ export default function JudgeDashboardPage() {
   const [awards, setAwards] = useState<AwardRow[]>([]);
   const [activeAwardFilterId, setActiveAwardFilterId] = useState<number | "all">("all");
   const [assignedContestIds, setAssignedContestIds] = useState<number[]>([]);
+  const [screenVideoUrl, setScreenVideoUrl] = useState<string | null>(null);
+  const [isScreenActive, setIsScreenActive] = useState<boolean>(false);
+  const judgeVideoRef = useRef<HTMLVideoElement>(null);
+
+  useEffect(() => {
+    if (screenVideoUrl) {
+      console.log("Judge Loading Video URL:", screenVideoUrl);
+      if (judgeVideoRef.current) {
+        judgeVideoRef.current.load();
+      }
+    }
+  }, [screenVideoUrl]);
+
   const [activeContestId, setActiveContestId] = useState<number | null>(null);
   const [scoringDivisionFilterId, setScoringDivisionFilterId] = useState<
     number | "all"
@@ -309,16 +322,15 @@ export default function JudgeDashboardPage() {
   >("all");
   const [scoreInputs, setScoreInputs] = useState<Record<string, string>>({});
   const [isLoading, setIsLoading] = useState(true);
-  const [isSavingParticipantScores, setIsSavingParticipantScores] =
-    useState(false);
+  const [isSavingParticipantScores] = useState(false);
   const [isSubmittingParticipant, setIsSubmittingParticipant] = useState(false);
-  const [submittedContestIds, setSubmittedContestIds] = useState<number[]>([]);
+  const [, setSubmittedContestIds] = useState<number[]>([]);
   const [judgeScoringPermissions, setJudgeScoringPermissions] = useState<
     JudgeScoringPermissionRow[]
   >([]);
   const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
-  const [modalError, setModalError] = useState<string | null>(null);
+  const [, setSuccess] = useState<string | null>(null);
+  const [, setModalError] = useState<string | null>(null);
   const [currentParticipantIndex, setCurrentParticipantIndex] = useState(0);
   const [contestLayoutTemplateKey, setContestLayoutTemplateKey] =
     useState<ContestLayoutTemplateKey>("standard");
@@ -329,11 +341,9 @@ export default function JudgeDashboardPage() {
   const [gallerySlideIndex, setGallerySlideIndex] = useState(0);
   const [messageQueue, setMessageQueue] = useState<JudgeMessageRow[]>([]);
   const [activeMessage, setActiveMessage] = useState<JudgeMessageRow | null>(null);
-  const [selectedJudgeForBreakdown, setSelectedJudgeForBreakdown] = useState<number | null>(null);
   const [activeTab, setActiveTab] = useState<"score" | "tabulation" | "monitoring">("score");
-  const [activeTabulationView, setActiveTabulationView] = useState<
-    "overall" | "awards"
-  >("awards");
+  const [selectedMonitoringParticipantId, setSelectedMonitoringParticipantId] =
+    useState<number | null>(null);
   const [lastSubmittedParticipantId, setLastSubmittedParticipantId] = useState<number | null>(null);
   const activeContestIdRef = useRef<number | null>(null);
   const isCriteriaSaved = useCallback(
@@ -402,7 +412,7 @@ export default function JudgeDashboardPage() {
       } catch {}
       scoresBroadcastRef.current = null;
     };
-  }, [event?.id, assignedContestIds, judge]);
+  }, [event, assignedContestIds, judge]);
 
   useEffect(() => {
     activeContestIdRef.current = activeContestId;
@@ -437,7 +447,28 @@ export default function JudgeDashboardPage() {
         return;
       }
 
-      const storedUsername = window.localStorage.getItem("judge_username");
+      let storedUsername: string | null = null;
+      try {
+        const response = await fetch("/api/auth/session");
+        const payload = await response.json().catch(() => ({}));
+        const role = payload?.session?.role;
+        const username =
+          typeof payload?.session?.username === "string"
+            ? payload.session.username
+            : null;
+        if (role !== "judge" || !username) {
+          setError("No judge session found. Please sign in again.");
+          setIsLoading(false);
+          router.push("/");
+          return;
+        }
+        storedUsername = username;
+      } catch {
+        setError("No judge session found. Please sign in again.");
+        setIsLoading(false);
+        router.push("/");
+        return;
+      }
 
       if (!storedUsername) {
         setError("No judge session found. Please sign in again.");
@@ -1307,6 +1338,59 @@ export default function JudgeDashboardPage() {
     };
   }, [router]);
 
+  // Screen Overlay Effect
+  useEffect(() => {
+    if (!judge) return;
+
+    const supabase = getSupabaseClient();
+    const eventId = judge.event_id;
+
+    // Initial fetch
+    supabase
+      .from("event_screen")
+      .select("video_url, is_active")
+      .eq("event_id", eventId)
+      .single()
+      .then(({ data }) => {
+        if (data) {
+          const row = data as { video_url: string | null; is_active: boolean };
+          setScreenVideoUrl(row.video_url);
+          setIsScreenActive(row.is_active);
+        } else {
+          setScreenVideoUrl(null);
+          setIsScreenActive(false);
+        }
+      });
+
+    // Subscribe to changes
+    const channel = supabase
+      .channel(`screen-${eventId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "event_screen",
+          filter: `event_id=eq.${eventId}`,
+        },
+        (payload) => {
+          if (payload.eventType === "INSERT" || payload.eventType === "UPDATE") {
+            const newRow = payload.new as { video_url: string | null; is_active: boolean };
+            setScreenVideoUrl(newRow.video_url);
+            setIsScreenActive(newRow.is_active);
+          } else if (payload.eventType === "DELETE") {
+             setScreenVideoUrl(null);
+             setIsScreenActive(false);
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [judge]);
+
   useEffect(() => {
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
     const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
@@ -1416,7 +1500,7 @@ export default function JudgeDashboardPage() {
       clearInterval(pollInterval);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [judge?.id]);
+  }, [judge?.id, judgeScoringPermissions]);
 
   const activeContest = useMemo(
     () => contests.find((contest) => contest.id === activeContestId) || null,
@@ -1631,85 +1715,6 @@ export default function JudgeDashboardPage() {
     activeContestScoringType,
   ]);
 
-  const currentParticipantTotalScore = useMemo(() => {
-    if (!activeContest) {
-      return null;
-    }
-
-    const participant = activeContestParticipants[currentParticipantIndex];
-
-    if (!participant) {
-      return null;
-    }
-
-    if (activeContestCriteria.length === 0) {
-      return null;
-    }
-
-    let total = 0;
-    let hasAny = false;
-
-    for (const criteria of activeContestCriteria) {
-      const key = `${participant.id}-${criteria.id}`;
-      const inputValue = scoreInputs[key];
-
-      let value: number | null = null;
-
-      if (inputValue !== undefined && inputValue !== "") {
-        const parsedInput = Number(inputValue);
-
-        if (Number.isFinite(parsedInput)) {
-          value = parsedInput;
-        }
-      }
-
-      if (value === null) {
-        const existing = scores.find(
-          (score) =>
-            score.participant_id === participant.id &&
-            score.criteria_id === criteria.id,
-        );
-
-        if (existing) {
-          const parsedExisting = Number(existing.score);
-
-          if (Number.isFinite(parsedExisting)) {
-            value = parsedExisting;
-          }
-        }
-      }
-
-      if (value === null) {
-        continue;
-      }
-
-      hasAny = true;
-
-      if (
-        activeContestScoringType === "points" ||
-        activeContestScoringType === "ranking"
-      ) {
-        total += value;
-      } else {
-        total += value * (criteria.percentage / 100);
-      }
-    }
-
-    if (!hasAny) {
-      return null;
-    }
-
-    return Number(total.toFixed(2));
-  }, [
-    activeContest,
-    activeContestScoringType,
-    activeContestCriteria,
-    activeContestParticipants,
-    currentParticipantIndex,
-    scoreInputs,
-    scores,
-  ]);
-
   const awardsForActiveContest = useMemo(() => {
     if (!event || !activeContest) {
       return [];
@@ -1742,41 +1747,6 @@ export default function JudgeDashboardPage() {
 
     return filtered;
   }, [awards, criteriaList, event, activeContest]);
-
-  const criteriaScoreByParticipant = useMemo(() => {
-    const map = new Map<string, number>();
-
-    if (!activeContest) {
-      return map;
-    }
-
-    const statsMap = new Map<string, { sum: number; count: number }>();
-
-    for (const row of scores) {
-      const criteria = criteriaList.find(
-        (criteriaRow) => criteriaRow.id === row.criteria_id,
-      );
-      if (!criteria || criteria.contest_id !== activeContest.id) {
-        continue;
-      }
-      const key = `${row.criteria_id}-${row.participant_id}`;
-      const current = statsMap.get(key) ?? { sum: 0, count: 0 };
-      statsMap.set(key, {
-        sum: current.sum + Number(row.score),
-        count: current.count + 1,
-      });
-    }
-
-    for (const [key, stats] of statsMap) {
-      // If Chairman, we want the SUM. If Judge, we want the Average (but since count=1, it's same).
-      // Wait, if Chairman, 'criteriaScoreByParticipant' is used for ranking.
-      // Ranking should be based on Total Score (Sum).
-      const value = judge && judge.role === "chairman" ? stats.sum : (stats.count > 0 ? stats.sum / stats.count : 0);
-      map.set(key, value);
-    }
-
-    return map;
-  }, [scores, criteriaList, activeContest, judge]);
 
   const awardsResults = useMemo<AwardResult[]>(() => {
     if (!event || !activeContest) {
@@ -1949,7 +1919,7 @@ export default function JudgeDashboardPage() {
     });
 
     return rowsWithTotals;
-  }, [selectedAwardResult, criteriaScoreByParticipant, scores]);
+  }, [selectedAwardResult, scores, judge, eventJudges]);
 
   const participantCategoryName = useCallback(
     (participant: ParticipantRow) => {
@@ -2357,11 +2327,15 @@ export default function JudgeDashboardPage() {
   };
 
   const handleSignOut = () => {
-    if (typeof window !== "undefined") {
-      window.localStorage.removeItem("judge_username");
-      document.cookie = "judge_username=; path=/; max-age=0";
-    }
-    router.push("/");
+    (async () => {
+      try {
+        await fetch("/api/auth/logout", { method: "POST" });
+      } catch {}
+      if (typeof window !== "undefined") {
+        window.localStorage.removeItem("judge_username");
+      }
+      router.push("/");
+    })();
   };
 
   const dismissActiveMessage = async () => {
@@ -2489,201 +2463,6 @@ export default function JudgeDashboardPage() {
     return Array.from(groups.entries());
   }, [activeContestCriteria]);
 
-  const judgeTotalsForActiveContest = useMemo(
-    () =>
-      judgeTotals.filter(
-        (t) => (activeContest ? t.contest_id === activeContest.id : false),
-      ),
-    [judgeTotals, activeContest],
-  );
-
-  const judgeIdsForActiveContest = useMemo(() => {
-    const ids = judgeTotalsForActiveContest.map((t) => t.judge_id);
-    return Array.from(new Set(ids)).sort((a, b) => a - b);
-  }, [judgeTotalsForActiveContest]);
-
-  const totalsByJudgeAndParticipant = useMemo(() => {
-    const outer = new Map<number, Map<number, number>>();
-    for (const t of judgeTotalsForActiveContest) {
-      const pmap =
-        outer.get(t.judge_id) ?? new Map<number, number>();
-      pmap.set(t.participant_id, Number(t.total_score));
-      outer.set(t.judge_id, pmap);
-    }
-    return outer;
-  }, [judgeTotalsForActiveContest]);
-
-  const criteriaScoreByJudgeAndParticipant = useMemo(() => {
-    const map = new Map<string, number>();
-    for (const row of scores) {
-      const key = `${row.criteria_id}-${row.judge_id}-${row.participant_id}`;
-      map.set(key, Number(row.score));
-    }
-    return map;
-  }, [scores]);
-
-  const selectedAwardCriteriaIds = useMemo(() => {
-    if (activeAwardFilterId === "all") return [];
-    const award = awards.find((a) => a.id === activeAwardFilterId);
-    if (!award) return [];
-    let ids: number[] = [];
-    const rawIds = award.criteria_ids ?? (award.criteria_id ? [award.criteria_id] : []);
-    if (Array.isArray(rawIds)) {
-      ids = rawIds.map((id) => Number(id));
-    } else if (typeof rawIds === "string") {
-      const s = rawIds as string;
-      if (s.startsWith("{") && s.endsWith("}")) {
-        ids = s.substring(1, s.length - 1).split(",").map((n) => Number(n.trim()));
-      } else {
-        ids = s.split(",").map((n) => Number(n.trim()));
-      }
-    }
-    ids = ids.filter((n) => !isNaN(n));
-    return ids;
-  }, [activeAwardFilterId, awards, criteriaList]);
-
-  const awardTotalsByJudge = useMemo(() => {
-    const outer = new Map<number, Map<number, number>>();
-    if (activeAwardFilterId === "all") return outer;
-    // Determine which judges to include. If overall totals are not available yet,
-    // derive judge IDs from raw scores for the selected criteria within this contest.
-    let judgeIds: number[] = judgeIdsForActiveContest;
-    if (judgeIds.length === 0 && selectedAwardCriteriaIds.length > 0 && activeContest) {
-      const participantIds = new Set(activeContestParticipants.map((p) => p.id));
-      judgeIds = Array.from(
-        new Set(
-          scores
-            .filter(
-              (s) =>
-                selectedAwardCriteriaIds.includes(s.criteria_id) &&
-                participantIds.has(s.participant_id),
-            )
-            .map((s) => s.judge_id),
-        ),
-      );
-    }
-    for (const judgeId of judgeIds) {
-      const pmap = new Map<number, number>();
-      for (const p of activeContestParticipants) {
-        let total = 0;
-        let hasVal = false;
-        for (const cId of selectedAwardCriteriaIds) {
-          const key = `${cId}-${judgeId}-${p.id}`;
-          const val = criteriaScoreByJudgeAndParticipant.get(key);
-          if (val !== undefined) {
-            total += val;
-            hasVal = true;
-          }
-        }
-        if (hasVal) {
-          pmap.set(p.id, total);
-        }
-      }
-      outer.set(judgeId, pmap);
-    }
-    return outer;
-  }, [activeAwardFilterId, judgeIdsForActiveContest, activeContestParticipants, selectedAwardCriteriaIds, criteriaScoreByJudgeAndParticipant, scores, activeContest]);
-
-  const effectiveTotalsByJudgeAndParticipant = useMemo(() => {
-    return activeAwardFilterId === "all"
-      ? totalsByJudgeAndParticipant
-      : awardTotalsByJudge;
-  }, [activeAwardFilterId, totalsByJudgeAndParticipant, awardTotalsByJudge]);
-
-  const currentJudgeTotals = useMemo(() => {
-    const id = judge?.id ?? null;
-    const map = new Map<number, number>();
-    if (id === null) return map;
-    const pmap = effectiveTotalsByJudgeAndParticipant.get(id);
-    if (pmap) {
-      for (const [pid, total] of pmap.entries()) {
-        map.set(pid, total);
-      }
-    }
-    return map;
-  }, [judge, effectiveTotalsByJudgeAndParticipant]);
-
-  const currentJudgeRankByParticipant = useMemo(() => {
-    const res = new Map<number, number>();
-    // group by division so ranks are computed per-division even when "All divisions" is selected
-    const divisionByPid = new Map<number, number | null>();
-    for (const p of activeContestParticipants) {
-      divisionByPid.set(p.id, p.division_id ?? null);
-    }
-    const groups = new Map<number | null, Array<[number, number]>>();
-    for (const [pid, total] of currentJudgeTotals.entries()) {
-      const div = divisionByPid.get(pid) ?? null;
-      const arr = groups.get(div) ?? [];
-      arr.push([pid, total]);
-      groups.set(div, arr);
-    }
-    for (const arr of groups.values()) {
-      arr.sort((a, b) => b[1] - a[1]);
-      let rank = 0;
-      let index = 0;
-      let prevScore: number | null = null;
-      for (const [pid, total] of arr) {
-        index += 1;
-        if (prevScore === null || total < prevScore) {
-          rank = index;
-        }
-        res.set(pid, rank);
-        prevScore = total;
-      }
-    }
-    return res;
-  }, [currentJudgeTotals, activeContestParticipants]);
-
-  const averageRankByParticipant = useMemo(() => {
-    const avg = new Map<number, number | null>();
-    // compute per-judge ranks, per-division
-    const divisionByPid = new Map<number, number | null>();
-    for (const p of activeContestParticipants) {
-      divisionByPid.set(p.id, p.division_id ?? null);
-    }
-    const perJudgeRank = new Map<number, Map<number, number>>();
-    for (const judgeId of judgeIdsForActiveContest) {
-      const totals = effectiveTotalsByJudgeAndParticipant.get(judgeId);
-      if (!totals) continue;
-      const entries = Array.from(totals.entries());
-      const groups = new Map<number | null, Array<[number, number]>>();
-      for (const [pid, score] of entries) {
-        const div = divisionByPid.get(pid) ?? null;
-        const arr = groups.get(div) ?? [];
-        arr.push([pid, score]);
-        groups.set(div, arr);
-      }
-      const rmap = new Map<number, number>();
-      for (const arr of groups.values()) {
-        arr.sort((a, b) => b[1] - a[1]);
-        let r = 0;
-        let i = 0;
-        let prev: number | null = null;
-        for (const [pid, score] of arr) {
-          i += 1;
-          if (prev === null || score < prev) {
-            r = i;
-          }
-          rmap.set(pid, r);
-          prev = score;
-        }
-      }
-      perJudgeRank.set(judgeId, rmap);
-    }
-    // compute average across all judges (divide by total judge count for contest)
-    const expected = judgeIdsForActiveContest.length;
-    for (const p of activeContestParticipants) {
-      let sum = 0;
-      for (const judgeId of judgeIdsForActiveContest) {
-        const rmap = perJudgeRank.get(judgeId);
-        const r = rmap?.get(p.id);
-        if (r != null) sum += r;
-      }
-      avg.set(p.id, expected > 0 ? sum / expected : null);
-    }
-    return avg;
-  }, [activeContestParticipants, judgeIdsForActiveContest, effectiveTotalsByJudgeAndParticipant]);
-
   // Ensure an award is selected by default when viewing tabulation
   useEffect(() => {
     if (!event) return;
@@ -2693,48 +2472,6 @@ export default function JudgeDashboardPage() {
       setActiveAwardFilterId(first.id);
     }
   }, [event, awards, activeAwardFilterId]);
-
-  const handleBackToContestSelection = () => {
-    if (
-      activeContestParticipants.length === 0 ||
-      currentParticipantIndex === 0
-    ) {
-      return;
-    }
-    setCurrentParticipantIndex((previous) =>
-      Math.max(0, previous - 1),
-    );
-    setError(null);
-    setSuccess(null);
-  };
-
-  const handleSaveCurrentParticipant = async () => {
-    if (!currentParticipant) {
-      return;
-    }
-
-    setIsSavingParticipantScores(true);
-
-    try {
-      await Promise.all(
-        activeContestCriteria.map((criteria) =>
-          handleScoreBlur(currentParticipant.id, criteria.id),
-        ),
-      );
-    } finally {
-      setIsSavingParticipantScores(false);
-    }
-  };
-
-  const handleNextParticipant = () => {
-    if (
-      activeContestParticipants.length === 0 ||
-      currentParticipantIndex + 1 >= activeContestParticipants.length
-    ) {
-      return;
-    }
-    setCurrentParticipantIndex(currentParticipantIndex + 1);
-  };
 
   if (isLoading) {
     return (
@@ -2780,6 +2517,42 @@ export default function JudgeDashboardPage() {
 
   return (
     <div className="flex min-h-screen flex-col overflow-x-hidden bg-[#F1F5F9] text-slate-900">
+      {/* Screen Overlay */}
+      {isScreenActive && screenVideoUrl && (
+        <div className="fixed inset-0 z-[100] bg-black flex items-center justify-center">
+          <video
+            key={screenVideoUrl}
+            ref={judgeVideoRef}
+            autoPlay
+            loop
+            playsInline
+            controls={false}
+            preload="auto"
+            style={{ width: "100%", height: "100%" }}
+            className="h-full w-full object-contain"
+            onError={(e) => {
+              const videoTarget = e.currentTarget;
+              console.error("Judge screen video error details:", {
+                code: videoTarget.error?.code,
+                message: videoTarget.error?.message,
+                src: videoTarget.currentSrc || videoTarget.src || screenVideoUrl
+              });
+            }}
+          >
+            {screenVideoUrl && (
+              <source 
+                src={screenVideoUrl} 
+                type="video/mp4" 
+                onError={() => {
+                  console.error("Judge Source Error:", screenVideoUrl);
+                }}
+              />
+            )}
+            Your browser does not support the video tag.
+          </video>
+        </div>
+      )}
+
       <div className="pointer-events-none fixed inset-0 overflow-hidden opacity-20">
         <div className="absolute -left-[10%] -top-[10%] h-[40%] w-[40%] rounded-full bg-[#1F4D3A1F] blur-[120px]" />
         <div className="absolute -bottom-[10%] -right-[10%] h-[40%] w-[40%] rounded-full bg-[#1F4D3A1A] blur-[120px]" />
@@ -2908,13 +2681,13 @@ export default function JudgeDashboardPage() {
           </nav>
         </div>
 
-        <div className="rounded-[32px] border border-white/40 bg-white/80 p-8 shadow-[0_20px_50px_-12px_rgba(0,0,0,0.08)] backdrop-blur-2xl">
-            <div className="mb-4 flex flex-wrap items-center justify-between gap-4">
+        <div className="rounded-[32px] border border-white/40 bg-white/85 p-6 shadow-[0_20px_50px_-12px_rgba(0,0,0,0.08)] backdrop-blur-2xl">
+            <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
               <div className="flex flex-wrap items-center gap-3 text-sm">
-                <div className="rounded-full bg-[#E3F2EA] px-4 py-2 text-xs font-medium text-[#1F4D3A]">
+                <div className="rounded-full border border-emerald-100 bg-emerald-50 px-4 py-2 text-xs font-semibold text-emerald-800">
                   {event ? `Event: ${event.name}` : "No active event assigned"}
                 </div>
-                <div className="rounded-full bg-[#F5F7FF] px-4 py-2 text-xs font-medium text-slate-700">
+                <div className="rounded-full border border-indigo-100 bg-indigo-50 px-4 py-2 text-xs font-semibold text-indigo-800">
                   {assignedContestIds.length > 0
                     ? `${assignedContestIds.length} contest${
                         assignedContestIds.length > 1 ? "s" : ""
@@ -2935,14 +2708,14 @@ export default function JudgeDashboardPage() {
 
             {/* success message removed from scoring page per requirement */}
 
-            <div className="flex flex-col gap-6">
-              <div className="grid gap-6 md:grid-cols-2">
-                <div className="flex flex-col gap-2 md:max-w-xl">
-                  <span className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
+            <div className="flex flex-col gap-4">
+              <div className="grid gap-4 md:grid-cols-1">
+                <div className="flex flex-col gap-2 w-full max-w-md">
+                  <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
                     Contest
                   </span>
                   <select
-                    className="w-full appearance-none rounded-2xl border border-slate-200 bg-slate-50/50 px-4 py-3 text-[13px] font-medium text-slate-700 outline-none transition-all focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/10"
+                    className="w-full appearance-none rounded-2xl border border-slate-200 bg-white px-4 py-3 text-[13px] font-semibold text-slate-700 outline-none transition-all focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/10"
                     value={activeContestId ?? ""}
                     onChange={(event) => {
                       const value = event.target.value;
@@ -2972,14 +2745,14 @@ export default function JudgeDashboardPage() {
                     </div>
                   ) : (
                     <div className="space-y-4">
-                      <div className="rounded-3xl border border-slate-100 bg-slate-50/50 p-6">
-                        <div className="grid gap-6 md:grid-cols-2">
-                          <div className="flex flex-col gap-2 md:max-w-xl">
-                          <span className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
+                      <div className="rounded-3xl border border-slate-100 bg-slate-50/60 p-4">
+                        <div className="grid gap-4 md:grid-cols-1">
+                          <div className="flex flex-col gap-2 w-full max-w-md">
+                          <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
                             Division filter
                           </span>
                           <select
-                            className="w-full appearance-none rounded-2xl border border-slate-200 bg-white px-4 py-3 text-[13px] font-medium text-slate-700 outline-none transition-all focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/10"
+                            className="w-full appearance-none rounded-2xl border border-slate-200 bg-white px-4 py-3 text-[13px] font-semibold text-slate-700 outline-none transition-all focus:border-emerald-500 focus:bg-white focus:ring-4 focus:ring-emerald-500/10"
                             value={
                               scoringDivisionFilterId === "all"
                                 ? "all"
@@ -3225,6 +2998,9 @@ export default function JudgeDashboardPage() {
                                             >
                                               {participant.full_name}
                                             </div>
+                                            <div className="truncate text-[10px] text-slate-500">
+                                              {teams.find((team) => team.id === participant.team_id)?.name ?? "No team"}
+                                            </div>
                                           </div>
                                         </button>
                                       );
@@ -3353,11 +3129,7 @@ export default function JudgeDashboardPage() {
                                     {participant.full_name}
                                   </div>
                                   <div className="truncate text-[10px] text-slate-500">
-                                    {(contestLayoutTemplateKey as ContestLayoutTemplateKey) === "pageant"
-                                      ? participant.gender ?? ""
-                                      : categories.find(
-                                          (c) => c.id === participant.division_id,
-                                        )?.name ?? ""}
+                                    {teams.find((team) => team.id === participant.team_id)?.name ?? "No team"}
                                   </div>
                                 </div>
                               </button>
@@ -3508,8 +3280,11 @@ export default function JudgeDashboardPage() {
                           </div>
                         </div>
                         {(() => {
+                          const criteriaForContest = criteriaList.filter(
+                            (criteria) => criteria.contest_id === activeContest.id,
+                          );
                           const criteriaIds = new Set(
-                            criteriaList.filter((c) => c.contest_id === activeContest.id).map((c) => c.id),
+                            criteriaForContest.map((criteria) => criteria.id),
                           );
                           const participantIds = new Set(activeContestParticipants.map((p) => p.id));
                           const expected = participantIds.size * criteriaIds.size;
@@ -3525,6 +3300,58 @@ export default function JudgeDashboardPage() {
                                 ).length;
                           const missing = Math.max(0, expected - filled);
                           const percent = expected === 0 ? 0 : Math.min(100, Math.round((filled / expected) * 100));
+                          const participantProgressRows = activeContestParticipants.map((participant) => {
+                            const filledCriteriaIds =
+                              judgeId === null
+                                ? new Set<number>()
+                                : new Set(
+                                    scores
+                                      .filter(
+                                        (score) =>
+                                          score.judge_id === judgeId &&
+                                          score.participant_id === participant.id &&
+                                          criteriaIds.has(score.criteria_id),
+                                      )
+                                      .map((score) => score.criteria_id),
+                                  );
+                            const expectedPerParticipant = criteriaForContest.length;
+                            const filledPerParticipant = filledCriteriaIds.size;
+                            const missingPerParticipant = Math.max(
+                              0,
+                              expectedPerParticipant - filledPerParticipant,
+                            );
+                            const completionPercent =
+                              expectedPerParticipant === 0
+                                ? 0
+                                : Math.min(
+                                    100,
+                                    Math.round(
+                                      (filledPerParticipant / expectedPerParticipant) * 100,
+                                    ),
+                                  );
+
+                            const missingCriteriaNames = criteriaForContest
+                              .filter((criteria) => !filledCriteriaIds.has(criteria.id))
+                              .map((criteria) => criteria.name);
+
+                            return {
+                              participant,
+                              expectedPerParticipant,
+                              filledPerParticipant,
+                              missingPerParticipant,
+                              completionPercent,
+                              missingCriteriaNames,
+                              filledCriteriaIds: Array.from(filledCriteriaIds),
+                            };
+                          });
+                          const selectedParticipantProgressRow =
+                            selectedMonitoringParticipantId === null
+                              ? null
+                              : participantProgressRows.find(
+                                  (row) =>
+                                    row.participant.id ===
+                                    selectedMonitoringParticipantId,
+                                ) ?? null;
                           return (
                             <div className="overflow-x-auto">
                               <table className="min-w-full border-collapse text-left text-[11px]">
@@ -3562,6 +3389,135 @@ export default function JudgeDashboardPage() {
                                   </tr>
                                 </tbody>
                               </table>
+
+                              <div className="my-5 h-px bg-[#E2E8F0]" />
+
+                              <div className="mb-2 text-[12px] font-bold text-slate-700">
+                                Participant input completeness
+                              </div>
+                              <table className="min-w-full border-collapse text-left text-[11px]">
+                                <thead>
+                                  <tr className="border-b border-[#E2E8F0] bg-[#F5F7FF] text-[10px] uppercase tracking-wide text-slate-500">
+                                    <th className="px-3 py-2 font-medium">Participant</th>
+                                    <th className="px-3 py-2 font-medium text-right">Filled</th>
+                                    <th className="px-3 py-2 font-medium text-right">Expected</th>
+                                    <th className="px-3 py-2 font-medium text-right">Missing</th>
+                                    <th className="px-3 py-2 font-medium text-right">Status</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {participantProgressRows.map((row) => (
+                                    <tr key={row.participant.id} className="border-b border-[#F1F5F9]">
+                                      <td className="px-3 py-2 text-slate-700">
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            setSelectedMonitoringParticipantId((previous) =>
+                                              previous === row.participant.id
+                                                ? null
+                                                : row.participant.id,
+                                            )
+                                          }
+                                          className="text-left font-semibold text-slate-800 underline decoration-dotted underline-offset-2 hover:text-[#1F4D3A]"
+                                        >
+                                          {row.participant.full_name}
+                                        </button>
+                                        <div className="text-[10px] text-slate-500">
+                                          Missing fields:{" "}
+                                          {row.missingCriteriaNames.length > 0
+                                            ? row.missingCriteriaNames.join(", ")
+                                            : "None"}
+                                        </div>
+                                      </td>
+                                      <td className="px-3 py-2 text-right text-slate-700">
+                                        {row.filledPerParticipant.toLocaleString()}
+                                      </td>
+                                      <td className="px-3 py-2 text-right text-slate-700">
+                                        {row.expectedPerParticipant.toLocaleString()}
+                                      </td>
+                                      <td className="px-3 py-2 text-right text-slate-700">
+                                        {row.missingPerParticipant.toLocaleString()}
+                                      </td>
+                                      <td className="px-3 py-2 text-right">
+                                        <span
+                                          className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] ${
+                                            row.missingPerParticipant === 0 &&
+                                            row.expectedPerParticipant > 0
+                                              ? "bg-[#ECFDF5] text-[#065F46] border border-[#A7F3D0]"
+                                              : "bg-[#FEF2F2] text-[#991B1B] border border-[#FECACA]"
+                                          }`}
+                                          title={`${row.completionPercent}% complete`}
+                                        >
+                                          {row.missingPerParticipant === 0 &&
+                                          row.expectedPerParticipant > 0
+                                            ? "Complete"
+                                            : `${row.completionPercent}%`}
+                                        </span>
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+
+                              {selectedParticipantProgressRow && (
+                                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
+                                  <div className="w-full max-w-2xl overflow-hidden rounded-[28px] border border-[#E2E8F0] bg-white shadow-[0_35px_90px_rgba(15,23,42,0.35)]">
+                                    <div className="flex items-center justify-between gap-4 border-b border-[#E2E8F0] bg-[#F8FAFC] px-6 py-4">
+                                      <div>
+                                        <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">
+                                          Participant Criteria Status
+                                        </div>
+                                        <div className="text-[15px] font-bold text-slate-800">
+                                          {selectedParticipantProgressRow.participant.full_name}
+                                        </div>
+                                      </div>
+                                      <button
+                                        type="button"
+                                        onClick={() => setSelectedMonitoringParticipantId(null)}
+                                        className="rounded-full bg-white px-3 py-1.5 text-[11px] font-semibold text-slate-700 ring-1 ring-[#E2E8F0] hover:bg-slate-50"
+                                      >
+                                        Close
+                                      </button>
+                                    </div>
+                                    <div className="max-h-[65vh] overflow-auto p-5">
+                                      <table className="min-w-full border-collapse text-left text-[11px]">
+                                        <thead>
+                                          <tr className="border-b border-[#E2E8F0] bg-[#F8FAFC] text-[10px] uppercase tracking-wide text-slate-500">
+                                            <th className="px-3 py-2 font-medium">Criteria</th>
+                                            <th className="px-3 py-2 font-medium text-right">Status</th>
+                                          </tr>
+                                        </thead>
+                                        <tbody>
+                                          {criteriaForContest.map((criteria) => {
+                                            const isFilled =
+                                              selectedParticipantProgressRow.filledCriteriaIds.includes(
+                                                criteria.id,
+                                              );
+                                            return (
+                                              <tr key={criteria.id} className="border-b border-[#F1F5F9]">
+                                                <td className="px-3 py-2 text-slate-700">
+                                                  {criteria.name}
+                                                </td>
+                                                <td className="px-3 py-2 text-right">
+                                                  <span
+                                                    className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] ${
+                                                      isFilled
+                                                        ? "bg-[#ECFDF5] text-[#065F46] border border-[#A7F3D0]"
+                                                        : "bg-[#FEF2F2] text-[#991B1B] border border-[#FECACA]"
+                                                    }`}
+                                                  >
+                                                    {isFilled ? "Filled" : "Not filled"}
+                                                  </span>
+                                                </td>
+                                              </tr>
+                                            );
+                                          })}
+                                        </tbody>
+                                      </table>
+                                    </div>
+                                  </div>
+                                </div>
+                              )}
                             </div>
                           );
                         })()}
@@ -3930,14 +3886,6 @@ export default function JudgeDashboardPage() {
                       const trimmed = rawCategoryName.trim();
                       const isUncategorized = trimmed === "";
                       const headerLabel = isUncategorized ? "" : trimmed;
-
-                      // Calculate subtotal for this category
-                      const categorySubtotal = items.reduce((sum, criteria) => {
-                        const key = `${currentParticipant.id}-${criteria.id}`;
-                        const value = scoreInputs[key];
-                        const numericValue = value ? Number.parseFloat(value) : 0;
-                        return sum + (Number.isNaN(numericValue) ? 0 : numericValue);
-                      }, 0);
 
                       return (
                         <Fragment key={trimmed || "uncategorized"}>

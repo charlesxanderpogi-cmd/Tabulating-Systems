@@ -35,6 +35,7 @@ const securityHeaders = [
       "script-src 'self' 'unsafe-inline'",
       "style-src 'self' 'unsafe-inline'",
       "img-src 'self' https: data: blob:",
+      "media-src 'self' https: data: blob:",
       "font-src 'self' https: data:",
       `connect-src 'self' https: ${supabaseWssUrl} ${supabaseHttpsUrl}`,
       "object-src 'none'",

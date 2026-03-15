@@ -6,13 +6,6 @@ import { getSupabaseClient } from "@/lib/supabase";
 
 type Role = "admin" | "judge" | "tabulator";
 
-type UserTabulatorRow = {
-  id: number;
-  event_id: number;
-  full_name: string;
-  username: string;
-};
-
 type EventRow = {
   id: number;
   name: string;
@@ -103,63 +96,36 @@ export default function Home() {
     setSuccess(null);
     setIsSubmitting(true);
 
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-
-    if (!supabaseUrl || !supabaseAnonKey) {
-      setError(
-        "Supabase is not configured. Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY."
-      );
-      setIsSubmitting(false);
-      return;
-    }
-
-    const supabase = getSupabaseClient();
-
     const username = identifier.trim();
-    const functionName =
-      role === "admin"
-        ? "authenticate_admin"
-        : role === "judge"
-        ? "authenticate_judge"
-        : "authenticate_tabulator";
 
-    const { data, error: authError } = await supabase.rpc(functionName, {
-      p_username: username,
-      p_password: password,
-    });
+    try {
+      const response = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ role, username, password }),
+      });
 
-    if (authError) {
-      setError(authError.message || "Unable to sign in.");
-      setIsSubmitting(false);
-      return;
-    }
-
-    if (!data || (Array.isArray(data) && data.length === 0)) {
-      setError("Invalid username or password.");
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        const message =
+          typeof payload?.error === "string" ? payload.error : "Unable to sign in.";
+        setError(message);
+        setIsSubmitting(false);
+        return;
+      }
+    } catch {
+      setError("Unable to sign in.");
       setIsSubmitting(false);
       return;
     }
 
     if (role === "admin") {
-      try {
-        window.localStorage.setItem("admin_username", username);
-        document.cookie = `admin_username=${encodeURIComponent(username)}; path=/`;
-      } catch {}
       setSuccess("Welcome back, administrator. Redirecting to admin console...");
       router.push("/admin");
     } else if (role === "tabulator") {
-      try {
-        window.localStorage.setItem("tabulator_username", username);
-        document.cookie = `tabulator_username=${encodeURIComponent(username)}; path=/`;
-      } catch {}
       setSuccess("Welcome tabulator. Redirecting to tabulation workspace...");
       router.push("/tabulator");
     } else {
-      try {
-        window.localStorage.setItem("judge_username", username);
-        document.cookie = `judge_username=${encodeURIComponent(username)}; path=/`;
-      } catch {}
       setSuccess("Welcome judge. Redirecting to scoring dashboard...");
       router.push("/judge");
     }
@@ -259,7 +225,7 @@ export default function Home() {
                               transform: `translate(${parseFloat(txp) * 100}%, ${parseFloat(typ) * 100}%) scale(${parseFloat(tz)})`,
                             };
                           }
-                        } catch (e) {}
+                        } catch {}
                         return { objectFit: "cover" };
                       })()}
                     />

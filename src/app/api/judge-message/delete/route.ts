@@ -1,7 +1,53 @@
 import { createClient } from "@supabase/supabase-js";
+import {
+  getSessionCookieName,
+  getSessionSecret,
+  isSameOrigin,
+  verifySessionToken,
+} from "@/lib/session";
+
+function getCookieValue(cookieHeader: string | null, name: string) {
+  if (!cookieHeader) return null;
+  const parts = cookieHeader.split(";").map((p) => p.trim());
+  for (const part of parts) {
+    if (!part) continue;
+    const eq = part.indexOf("=");
+    if (eq === -1) continue;
+    const k = part.slice(0, eq).trim();
+    if (k !== name) continue;
+    return decodeURIComponent(part.slice(eq + 1));
+  }
+  return null;
+}
 
 export async function POST(request: Request) {
+  if (!isSameOrigin(request)) {
+    return new Response(JSON.stringify({ error: "Invalid origin" }), {
+      status: 403,
+      headers: { "content-type": "application/json" },
+    });
+  }
+
   try {
+    const token = getCookieValue(
+      request.headers.get("cookie"),
+      getSessionCookieName(),
+    );
+    if (!token) {
+      return new Response(JSON.stringify({ error: "Unauthorized" }), {
+        status: 401,
+        headers: { "content-type": "application/json" },
+      });
+    }
+
+    const session = await verifySessionToken(token, getSessionSecret());
+    if (!session || session.role !== "admin") {
+      return new Response(JSON.stringify({ error: "Forbidden" }), {
+        status: 403,
+        headers: { "content-type": "application/json" },
+      });
+    }
+
     const body = await request.json();
     const id = body?.id;
 

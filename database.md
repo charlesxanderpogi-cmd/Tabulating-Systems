@@ -82,6 +82,25 @@ CREATE TABLE public.event (
   is_active boolean,
   CONSTRAINT event_pkey PRIMARY KEY (id)
 );
+CREATE TABLE public.event_screen (
+  id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,
+  event_id bigint NOT NULL UNIQUE,
+  video_url text,
+  is_active boolean NOT NULL DEFAULT false,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT event_screen_pkey PRIMARY KEY (id),
+  CONSTRAINT event_screen_event_fkey FOREIGN KEY (event_id) REFERENCES public.event(id)
+);
+CREATE TABLE public.event_screen_videos (
+  id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,
+  event_id bigint NOT NULL,
+  video_url text NOT NULL,
+  video_name text NOT NULL,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT event_screen_videos_pkey PRIMARY KEY (id),
+  CONSTRAINT event_screen_videos_event_fkey FOREIGN KEY (event_id) REFERENCES public.event(id)
+);
 CREATE TABLE public.judge_assignment (
   judge_id bigint NOT NULL,
   contest_id bigint NOT NULL,
@@ -117,6 +136,7 @@ CREATE TABLE public.judge_message (
   body text NOT NULL,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   is_visible boolean NOT NULL DEFAULT true,
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
   CONSTRAINT judge_message_pkey PRIMARY KEY (id),
   CONSTRAINT judge_message_event_id_fkey FOREIGN KEY (event_id) REFERENCES public.event(id),
   CONSTRAINT judge_message_judge_id_fkey FOREIGN KEY (judge_id) REFERENCES public.user_judge(id)

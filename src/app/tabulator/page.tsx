@@ -277,7 +277,7 @@ export default function TabulatorPage() {
   const router = useRouter();
   const [tabulator, setTabulator] = useState<TabulatorRow | null>(null);
   const [event, setEvent] = useState<EventRow | null>(null);
-  const [events, setEvents] = useState<EventRow[]>([]); // for dropdown/filtering
+  const [, setEvents] = useState<EventRow[]>([]);
   const [contests, setContests] = useState<ContestRow[]>([]);
   const [categories, setCategories] = useState<CategoryRow[]>([]);
   const [teams, setTeams] = useState<TeamRow[]>([]);
@@ -363,9 +363,23 @@ export default function TabulatorPage() {
         return;
       }
 
-      const storedUsername = window.localStorage.getItem("tabulator_username");
-
-      if (!storedUsername) {
+      let storedUsername: string | null = null;
+      try {
+        const response = await fetch("/api/auth/session");
+        const payload = await response.json().catch(() => ({}));
+        const role = payload?.session?.role;
+        const username =
+          typeof payload?.session?.username === "string"
+            ? payload.session.username
+            : null;
+        if (role !== "tabulator" || !username) {
+          setError("No tabulator session found. Please sign in again.");
+          setIsLoading(false);
+          router.push("/");
+          return;
+        }
+        storedUsername = username;
+      } catch {
         setError("No tabulator session found. Please sign in again.");
         setIsLoading(false);
         router.push("/");
@@ -878,7 +892,7 @@ export default function TabulatorPage() {
       const supabase = createClient(supabaseUrl, supabaseAnonKey);
       supabase.removeChannel(channel);
     };
-  }, []);
+  }, [router]);
 
   useEffect(() => {
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -1331,24 +1345,6 @@ export default function TabulatorPage() {
     return map;
   }, [judges]);
 
-  const totalScoreByJudgeAndParticipant = useMemo(() => {
-    const map = new Map<string, number>();
-
-    if (!activeContest) {
-      return map;
-    }
-
-    for (const row of totals) {
-      if (row.contest_id !== activeContest.id) {
-        continue;
-      }
-      const key = `${row.judge_id}-${row.participant_id}`;
-      map.set(key, Number(row.total_score));
-    }
-
-    return map;
-  }, [activeContest, totals]);
-
   const criteriaScoreByJudgeAndParticipant = useMemo(() => {
     const map = new Map<string, number>();
 
@@ -1464,7 +1460,7 @@ export default function TabulatorPage() {
     }
     criteriaIds = criteriaIds.filter((n) => !isNaN(n));
     return criteriaIds;
-  }, [selectedAwardResult, criteriaList]);
+  }, [selectedAwardResult]);
 
   const awardTotalsByJudge = useMemo(() => {
     const outer = new Map<number, Map<number, number>>();
@@ -1667,7 +1663,6 @@ export default function TabulatorPage() {
     selectedAwardResult,
     judgeIdsForActiveContest,
     criteriaScoreByJudgeAndParticipant,
-    criteriaList,
     awardRankByJudgeAndParticipant,
     activeContestScoringType,
   ]);
@@ -1825,11 +1820,15 @@ export default function TabulatorPage() {
   };
 
   const handleSignOut = () => {
-    if (typeof window !== "undefined") {
-      window.localStorage.removeItem("tabulator_username");
-      document.cookie = "tabulator_username=; path=/; max-age=0";
-    }
-    router.push("/");
+    (async () => {
+      try {
+        await fetch("/api/auth/logout", { method: "POST" });
+      } catch {}
+      if (typeof window !== "undefined") {
+        window.localStorage.removeItem("tabulator_username");
+      }
+      router.push("/");
+    })();
   };
 
   // selected event is always the one the tabulator is assigned to
@@ -1850,25 +1849,12 @@ export default function TabulatorPage() {
     [judges, selectedEventId],
   );
 
-  const contestsForActiveEvent = useMemo(
-    () => (event ? contests.filter((c) => c.event_id === event.id) : []),
-    [contests, event],
-  );
-
   const contestsForSelectedEvent = useMemo(
     () =>
       selectedEventId === null
         ? []
         : contests.filter((c) => c.event_id === selectedEventId),
     [contests, selectedEventId],
-  );
-
-  const categoriesForSelectedEvent = useMemo(
-    () =>
-      selectedEventId === null
-        ? []
-        : categories.filter((c) => c.event_id === selectedEventId),
-    [categories, selectedEventId],
   );
 
   const participantsForSelectedEvent = useMemo(() => {
@@ -1881,10 +1867,8 @@ export default function TabulatorPage() {
 
 
   // Refs to table containers for printing only the rankings table
-  const overallTableRef = useRef<HTMLDivElement | null>(null);
   const awardsTableRef = useRef<HTMLDivElement | null>(null);
   const subCriteriaTableRef = useRef<HTMLDivElement | null>(null);
-  const tempSignatureId = useRef(0);
   const [signatures, setSignatures] = useState<SignatureRow[]>([]);
   const [signatureTitleInput, setSignatureTitleInput] = useState("");
   const [signatureNameInput, setSignatureNameInput] = useState("");
@@ -2074,38 +2058,6 @@ export default function TabulatorPage() {
     scores,
   ]);
 
-  const judgeDivisionIdsForContest = useMemo(() => {
-    if (selectedContestIdForPermissions === null) return [];
-    return judgeDivisionPermissions
-      .filter(
-        (p) =>
-          p.contest_id === selectedContestIdForPermissions &&
-          (selectedJudgeIdsForPermissions.length === 0 ||
-            selectedJudgeIdsForPermissions.includes(p.judge_id)),
-      )
-      .map((p) => p.division_id);
-  }, [
-    judgeDivisionPermissions,
-    selectedContestIdForPermissions,
-    selectedJudgeIdsForPermissions,
-  ]);
-
-  const judgeParticipantIdsForContest = useMemo(() => {
-    if (selectedContestIdForPermissions === null) return [];
-    return judgeParticipantPermissions
-      .filter(
-        (p) =>
-          p.contest_id === selectedContestIdForPermissions &&
-          (selectedJudgeIdsForPermissions.length === 0 ||
-            selectedJudgeIdsForPermissions.includes(p.judge_id)),
-      )
-      .map((p) => p.participant_id);
-  }, [
-    judgeParticipantPermissions,
-    selectedContestIdForPermissions,
-    selectedJudgeIdsForPermissions,
-  ]);
-
   useEffect(() => {
     // always clear selections when contest is cleared
     if (selectedContestIdForPermissions === null) {
@@ -2258,13 +2210,6 @@ export default function TabulatorPage() {
   }
 
   
-
-  const headerTitle =
-    tabulator && event
-      ? `${event.name} • ${event.year}`
-      : "Tabulation workspace";
-
-
   return (
     <div className="flex min-h-screen flex-col bg-gradient-to-br from-[#E3F2EA] via-white to-[#E3F2EA] px-4 py-6 text-slate-900">
       <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-4">
@@ -3130,10 +3075,6 @@ export default function TabulatorPage() {
                         }
 
                         // Build scoring permission inserts
-                        const allCriteriaIdsForSave = criteriaList
-                          .filter((c) => c.contest_id === selectedContestIdForPermissions)
-                          .map((c) => c.id);
-                        
                         const scoringInserts: Array<{
                           judge_id: number;
                           contest_id: number;
